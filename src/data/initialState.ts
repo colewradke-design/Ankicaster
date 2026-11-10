@@ -141,6 +141,8 @@ export function createInitialGameState(): FullGameState {
     manaDebt: 0,
     bankAtLastReview: 250,
     renown: 10,
+    lastSessionTimeMs: Date.now(),
+    installBaselineMs: Date.now(),
     wizard: {
       name: 'Hazel',
       title: 'Witch',
@@ -208,7 +210,8 @@ export function createInitialGameState(): FullGameState {
       reduceMotion: false,
       sound: false,
       textScale: 1.0,
-      mode: 'endless'
+      mode: 'endless',
+      devMode: false
     },
     rooms: initialRooms,
     characters: [],
@@ -253,9 +256,7 @@ export function createInitialGameState(): FullGameState {
     knownPatterns: ['simple_cot', 'long_table', 'hearth', 'couch', 'potted_fern', 'bookshelf'],
     draftHistory: {},
     draftPity: {},
-    activeEvents: [
-      { eventId: 'misaddressed_owl', dayArrived: 1 }
-    ],
+    activeEvents: [],
     notices: [
       {
         id: 'n1',

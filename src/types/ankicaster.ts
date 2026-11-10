@@ -188,8 +188,7 @@ export interface PlacedRoom {
   state: 'site' | 'built';
   buildRequired: number;
   buildProgress: number;
-  buildPaused: boolean;
-  buildSlot?: number;
+  buildPaused?: boolean;
   cleanliness: number; // 0-100
   lockedUntilReviewIndex?: number;
   lockReason?: string;
@@ -199,6 +198,12 @@ export interface PlacedRoom {
     glassworksActive?: boolean;
   };
   furniture: PlacedFurniture[];
+  hazard?: {
+    type: 'spill_of_night' | 'hex_fog' | 'echo_loop' | 'cold_snap' | 'breach';
+    name: string;
+    description: string;
+    effect: string;
+  };
 }
 
 export interface FurnitureDefinition {
@@ -440,6 +445,7 @@ export interface GameSettings {
   mode: 'endless' | 'timed';
   termLengthDays?: number;
   examTimer?: boolean;
+  devMode?: boolean;
 }
 
 export interface FullGameState {
@@ -450,6 +456,8 @@ export interface FullGameState {
   manaDebt: number;
   bankAtLastReview: number;
   renown: number;
+  lastSessionTimeMs: number;
+  installBaselineMs: number;
   wizard: WizardState;
   veil: VeilState;
   resources: ResourceInventory;

@@ -40,6 +40,7 @@ import {
   RecruitmentPanel,
   BuildMenuPanel,
   CardDraftPanel,
+  BestiaryPanel,
   AlchemyPanel,
   RiftPanel
 } from './components/GamePanels';
@@ -58,7 +59,7 @@ import {
   HelpCircle,
   Settings as SettingsIcon,
   Moon,
-  Sun,
+  PawPrint,
   X,
   CheckCircle2,
   AlertTriangle,
@@ -70,7 +71,7 @@ import {
   RotateCcw
 } from 'lucide-react';
 
-const STORAGE_KEY = 'ankicaster_save_v1';
+const STORAGE_KEY = 'ankicaster_save_v2';
 
 export default function App() {
   // Load state from localStorage or initial state
@@ -95,6 +96,7 @@ export default function App() {
     | 'recruitment'
     | 'build'
     | 'draft'
+    | 'bestiary'
     | 'alchemy'
     | 'rift';
 
@@ -109,7 +111,6 @@ export default function App() {
   const [activeEventModal, setActiveEventModal] = useState<SchoolEvent | null>(null);
   const [isCodexOpen, setIsCodexOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [furnishCategory, setFurnishCategory] = useState<string>('all');
 
   // Transient feedback toasts
   const [toasts, setToasts] = useState<Array<{ id: string; text: string; type: string }>>([]);
@@ -122,6 +123,16 @@ export default function App() {
       console.error('Save failed:', e);
     }
   }, [state]);
+
+  // Real-Time Clock Check on Mount: BR-04 & BR-25 Real Days Passed
+  useEffect(() => {
+    const res = AnkicasterEngine.processRealTimeElapsedDays(state, Date.now());
+    if (res.daysPassed > 0) {
+      setState(res.state);
+      setDaySummaryItems(res.summary);
+      setIsDaySummaryOpen(true);
+    }
+  }, []); // Run once on startup
 
   // Audio synthesizer chime helper
   const playChime = useCallback((type: 'review' | 'bell' | 'mastery' | 'build') => {
@@ -136,28 +147,28 @@ export default function App() {
       gain.connect(ctx.destination);
 
       if (type === 'review') {
-        osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
-        osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.12); // A5
+        osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.12);
         gain.gain.setValueAtTime(0.08, ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
         osc.start();
         osc.stop(ctx.currentTime + 0.25);
       } else if (type === 'bell') {
-        osc.frequency.setValueAtTime(440, ctx.currentTime); // A4
+        osc.frequency.setValueAtTime(440, ctx.currentTime);
         gain.gain.setValueAtTime(0.18, ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8);
         osc.start();
         osc.stop(ctx.currentTime + 0.8);
       } else if (type === 'mastery') {
-        osc.frequency.setValueAtTime(523.25, ctx.currentTime); // C5
-        osc.frequency.exponentialRampToValueAtTime(1046.5, ctx.currentTime + 0.3); // C6
+        osc.frequency.setValueAtTime(523.25, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(1046.5, ctx.currentTime + 0.3);
         gain.gain.setValueAtTime(0.2, ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
         osc.start();
         osc.stop(ctx.currentTime + 0.6);
       }
     } catch {
-      // AudioContext policy safe catch
+      // AudioContext safe catch
     }
   }, [state.settings.sound]);
 
@@ -167,23 +178,12 @@ export default function App() {
     setToasts(prev => [...prev.slice(-4), { id, text, type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
-    }, 4200);
+    }, 4500);
   };
 
-  // Check notices for new events
-  useEffect(() => {
-    if (state.activeEvents.length > 0 && !activeEventModal) {
-      const topEventId = state.activeEvents[0].eventId;
-      const evt = SCHOOL_EVENTS.find(e => e.id === topEventId);
-      if (evt) {
-        setActiveEventModal(evt);
-      }
-    }
-  }, [state.activeEvents, activeEventModal]);
-
-  // Handler: Honest Review Answer
-  const handleAnswerCard = (cardId: number, ease: 1 | 2 | 3 | 4) => {
-    const result = AnkicasterEngine.applyHonestReview(state, cardId, ease);
+  // Handler: Honest Review Answer with real measured elapsed time
+  const handleAnswerCard = (cardId: number, ease: 1 | 2 | 3 | 4, elapsedMs: number = 2400) => {
+    const result = AnkicasterEngine.applyHonestReview(state, cardId, ease, elapsedMs);
     setState(result.state);
 
     if (result.toast) {
@@ -198,14 +198,14 @@ export default function App() {
     }
   };
 
-  // Handler: Batch Simulation of Honest Reviews
+  // Handler: Batch Simulation of Honest Reviews (gated behind devMode)
   const handleSimulateBatch = (count: number) => {
     let curState = state;
     const cardIds = Object.keys(curState.allCards).map(Number);
     for (let i = 0; i < count; i++) {
       const randomCardId = cardIds[Math.floor(Math.random() * cardIds.length)];
-      const randomEase = (Math.floor(Math.random() * 3) + 2) as 2 | 3 | 4; // Hard/Good/Easy
-      const res = AnkicasterEngine.applyHonestReview(curState, randomCardId, randomEase);
+      const randomEase = (Math.floor(Math.random() * 3) + 2) as 2 | 3 | 4;
+      const res = AnkicasterEngine.applyHonestReview(curState, randomCardId, randomEase, 2000);
       curState = res.state;
     }
     setState(curState);
@@ -213,7 +213,7 @@ export default function App() {
     addToast(`Completed ${count} simulated honest reviews (+${count * 10} Mana)!`, 'success');
   };
 
-  // Handler: Day Rollover
+  // Handler: Day Rollover (Dev Mode / Test Tool)
   const handleNextDay = () => {
     const { state: nextState, summary } = AnkicasterEngine.triggerDayTick(state);
     setState(nextState);
@@ -259,6 +259,32 @@ export default function App() {
       setState(res.state);
       confetti({ particleCount: 60, spread: 70, origin: { y: 0.6 } });
       addToast(`🎓 ${name} enrolled into ${school.toUpperCase()} with 50 cards linked!`, 'success');
+      playChime('mastery');
+    }
+  };
+
+  // Handler: Enroll in Second School
+  const handleEnrollSecondSchool = (charId: number, school: SchoolType) => {
+    const res = AnkicasterEngine.enrollSecondSchool(state, charId, school);
+    if (!res.success) {
+      addToast(res.error || 'Second school enrollment failed', 'warning');
+    } else {
+      setState(res.state);
+      confetti({ particleCount: 50, spread: 60 });
+      addToast('Advanced second-school study commenced (+50 cards linked)!', 'success');
+      playChime('mastery');
+    }
+  };
+
+  // Handler: Retire Character
+  const handleRetireCharacter = (charId: number) => {
+    const res = AnkicasterEngine.retireCharacter(state, charId);
+    if (!res.success) {
+      addToast(res.error || 'Retirement not ready', 'warning');
+    } else {
+      setState(res.state);
+      confetti({ particleCount: 70, spread: 80 });
+      addToast('Character retired to the Alumni Gallery (+10 Renown)!', 'success');
       playChime('mastery');
     }
   };
@@ -322,9 +348,54 @@ export default function App() {
     }
   };
 
+  // Handler: Use Potion
+  const handleUsePotion = (potionId: string) => {
+    const res = AnkicasterEngine.usePotion(state, potionId);
+    if (!res.success) {
+      addToast(res.error || 'Failed to use potion', 'warning');
+    } else {
+      setState(res.state);
+      addToast(res.message || 'Potion consumed!', 'success');
+      playChime('review');
+    }
+  };
+
+  // Handler: Resolve Hazard
+  const handleResolveHazard = (roomId: number, method: 'warder' | 'spell') => {
+    const res = AnkicasterEngine.resolveHazard(state, roomId, method);
+    if (!res.success) {
+      addToast(res.error || 'Could not dispel hazard', 'warning');
+    } else {
+      setState(res.state);
+      addToast('Hazard dispelled from room!', 'success');
+      playChime('mastery');
+    }
+  };
+
+  // Handler: Feed Creature
+  const handleFeedCreature = (creatureId: number) => {
+    const res = AnkicasterEngine.feedCreature(state, creatureId);
+    if (!res.success) {
+      addToast(res.error || 'Could not feed familiar', 'warning');
+    } else {
+      setState(res.state);
+      addToast('Creature fed and content!', 'success');
+      playChime('review');
+    }
+  };
+
+  // Handler: Assign Tamer
+  const handleAssignTamer = (creatureId: number, tamerId: number) => {
+    const res = AnkicasterEngine.assignTamerToCreature(state, creatureId, tamerId);
+    if (res.success) {
+      setState(res.state);
+      addToast('Tamer assigned to familiar!', 'success');
+    }
+  };
+
   // Handler: Launch Expedition
-  const handleLaunchExpedition = (destId: string, teamIds: number[]) => {
-    const res = AnkicasterEngine.launchRiftExpedition(state, destId, teamIds);
+  const handleLaunchExpedition = (destId: string, teamIds: number[], supplies: string[] = [], companionId?: number) => {
+    const res = AnkicasterEngine.launchRiftExpedition(state, destId, teamIds, supplies, companionId);
     if (!res.success) {
       addToast(res.error || 'Expedition launch blocked.', 'warning');
     } else {
@@ -351,202 +422,205 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans select-none antialiased">
-      {/* Top Header Status Bar */}
-      <TopBar
-        state={state}
-        onOpenCodex={() => setIsCodexOpen(true)}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-      />
+      {/* Sticky Top Header Container holding TopBar, Tabs, and Controls */}
+      <div className="sticky top-0 z-40 bg-slate-950/95 backdrop-blur border-b border-amber-900/30 shadow-xl">
+        <TopBar
+          state={state}
+          onOpenCodex={() => setIsCodexOpen(true)}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+        />
 
-      {/* Gate Event Notification Banner */}
-      {state.activeEvents.length > 0 && (
-        <div className="bg-gradient-to-r from-amber-950/80 via-amber-900/40 to-slate-950 border-b border-amber-600/40 px-4 py-2 flex items-center justify-between text-xs text-amber-200 shadow-md">
-          <div className="flex items-center gap-2">
-            <span className="text-base animate-bounce">📜</span>
-            <span className="font-semibold">Event at Academy Gates:</span>
-            <span className="text-amber-300">
-              {SCHOOL_EVENTS.find(e => e.id === state.activeEvents[0].eventId)?.name || 'A traveler has arrived!'}
+        {/* Unified Tab Navigation Bar */}
+        <nav className="bg-slate-900/90 border-t border-slate-800/80 px-4 py-2 flex items-center gap-1.5 overflow-x-auto scrollbar-none">
+          <button
+            onClick={() => setActiveTab('castle')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
+              activeTab === 'castle'
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <Castle className="w-4 h-4 text-amber-400" />
+            Castle &amp; Grounds
+          </button>
+
+          <button
+            onClick={() => setActiveTab('reviewer')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
+              activeTab === 'reviewer'
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <BookOpen className="w-4 h-4 text-sky-400" />
+            Anki Gateway
+            <span className="bg-sky-950/80 text-sky-300 text-xs px-1.5 py-0.5 rounded border border-sky-800 font-mono">
+              +10⚡
             </span>
-          </div>
-          <button
-            onClick={() => {
-              const evt = SCHOOL_EVENTS.find(e => e.id === state.activeEvents[0].eventId);
-              if (evt) setActiveEventModal(evt);
-            }}
-            className="px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 rounded text-xs font-bold transition shadow"
-          >
-            Attend Gate
           </button>
-        </div>
-      )}
 
-      {/* Main Tab Navigation */}
-      <nav className="bg-slate-900/90 backdrop-blur border-b border-slate-800 px-4 py-2 flex items-center gap-1.5 overflow-x-auto scrollbar-none sticky top-10 z-30 shadow-md">
-        <button
-          onClick={() => setActiveTab('castle')}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
-            activeTab === 'castle'
-              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-          }`}
-        >
-          <Castle className="w-3.5 h-3.5 text-amber-400" />
-          Castle &amp; Grounds
-        </button>
+          <button
+            onClick={() => setActiveTab('study')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
+              activeTab === 'study'
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <Sparkles className="w-4 h-4 text-purple-400" />
+            Wizard Study
+          </button>
 
-        <button
-          onClick={() => setActiveTab('reviewer')}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
-            activeTab === 'reviewer'
-              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-          }`}
-        >
-          <BookOpen className="w-3.5 h-3.5 text-sky-400" />
-          Anki Gateway
-          <span className="bg-sky-950/80 text-sky-300 text-[10px] px-1.5 py-0.2 rounded border border-sky-800 font-mono">
-            +10⚡
-          </span>
-        </button>
+          <button
+            onClick={() => setActiveTab('roster')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
+              activeTab === 'roster'
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <Users className="w-4 h-4 text-emerald-400" />
+            Students &amp; Faculty
+            <span className="bg-slate-800 text-slate-300 text-xs px-2 py-0.5 rounded font-mono">
+              {state.characters.length}
+            </span>
+          </button>
 
-        <button
-          onClick={() => setActiveTab('study')}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
-            activeTab === 'study'
-              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-          }`}
-        >
-          <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-          Wizard Study
-        </button>
+          <button
+            onClick={() => setActiveTab('recruitment')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
+              activeTab === 'recruitment'
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <GraduationCap className="w-4 h-4 text-amber-400" />
+            Admissions
+          </button>
 
-        <button
-          onClick={() => setActiveTab('roster')}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
-            activeTab === 'roster'
-              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-          }`}
-        >
-          <Users className="w-3.5 h-3.5 text-emerald-400" />
-          Students &amp; Faculty
-          <span className="bg-slate-800 text-slate-300 text-[10px] px-1.5 py-0.2 rounded font-mono">
-            {state.characters.length}
-          </span>
-        </button>
+          <button
+            onClick={() => setActiveTab('build')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
+              activeTab === 'build'
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <Hammer className="w-4 h-4 text-amber-500" />
+            Architect
+          </button>
 
-        <button
-          onClick={() => setActiveTab('recruitment')}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
-            activeTab === 'recruitment'
-              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-          }`}
-        >
-          <GraduationCap className="w-3.5 h-3.5 text-amber-400" />
-          Admissions
-        </button>
+          <button
+            onClick={() => setActiveTab('draft')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
+              activeTab === 'draft'
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <Layers className="w-4 h-4 text-indigo-400" />
+            Grimoire Draft
+          </button>
 
-        <button
-          onClick={() => setActiveTab('build')}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
-            activeTab === 'build'
-              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-          }`}
-        >
-          <Hammer className="w-3.5 h-3.5 text-amber-500" />
-          Architect
-        </button>
+          <button
+            onClick={() => setActiveTab('bestiary')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
+              activeTab === 'bestiary'
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <PawPrint className="w-4 h-4 text-emerald-400" />
+            Bestiary
+            <span className="bg-slate-800 text-slate-300 text-xs px-2 py-0.5 rounded font-mono">
+              {state.creatures.length}
+            </span>
+          </button>
 
-        <button
-          onClick={() => setActiveTab('draft')}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
-            activeTab === 'draft'
-              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-          }`}
-        >
-          <Layers className="w-3.5 h-3.5 text-indigo-400" />
-          Grimoire Draft
-        </button>
+          <button
+            onClick={() => setActiveTab('alchemy')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
+              activeTab === 'alchemy'
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <FlaskConical className="w-4 h-4 text-orange-400" />
+            Alchemy Lab
+          </button>
 
-        <button
-          onClick={() => setActiveTab('alchemy')}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
-            activeTab === 'alchemy'
-              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-          }`}
-        >
-          <FlaskConical className="w-3.5 h-3.5 text-orange-400" />
-          Alchemy Lab
-        </button>
+          <button
+            onClick={() => setActiveTab('rift')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
+              activeTab === 'rift'
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <Compass className="w-4 h-4 text-rose-400" />
+            The Rift
+            {state.expeditions.some(e => e.state === 'active') && (
+              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
+            )}
+          </button>
 
-        <button
-          onClick={() => setActiveTab('rift')}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
-            activeTab === 'rift'
-              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-          }`}
-        >
-          <Compass className="w-3.5 h-3.5 text-rose-400" />
-          The Rift
-          {state.expeditions.some(e => e.state === 'active') && (
-            <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+          {/* Dev / Debug button: visible ONLY when devMode is active */}
+          {state.settings.devMode && (
+            <div className="ml-auto flex items-center gap-2 shrink-0">
+              <button
+                onClick={handleNextDay}
+                className="flex items-center gap-1.5 px-3 py-1 bg-indigo-900/60 hover:bg-indigo-900 text-indigo-200 border border-indigo-700/60 rounded-xl text-xs font-bold transition shadow"
+                title="Advance Day and calculate Veil upkeep (Dev Mode)"
+              >
+                <Moon className="w-3.5 h-3.5 text-indigo-300" />
+                <span>Simulate Dawn</span>
+              </button>
+            </div>
           )}
-        </button>
-
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            onClick={handleNextDay}
-            className="flex items-center gap-1 px-3 py-1 bg-indigo-900/40 hover:bg-indigo-900/60 text-indigo-200 border border-indigo-700/50 rounded-lg text-xs font-bold transition shadow"
-            title="Advance Day and calculate Veil upkeep"
-          >
-            <Moon className="w-3 h-3 text-indigo-300" />
-            <span>Day {state.day} Rollover</span>
-          </button>
-        </div>
-      </nav>
+        </nav>
+      </div>
 
       {/* Main Content Area */}
-      <main className="flex-1 p-4 max-w-7xl mx-auto w-full">
+      <main className="flex-1 p-4 md:p-6 max-w-7xl mx-auto w-full">
         {activeTab === 'castle' && (
           <div className="space-y-4">
             <CastleGrid
               state={state}
               onSelectRoom={room => setSelectedRoom(room)}
               selectedRoomId={selectedRoom?.id}
+              onResolveHazard={handleResolveHazard}
             />
 
-            {/* Compact Anki Quick Bar Under Castle */}
-            <div className="bg-slate-900/80 border border-slate-800 p-3 rounded-xl flex items-center justify-between gap-4 text-xs">
+            {/* Quick study desk shortcut */}
+            <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl flex items-center justify-between gap-4 text-xs shadow-lg">
               <div className="flex items-center gap-3">
-                <span className="font-bold text-amber-300 flex items-center gap-1">
+                <span className="font-bold text-amber-300 flex items-center gap-1 text-sm">
                   ⚡ Mana Study Gateway:
                 </span>
-                <span className="text-slate-400 hidden sm:inline">
-                  Every honest review awards +10 neutral Mana.
+                <span className="text-slate-300 hidden sm:inline">
+                  Every honest review awards +10 neutral Mana. All 4 ease buttons award identical mana.
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => handleSimulateBatch(1)}
-                  className="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded font-semibold transition"
-                >
-                  +1 Quick Review
-                </button>
-                <button
-                  onClick={() => handleSimulateBatch(10)}
-                  className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/50 rounded font-semibold transition"
-                >
-                  +10 Batch (Ring Bell)
-                </button>
+                {state.settings.devMode && (
+                  <>
+                    <button
+                      onClick={() => handleSimulateBatch(1)}
+                      className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl font-bold transition"
+                    >
+                      +1 Dev Rev
+                    </button>
+                    <button
+                      onClick={() => handleSimulateBatch(10)}
+                      className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/50 rounded-xl font-bold transition"
+                    >
+                      +10 Dev Bell
+                    </button>
+                  </>
+                )}
                 <button
                   onClick={() => setActiveTab('reviewer')}
-                  className="px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded shadow transition"
+                  className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl shadow transition"
                 >
                   Open Study Desk
                 </button>
@@ -561,6 +635,7 @@ export default function App() {
               cards={state.allCards}
               onAnswerCard={handleAnswerCard}
               onSimulateBatch={handleSimulateBatch}
+              devMode={state.settings.devMode}
             />
           </div>
         )}
@@ -574,7 +649,12 @@ export default function App() {
         )}
 
         {activeTab === 'roster' && (
-          <RosterPanel state={state} onAssignCareer={handleAssignCareer} />
+          <RosterPanel
+            state={state}
+            onAssignCareer={handleAssignCareer}
+            onRetireCharacter={handleRetireCharacter}
+            onEnrollSecondSchool={handleEnrollSecondSchool}
+          />
         )}
 
         {activeTab === 'recruitment' && (
@@ -589,8 +669,20 @@ export default function App() {
           <CardDraftPanel state={state} onDrawDeck={handleDrawDeck} />
         )}
 
+        {activeTab === 'bestiary' && (
+          <BestiaryPanel
+            state={state}
+            onFeedCreature={handleFeedCreature}
+            onAssignTamer={handleAssignTamer}
+          />
+        )}
+
         {activeTab === 'alchemy' && (
-          <AlchemyPanel state={state} onBrewPotion={handleBrewPotion} />
+          <AlchemyPanel
+            state={state}
+            onBrewPotion={handleBrewPotion}
+            onUsePotion={handleUsePotion}
+          />
         )}
 
         {activeTab === 'rift' && (
@@ -603,12 +695,12 @@ export default function App() {
         {toasts.map(toast => (
           <div
             key={toast.id}
-            className={`px-4 py-2.5 rounded-lg border text-xs shadow-2xl backdrop-blur transition-all duration-300 ${
+            className={`px-4 py-3 rounded-xl border text-xs shadow-2xl backdrop-blur transition-all duration-300 ${
               toast.type === 'success'
-                ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200'
+                ? 'bg-emerald-950/95 border-emerald-500/60 text-emerald-200'
                 : toast.type === 'warning'
-                ? 'bg-amber-950/90 border-amber-500/50 text-amber-200'
-                : 'bg-slate-900/90 border-slate-700 text-slate-200'
+                ? 'bg-amber-950/95 border-amber-500/60 text-amber-200'
+                : 'bg-slate-900/95 border-slate-700 text-slate-100'
             }`}
           >
             {toast.text}
@@ -616,67 +708,66 @@ export default function App() {
         ))}
       </div>
 
-      {/* MODAL 1: ROOM INSPECTOR & FURNITURE PLACEMENT */}
+      {/* MODAL 1: ROOM INSPECTOR & FILTERED FURNITURE PLACEMENT */}
       {currentSelectedRoom && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-amber-900/40 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 shadow-2xl space-y-6">
-            {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div>
                 <div className="flex items-center gap-2">
                   <h3 className="text-lg font-bold text-amber-300">
                     {ROOM_DEFINITIONS[currentSelectedRoom.defId]?.name || currentSelectedRoom.defId}
                   </h3>
-                  <span className="text-xs bg-amber-500/20 border border-amber-500/40 text-amber-200 px-2 py-0.5 rounded font-bold">
+                  <span className="text-xs bg-amber-500/20 border border-amber-500/40 text-amber-200 px-2 py-0.5 rounded-lg font-bold">
                     Level {currentSelectedRoom.level}
                   </span>
                   <span className="text-xs text-slate-400 font-mono">
-                    ({currentSelectedRoom.area === 'castle' ? `F${currentSelectedRoom.y}` : 'Sacred Grounds'})
+                    ({currentSelectedRoom.area === 'castle' ? `Floor ${currentSelectedRoom.y}` : 'Sacred Grounds'})
                   </span>
                 </div>
-                <p className="text-xs text-slate-400 mt-0.5">
+                <p className="text-xs text-slate-300 mt-1 leading-relaxed">
                   {ROOM_DEFINITIONS[currentSelectedRoom.defId]?.description}
                 </p>
               </div>
               <button
                 onClick={() => setSelectedRoom(null)}
-                className="p-1 text-slate-400 hover:text-slate-100 rounded-lg hover:bg-slate-800"
+                className="p-1.5 text-slate-400 hover:text-slate-100 rounded-lg hover:bg-slate-800 transition"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Room Stats & Efficiency Breakdown (Formula F19) */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950/60 p-3.5 rounded-xl border border-slate-800 text-xs">
+            {/* Room Stats & Efficiency Breakdown */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950/70 p-4 rounded-xl border border-slate-800 text-xs">
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase font-bold">Quality Tier</span>
+                <span className="text-slate-400 block text-xs uppercase font-bold">Quality Tier</span>
                 {(() => {
                   const { q, tier } = calculateRoomQuality(currentSelectedRoom);
                   return (
-                    <span className="font-bold text-amber-300 capitalize">
+                    <span className="font-bold text-amber-300 capitalize text-sm">
                       {tier} (Q: {Math.round(q)})
                     </span>
                   );
                 })()}
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase font-bold">Cleanliness</span>
-                <span className="font-bold text-slate-200">
+                <span className="text-slate-400 block text-xs uppercase font-bold">Cleanliness</span>
+                <span className="font-bold text-slate-100 text-sm">
                   {Math.round(currentSelectedRoom.cleanliness)}%
                 </span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase font-bold">Daily Veil</span>
-                <span className="font-bold text-indigo-300">
+                <span className="text-slate-400 block text-xs uppercase font-bold">Daily Veil</span>
+                <span className="font-bold text-indigo-300 text-sm">
                   {ROOM_DEFINITIONS[currentSelectedRoom.defId]?.veil || 4} Mana
                 </span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase font-bold">Efficiency</span>
+                <span className="text-slate-400 block text-xs uppercase font-bold">Efficiency</span>
                 {(() => {
                   const eff = calculateRoomEfficiency(currentSelectedRoom, true, true);
                   return (
-                    <span className="font-bold text-emerald-300">
+                    <span className="font-bold text-emerald-300 text-sm">
                       {(eff * 100).toFixed(0)}%
                     </span>
                   );
@@ -686,12 +777,12 @@ export default function App() {
 
             {/* Renovation Upgrade Button */}
             {currentSelectedRoom.level < 3 && (
-              <div className="bg-amber-950/30 border border-amber-600/30 p-3.5 rounded-xl flex items-center justify-between">
+              <div className="bg-amber-950/30 border border-amber-600/30 p-4 rounded-xl flex items-center justify-between">
                 <div>
                   <h4 className="text-xs font-bold text-amber-200">
                     Renovate to Level {currentSelectedRoom.level + 1}
                   </h4>
-                  <p className="text-[11px] text-slate-400">
+                  <p className="text-xs text-slate-400">
                     +2 optional furniture slots, improved efficiency, and unlocks Level 3 perk.
                   </p>
                 </div>
@@ -705,24 +796,23 @@ export default function App() {
                       playChime('mastery');
                     }
                   }}
-                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-lg shadow transition"
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-xl shadow transition"
                 >
-                  Upgrade (
-                  {Math.round((ROOM_DEFINITIONS[currentSelectedRoom.defId]?.cost.mana || 100) * 0.75) + 50} Mana)
+                  Upgrade ({Math.round((ROOM_DEFINITIONS[currentSelectedRoom.defId]?.cost.mana || 100) * 0.75) + 50} Mana)
                 </button>
               </div>
             )}
 
-            {/* Placed Furniture List */}
+            {/* Installed Furniture */}
             <div>
               <div className="flex items-center justify-between mb-2">
-                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
                   Installed Furniture &amp; Fixtures ({currentSelectedRoom.furniture.length} items)
                 </h4>
               </div>
 
               {currentSelectedRoom.furniture.length === 0 ? (
-                <div className="text-center py-6 text-xs text-slate-500 bg-slate-950/40 rounded-xl border border-dashed border-slate-800">
+                <div className="text-center py-6 text-xs text-slate-400 bg-slate-950/40 rounded-xl border border-dashed border-slate-800">
                   No furniture installed yet. Choose fixtures below to furnish this room.
                 </div>
               ) : (
@@ -732,11 +822,11 @@ export default function App() {
                     return (
                       <div
                         key={f.id}
-                        className="bg-slate-950/80 border border-slate-800 p-2.5 rounded-lg flex items-center justify-between text-xs"
+                        className="bg-slate-950/80 border border-slate-800 p-3 rounded-xl flex items-center justify-between text-xs"
                       >
                         <div>
                           <div className="font-semibold text-slate-200">{fDef?.name || f.defId}</div>
-                          <div className="text-[10px] text-slate-500">
+                          <div className="text-xs text-slate-400">
                             {f.slotKind.startsWith('required:') ? 'Required Fixture' : 'Optional Furnishing'}
                           </div>
                         </div>
@@ -746,7 +836,7 @@ export default function App() {
                               const res = AnkicasterEngine.removeFurniture(state, currentSelectedRoom.id, f.id);
                               if (res.success) setState(res.state);
                             }}
-                            className="text-[11px] text-rose-400 hover:text-rose-300 px-2 py-0.5"
+                            className="text-xs text-rose-400 hover:text-rose-300 px-2 py-1 font-semibold"
                           >
                             Remove
                           </button>
@@ -758,24 +848,30 @@ export default function App() {
               )}
             </div>
 
-            {/* Furnish Room: Available Options */}
+            {/* Filtered Furniture Options for this Room's Slots */}
             <div className="border-t border-slate-800 pt-4">
               <h4 className="text-xs font-bold text-amber-200 mb-2">
-                Install New Furniture
+                Install Compatible Furniture
               </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-56 overflow-y-auto pr-1">
                 {Object.values(FURNITURE_DEFINITIONS)
-                  .filter(f => f.role !== 'required')
-                  .slice(0, 8)
+                  .filter(fDef => {
+                    if (fDef.role === 'required') return false;
+                    if (fDef.rooms === 'any') return true;
+                    if (Array.isArray(fDef.rooms) && fDef.rooms.includes(currentSelectedRoom.defId)) return true;
+                    if (fDef.role === 'bed' && currentSelectedRoom.defId.includes('dorm')) return true;
+                    return false;
+                  })
+                  .slice(0, 12)
                   .map(fDef => (
                     <div
                       key={fDef.id}
-                      className="bg-slate-950 border border-slate-800/80 p-2.5 rounded-lg flex items-center justify-between text-xs"
+                      className="bg-slate-950 border border-slate-800/80 p-3 rounded-xl flex items-center justify-between text-xs"
                     >
                       <div>
                         <div className="font-semibold text-slate-200">{fDef.name}</div>
-                        <div className="text-[10px] text-slate-400">
-                          {fDef.cost.mana} Mana · {fDef.cost.timber || 0} Timber
+                        <div className="text-xs text-slate-400">
+                          {fDef.cost.mana}m · {fDef.cost.timber || 0}T
                         </div>
                       </div>
                       <button
@@ -788,7 +884,7 @@ export default function App() {
                             playChime('review');
                           }
                         }}
-                        className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded text-xs font-bold"
+                        className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-xl text-xs font-bold"
                       >
                         Install
                       </button>
@@ -800,7 +896,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL 2: GRIMOIRE CARD DRAFT PICKER (DRAW 3, KEEP 1) */}
+      {/* MODAL 2: GRIMOIRE DRAFT PICKER */}
       {isDraftModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-purple-500/50 rounded-2xl w-full max-w-3xl p-6 shadow-2xl space-y-6">
@@ -808,10 +904,10 @@ export default function App() {
               <span className="text-xs font-bold uppercase tracking-widest text-purple-400">
                 Rule BR-26 Arcane Inscription
               </span>
-              <h3 className="text-xl font-bold text-amber-200 mt-1">
+              <h3 className="text-lg md:text-xl font-bold text-amber-200 mt-1">
                 The Grimoire Reveals Three Destinies
               </h3>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-slate-300">
                 Choose one card to keep. The other two return to the celestial archives.
               </p>
             </div>
@@ -835,12 +931,12 @@ export default function App() {
                     className={`border-2 rounded-xl p-4 flex flex-col justify-between shadow-xl transition transform hover:scale-[1.02] ${rarityColor}`}
                   >
                     <div>
-                      <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-wider mb-2">
+                      <div className="flex items-center justify-between text-xs font-mono uppercase tracking-wider mb-2">
                         <span>{card.deck} Deck</span>
                         <span className="font-bold">{card.rarity}</span>
                       </div>
                       <h4 className="font-bold text-sm text-slate-100 mb-1">{card.name}</h4>
-                      <span className="inline-block text-[10px] bg-slate-900/80 px-2 py-0.5 rounded font-mono mb-2 capitalize">
+                      <span className="inline-block text-xs bg-slate-900/80 px-2 py-0.5 rounded-md font-mono mb-2 capitalize">
                         {card.type.replace('_', ' ')}
                       </span>
                       <p className="text-xs text-slate-300 leading-relaxed">{card.description}</p>
@@ -848,7 +944,7 @@ export default function App() {
 
                     <button
                       onClick={() => handleSelectDraftCard(card)}
-                      className="mt-4 w-full py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs rounded-lg shadow-lg transition"
+                      className="mt-4 w-full py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs rounded-xl shadow-lg transition"
                     >
                       Choose This Card
                     </button>
@@ -867,14 +963,14 @@ export default function App() {
             <div className="flex items-center gap-3">
               <span className="text-3xl">📜</span>
               <div>
-                <span className="text-[10px] font-mono uppercase tracking-wider text-amber-400">
+                <span className="text-xs font-mono uppercase tracking-wider text-amber-400">
                   Academy Threshold Event
                 </span>
-                <h3 className="text-lg font-bold text-amber-200">{activeEventModal.name}</h3>
+                <h3 className="text-base font-bold text-amber-200">{activeEventModal.name}</h3>
               </div>
             </div>
 
-            <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/60 p-3.5 rounded-xl border border-slate-800">
+            <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/60 p-4 rounded-xl border border-slate-800">
               {activeEventModal.description}
             </p>
 
@@ -887,8 +983,8 @@ export default function App() {
                 >
                   <span className="font-semibold text-slate-200">{opt.text}</span>
                   <div className="text-right">
-                    {opt.cost && <div className="text-[10px] text-rose-400">Cost: {opt.cost}</div>}
-                    <div className="text-[11px] font-bold text-emerald-400">{opt.reward}</div>
+                    {opt.cost && <div className="text-xs text-rose-400">Cost: {opt.cost}</div>}
+                    <div className="text-xs font-bold text-emerald-400">{opt.reward}</div>
                   </div>
                 </button>
               ))}
@@ -907,7 +1003,7 @@ export default function App() {
                 <h3 className="text-base font-bold text-indigo-200">
                   Dawn Breaks: Day {state.day}
                 </h3>
-                <p className="text-xs text-slate-400">
+                <p className="text-xs text-slate-300">
                   Veil upkeep processed and overnight events resolved.
                 </p>
               </div>
@@ -917,7 +1013,7 @@ export default function App() {
               {daySummaryItems.map((item, idx) => (
                 <div
                   key={idx}
-                  className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/80 text-slate-300 flex items-start gap-2"
+                  className="bg-slate-950/80 p-3 rounded-xl border border-slate-800/80 text-slate-200 flex items-start gap-2"
                 >
                   <span className="text-indigo-400 font-bold">•</span>
                   <span>{item}</span>
@@ -927,7 +1023,7 @@ export default function App() {
 
             <button
               onClick={() => setIsDaySummaryOpen(false)}
-              className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow transition"
+              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow transition"
             >
               Greet the Morning
             </button>
@@ -935,7 +1031,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL 5: CODEX & PHILOSOPHY GUIDE */}
+      {/* MODAL 5: CODEX GUIDE */}
       {isCodexOpen && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-amber-900/40 rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto p-6 shadow-2xl space-y-4 text-xs text-slate-300">
@@ -952,52 +1048,46 @@ export default function App() {
             </div>
 
             <div className="space-y-3">
-              <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+              <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
                 <h4 className="font-bold text-amber-200 mb-1">
                   BR-01: Neutral Mana Economy
                 </h4>
-                <p>
-                  Mana is earned only from honest flashcard reviews (+10 per review). Past history grants nothing.
-                  All answer buttons (Again, Hard, Good, Easy) grant equal mana. You never earn more by rushing or pressing Good.
+                <p className="leading-relaxed">
+                  Mana is earned only from honest flashcard reviews (+10 per review). All answer buttons (Again, Hard, Good, Easy) grant equal mana. Answers faster than 0.8s award 0 mana (Rule H5).
                 </p>
               </div>
 
-              <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+              <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
                 <h4 className="font-bold text-emerald-200 mb-1">
-                  BR-04: Breaks Are Safe (Sleep Under the Veil)
+                  BR-04 &amp; BR-25: Breaks Are Safe (10% Bank Floor)
                 </h4>
-                <p>
-                  Taking a break never deletes your school or characters. If you step away, the Academy enters
-                  a restful state under the Veil, auto-paying upkeep down to a safe floor.
+                <p className="leading-relaxed">
+                  Taking a break never destroys your academy. Daily Veil auto-pay deducts mana down to 10% of your bank, then ceases and holds the Veil completely steady without further decay.
                 </p>
               </div>
 
-              <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+              <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
                 <h4 className="font-bold text-sky-200 mb-1">
-                  BR-11 to BR-23: Linked Constellations
+                  BR-11 to BR-23: Linked Constellations &amp; Polymaths
                 </h4>
-                <p>
-                  Each student links to 50 of your youngest free flashcards. Their skill level directly mirrors
-                  your actual memory retention (card intervals). When all 50 cards exceed 30 days maturity,
-                  they achieve Master status and can be appointed to faculty or expeditions!
+                <p className="leading-relaxed">
+                  Each student links to 50 of your youngest free flashcards. When all 50 cards exceed 30 days maturity, they graduate as Masters. Masters of 2 or more schools can switch careers, linking 20 new cards per career while keeping previous cards.
                 </p>
               </div>
 
-              <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+              <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
                 <h4 className="font-bold text-rose-200 mb-1">
-                  BR-27 to BR-33: The Perilous Rift (Zero Permadeath)
+                  BR-27: The Otherworldly Rift (Zero Permadeath)
                 </h4>
-                <p>
-                  At 3 masters, the Rift opens. Teams of 1–3 adventurers explore 5 dangerous realms. Their safe odds
-                  scale with their linked flashcard intervals. Per the Ankicaster promise, heroes never die; they may suffer
-                  injuries that rest in the Infirmary while you continue studying.
+                <p className="leading-relaxed">
+                  The Rift portal unlocks only after graduating at least 3 Masters. Safe odds scale directly with your adventurers' review intervals. Heroes never die; injuries rest safely in the Infirmary.
                 </p>
               </div>
             </div>
 
             <button
               onClick={() => setIsCodexOpen(false)}
-              className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-lg transition"
+              className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl transition"
             >
               Close Codex
             </button>
@@ -1005,12 +1095,12 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL 6: SETTINGS & SIMULATION CONTROLS */}
+      {/* MODAL 6: SETTINGS & DEVELOPER DEBUG CONTROLS */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4 text-xs">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-base font-bold text-slate-200 flex items-center gap-2">
+              <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
                 <SettingsIcon className="w-4 h-4 text-slate-400" />
                 Academy Settings
               </h3>
@@ -1023,7 +1113,29 @@ export default function App() {
             </div>
 
             <div className="space-y-3">
-              <div className="flex items-center justify-between bg-slate-950 p-3 rounded-lg border border-slate-800">
+              {/* Developer Test Tools Toggle */}
+              <div className="flex items-center justify-between bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+                <div>
+                  <span className="font-bold text-amber-300 block">Developer / Test Mode</span>
+                  <span className="text-xs text-slate-400">Shows +1 / +10 quick review and day skip tools</span>
+                </div>
+                <button
+                  onClick={() => {
+                    setState(prev => ({
+                      ...prev,
+                      settings: { ...prev.settings, devMode: !prev.settings.devMode }
+                    }));
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                    state.settings.devMode ? 'bg-amber-600 text-white' : 'bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  {state.settings.devMode ? 'Enabled' : 'Hidden'}
+                </button>
+              </div>
+
+              {/* Sound toggle */}
+              <div className="flex items-center justify-between bg-slate-950 p-3.5 rounded-xl border border-slate-800">
                 <span>Sound Chimes</span>
                 <button
                   onClick={() => {
@@ -1032,7 +1144,7 @@ export default function App() {
                       settings: { ...prev.settings, sound: !prev.settings.sound }
                     }));
                   }}
-                  className={`px-3 py-1 rounded text-xs font-bold ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
                     state.settings.sound ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400'
                   }`}
                 >
@@ -1040,14 +1152,16 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="flex items-center justify-between bg-slate-950 p-3 rounded-lg border border-slate-800">
+              {/* Safe Floor indicator */}
+              <div className="flex items-center justify-between bg-slate-950 p-3.5 rounded-xl border border-slate-800">
                 <span>Daily Veil Upkeep</span>
-                <span className="font-semibold text-indigo-300">Auto-Pay (BR-25 Safe Floor)</span>
+                <span className="font-semibold text-indigo-300">Auto-Pay (BR-25 10% Floor)</span>
               </div>
 
-              <div className="flex items-center justify-between bg-slate-950 p-3 rounded-lg border border-slate-800">
-                <span>Flashcards per Student</span>
-                <span className="font-mono text-amber-300 font-bold">50 Cards (BR-11)</span>
+              {/* Term Mode */}
+              <div className="flex items-center justify-between bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+                <span>Academy Mode</span>
+                <span className="font-bold text-slate-200 capitalize">{state.settings.mode || 'Endless'} Term</span>
               </div>
 
               <div className="border-t border-slate-800 pt-3">
@@ -1061,7 +1175,7 @@ export default function App() {
                       addToast('Academy restarted afresh!', 'info');
                     }
                   }}
-                  className="w-full py-2 bg-rose-950/60 hover:bg-rose-900 text-rose-200 border border-rose-800/60 font-bold rounded-lg transition"
+                  className="w-full py-2.5 bg-rose-950/60 hover:bg-rose-900 text-rose-200 border border-rose-800/60 font-bold rounded-xl transition text-xs shadow"
                 >
                   Restart Academy (Reset State)
                 </button>

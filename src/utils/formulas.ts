@@ -110,7 +110,7 @@ export function calculateFacultyLimit(
   studentsCount: number
 ): { limit: number; breakdown: { A: number; B: number; C: number; D: number; bottleneck: string } } {
   const A = 1 + Math.floor(totalWizardLevels / 4);
-  const B = facultyBeds;
+  const B = Math.max(1, facultyBeds);
   const C = 1 + 2 * classroomsCount;
   const D = 1 + Math.floor(studentsCount / 3);
 
