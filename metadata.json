@@ -1,0 +1,6 @@
+{
+  "name": "Ankicaster — Magic Academy & Anki Flashcard Simulation",
+  "description": "An interactive magic school simulation inspired by Spellcaster University and powered by honest spaced-repetition Anki reviews. Train wizards, construct cross-section castle rooms, link real flashcards to students, tame magical beasts, brew alchemy potions, uphold the Veil, and explore the Rift.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
