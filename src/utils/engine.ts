@@ -31,8 +31,20 @@ import {
   isMasteryReady,
   calculateTeacherDelay,
   calculateRiftChance,
-  calculateMorale
+  calculateMorale,
+  getWizardLevelRequirements
 } from '../utils/formulas';
+
+/**
+ * Anki 4:00 AM Rollover Boundary calculation
+ * A new study day begins at 4:00 AM local time. Shifting back by 4 hours
+ * aligns 4:00 AM with 00:00 local midnight.
+ */
+export function getAnkiDayNumber(timeMs: number): number {
+  const d = new Date(timeMs);
+  d.setHours(d.getHours() - 4);
+  return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / (24 * 3600 * 1000));
+}
 
 export class AnkicasterEngine {
   /**
@@ -201,10 +213,19 @@ export class AnkicasterEngine {
       }
     }
 
-    // 7. Healing Injuries in Infirmary
+    // 7. Healing Injuries in Infirmary (accelerated by Infirmary, Healers, and Healing creatures)
+    const hasInfirmary = next.rooms.some(r => r.state === 'built' && r.defId === 'infirmary');
+    const activeHealers = next.characters.filter(c => c.career === 'healer' && c.careerState === 'active').length;
+    const hasHealingCreature = next.creatures.some(c => c.status === 'tamed' && (c.defId === 'healing_fawn' || c.defId === 'radiant_phoenix'));
+
     for (const char of next.characters) {
       if (char.injury) {
-        char.injury.points += 1.5; // heal rate
+        let healRate = 1.0;
+        if (hasInfirmary) healRate += 1.5;
+        healRate += activeHealers * 1.5;
+        if (hasHealingCreature) healRate += 1.5;
+
+        char.injury.points += healRate;
         if (char.injury.points >= char.injury.required) {
           char.injury = undefined;
           notifications.push(`💖 ${char.name} has fully recovered from injury!`);
@@ -229,6 +250,9 @@ export class AnkicasterEngine {
       toastMsg = `🔔 Bell ${next.bellIndex} rang! +${Math.round(manaEarned)} mana`;
     }
 
+    // 10. Check Automatic Retirement (Rule BR-26 / GDD Section 12)
+    this.checkAutomaticRetirements(next, notifications);
+
     return { state: next, toast: toastMsg, notifications };
   }
 
@@ -236,13 +260,20 @@ export class AnkicasterEngine {
    * Ringing the bell (every 10 honest reviews)
    */
   static ringBell(state: FullGameState, notifications: string[]) {
-    // 1. Classroom Essence Production
+    // 1. Classroom Essence Production (influenced by room hazards)
     for (const char of state.characters) {
       if (char.status === 'student' && char.seatRoomId && char.currentSchool) {
         const room = state.rooms.find(r => r.id === char.seatRoomId);
         if (room && room.state === 'built') {
+          // Hazard active effects
+          if (room.hazard?.type === 'cold_snap') continue; // room frozen/disabled
+          if (room.hazard?.type === 'echo_loop') continue; // suppresses classroom essence
+
+          let yieldMult = 1.0;
+          if (room.hazard?.type === 'spill_of_night') yieldMult = 0.5; // efficiency halved
+
           const moraleFactor = 0.6 + (0.6 * char.morale) / 100;
-          const yieldAmount = 0.2 * moraleFactor;
+          const yieldAmount = 0.2 * moraleFactor * yieldMult;
 
           switch (char.currentSchool) {
             case 'arcane': state.resources.insight += yieldAmount; break;
@@ -255,39 +286,97 @@ export class AnkicasterEngine {
       }
     }
 
-    // 2. Grounds & Resource Plots Output
+    // 2. Grounds & Resource Plots Output (influenced by hazards & creature buffs)
+    const hasTortoise = state.creatures.some(c => c.status === 'tamed' && c.defId === 'mossback_tortoise');
+    const greenhouseMult = hasTortoise ? 1.05 : 1.0;
+
     for (const room of state.rooms) {
       if (room.state !== 'built') continue;
+      if (room.hazard?.type === 'cold_snap') continue; // room disabled
+
+      let harvestMult = 1.0;
+      if (room.hazard?.type === 'spill_of_night') {
+        harvestMult = 0.5;
+        room.cleanliness = 0; // soot residue
+      }
+
       if (room.defId === 'vegetable_patch') {
-        state.resources.provisions = Math.min(500, state.resources.provisions + 1.0);
-        state.resources.greens = Math.min(500, state.resources.greens + 0.2);
+        state.resources.provisions = Math.min(500, state.resources.provisions + 1.0 * harvestMult);
+        state.resources.greens = Math.min(500, state.resources.greens + 0.2 * harvestMult);
       } else if (room.defId === 'herb_garden') {
-        state.resources.herbs += 0.6;
+        state.resources.herbs += 0.6 * harvestMult;
       } else if (room.defId === 'woodlot') {
-        state.resources.timber = Math.min(500, state.resources.timber + 2);
+        state.resources.timber = Math.min(500, state.resources.timber + 2 * harvestMult);
         if (Math.random() < 0.02) state.resources.heartwood += 1;
       } else if (room.defId === 'quarry') {
-        state.resources.stone = Math.min(500, state.resources.stone + 1);
+        state.resources.stone = Math.min(500, state.resources.stone + 1 * harvestMult);
         if (Math.random() < 0.04) state.resources.crystal += 1;
       } else if (room.defId === 'greenhouse') {
-        state.resources.provisions = Math.min(500, state.resources.provisions + 1.5);
-        state.resources.herbs += 0.5;
+        state.resources.provisions = Math.min(500, state.resources.provisions + 1.5 * harvestMult * greenhouseMult);
+        state.resources.herbs += 0.5 * harvestMult * greenhouseMult;
       } else if (room.defId === 'orchard') {
-        state.resources.provisions = Math.min(500, state.resources.provisions + 0.8);
-        state.resources.nectar = Math.min(500, state.resources.nectar + 0.3);
+        state.resources.provisions = Math.min(500, state.resources.provisions + 0.8 * harvestMult);
+        state.resources.nectar = Math.min(500, state.resources.nectar + 0.3 * harvestMult);
       }
     }
 
-    // 3. Needs Decay & Morale Update
+    // 3. Creature Active Buffs per Bell
+    for (const c of state.creatures) {
+      if (c.status !== 'tamed') continue;
+      if (c.defId === 'thistle_hare') state.resources.herbs += 0.1;
+      else if (c.defId === 'star_owl') state.resources.insight += 0.1;
+      else if (c.defId === 'shadow_stalker') state.resources.umbra += 0.1;
+      else if (c.defId === 'radiant_phoenix') state.resources.radiance += 0.2;
+      else if (c.defId === 'alchemical_homunculus') state.resources.reagents += 0.1;
+      else if (c.defId === 'lumen_sprite') {
+        for (const char of state.characters) {
+          char.needs.composure = Math.min(100, char.needs.composure + 1);
+        }
+      } else if (c.defId === 'glimmerhorn_stag') {
+        for (const char of state.characters) {
+          char.morale = Math.min(100, char.morale + 3);
+        }
+      }
+    }
+
+    // 4. Needs Decay, Hex Fog Hazard & Morale Update
     for (const char of state.characters) {
       char.needs.hunger = Math.max(0, char.needs.hunger - 3);
       char.needs.rest = Math.max(0, char.needs.rest - 2);
       char.needs.leisure = Math.max(0, char.needs.leisure - 2);
       char.needs.composure = Math.max(0, char.needs.composure - 1);
+
+      // Hex fog hazard in classroom or dorm causes extra composure drain
+      if (char.seatRoomId) {
+        const room = state.rooms.find(r => r.id === char.seatRoomId);
+        if (room?.hazard?.type === 'hex_fog') {
+          char.needs.composure = Math.max(0, char.needs.composure - 10);
+        }
+      }
+
       char.morale = calculateMorale(char.needs);
+
+      // Student Misbehavior driven by low morale (<40) or low composure (<40)
+      if (char.status === 'student' && (char.morale < 40 || char.needs.composure < 40) && Math.random() < 0.15) {
+        const incidents = [
+          { text: `${char.name} skipped study hall to raid honey rolls from the refectory! (-5 Provisions, +10 Rest)`, apply: () => { state.resources.provisions = Math.max(0, state.resources.provisions - 5); char.needs.rest = Math.min(100, char.needs.rest + 10); } },
+          { text: `${char.name} accidentally set off a sulfur spark in the corridor! (Cleanliness -10)`, apply: () => { for (const r of state.rooms) r.cleanliness = Math.max(0, r.cleanliness - 2); } },
+          { text: `${char.name} fell soundly asleep with their quill in the inkpot! (+15 Rest, Composure -5)`, apply: () => { char.needs.rest = Math.min(100, char.needs.rest + 15); char.needs.composure = Math.max(0, char.needs.composure - 5); } },
+          { text: `${char.name} got into an enchanted chalk duel in the dormitory cloisters!`, apply: () => { char.needs.leisure = Math.min(100, char.needs.leisure + 15); char.needs.composure = Math.max(0, char.needs.composure - 5); } }
+        ];
+        const chosenInc = incidents[Math.floor(Math.random() * incidents.length)];
+        chosenInc.apply();
+        notifications.push(`⚠️ Misbehavior: ${chosenInc.text}`);
+        state.notices.push({
+          id: `misbehavior-${Date.now()}-${char.id}`,
+          time: Date.now(),
+          type: 'misbehavior',
+          text: `Student Incident: ${chosenInc.text}`
+        });
+      }
     }
 
-    // 4. Mealtime every 5th bell
+    // 5. Mealtime every 5th bell
     if (state.bellIndex % 5 === 0) {
       const diners = state.characters.length;
       if (diners > 0) {
@@ -305,7 +394,7 @@ export class AnkicasterEngine {
       }
     }
 
-    // 5. Cleanliness & Mopslime
+    // 6. Cleanliness & Mopslime
     let cleanBonus = 0;
     for (const c of state.creatures) {
       if (c.status === 'tamed' && c.defId === 'mopslime') cleanBonus += 3;
@@ -329,11 +418,12 @@ export class AnkicasterEngine {
     const next = structuredClone(state);
     const summary: string[] = [];
 
-    const lastTime = next.lastSessionTimeMs || currentTimeMs;
-    const diffMs = currentTimeMs - lastTime;
-    const daysPassed = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+    // Anki 4:00 AM calendar day rollover
+    const lastDayNum = getAnkiDayNumber(next.lastSessionTimeMs || currentTimeMs);
+    const currentDayNum = getAnkiDayNumber(currentTimeMs);
+    const daysPassed = Math.max(0, currentDayNum - lastDayNum);
 
-    // Always update lastSessionTimeMs to keep clock current
+    // Update lastSessionTimeMs carrying over leftover hours
     next.lastSessionTimeMs = currentTimeMs;
 
     if (daysPassed <= 0) {
@@ -426,7 +516,9 @@ export class AnkicasterEngine {
       }
 
       // Check thin Veil hazard spawn if Veil < 50%
-      if (next.veil.strength < 50 && Math.random() < 0.25) {
+      // Warders actively lower hazard spawn odds (cuts chance by 30% per active warder)
+      const hazardChance = Math.max(0.02, 0.25 * Math.pow(0.7, warders));
+      if (next.veil.strength < 50 && Math.random() < hazardChance) {
         const eligibleRooms = next.rooms.filter(r => r.state === 'built' && !r.hazard);
         if (eligibleRooms.length > 0) {
           const target = eligibleRooms[Math.floor(Math.random() * eligibleRooms.length)];
@@ -450,6 +542,12 @@ export class AnkicasterEngine {
     if (floorReached) {
       summary.push(`🛡️ 10% Bank Floor reached (${bankFloor} mana preserved). The Veil is holding steady in safe rest state (Rule BR-25).`);
     }
+
+    // Check automatic retirements
+    this.checkAutomaticRetirements(next, summary);
+
+    // Check Timed Term / examTimer
+    this.checkTimedTermStatus(next, currentTimeMs);
 
     return { state: next, daysPassed, summary };
   }
@@ -575,30 +673,27 @@ export class AnkicasterEngine {
       return { state, success: false, error: 'Character has not yet graduated as a Master of Magic.' };
     }
 
-    // Check retirement age: all cards in study set must exceed retirementAgeDays
+    // Check retirement age: all cards from every school and career must exceed retirementAgeDays
     const retirementThreshold = next.settings.retirementAgeDays || 90;
-    let canRetire = true;
+    const charSets = next.cardSets.filter(s => s.characterId === charId);
+    const allCardIds = charSets.flatMap(s => s.cardIds);
 
-    if (char.studySetId) {
-      const studySet = next.cardSets.find(s => s.id === char.studySetId);
-      if (studySet) {
-        const notRetiredCards = studySet.cardIds.filter(cid => (next.allCards[cid]?.honestIvl || 0) < retirementThreshold);
-        if (notRetiredCards.length > 0) {
-          canRetire = false;
-          return {
-            state,
-            success: false,
-            error: `All cards must reach ${retirementThreshold} days interval before retirement (${notRetiredCards.length} cards still maturing).`
-          };
-        }
-      }
+    if (allCardIds.length === 0) {
+      return { state, success: false, error: 'Character has no linked cards to evaluate for retirement.' };
+    }
+
+    const notRetiredCards = allCardIds.filter(cid => (next.allCards[cid]?.honestIvl || 0) < retirementThreshold);
+    if (notRetiredCards.length > 0) {
+      return {
+        state,
+        success: false,
+        error: `All cards must reach ${retirementThreshold} days interval before retirement (${notRetiredCards.length} cards still maturing).`
+      };
     }
 
     // Release card sets back to free pool
-    for (const set of next.cardSets) {
-      if (set.characterId === charId) {
-        set.released = true;
-      }
+    for (const set of charSets) {
+      set.released = true;
     }
 
     // Add to Alumni Gallery
@@ -623,6 +718,132 @@ export class AnkicasterEngine {
     });
 
     return { state: next, success: true };
+  }
+
+  /**
+   * Automatic Character Retirement (Section 12 / BR-26)
+   * Automatically retires characters once *every* card they've ever had,
+   * from every school and career, passes the retirement age (default 90d).
+   */
+  static checkAutomaticRetirements(
+    state: FullGameState,
+    summary?: string[]
+  ): { state: FullGameState; retired: Character[] } {
+    const next = state;
+    const retired: Character[] = [];
+    const retirementThreshold = next.settings.retirementAgeDays || 90;
+
+    for (let i = next.characters.length - 1; i >= 0; i--) {
+      const char = next.characters[i];
+      if (char.masteredSchools.length === 0) continue;
+
+      const charSets = next.cardSets.filter(s => s.characterId === char.id);
+      if (charSets.length === 0) continue;
+
+      const allCardIds = charSets.flatMap(s => s.cardIds);
+      if (allCardIds.length === 0) continue;
+
+      const allMature = allCardIds.every(cid => (next.allCards[cid]?.honestIvl || 0) >= retirementThreshold);
+      if (allMature) {
+        // Release card sets
+        for (const set of charSets) {
+          set.released = true;
+        }
+
+        // Add to Alumni Gallery
+        next.alumniGallery.push({
+          id: char.id,
+          name: char.name,
+          portrait: char.appearance.hat || 'grand_hat',
+          titles: char.masteredSchools.map(s => `Master of ${s.toUpperCase()}`),
+          retiredDay: next.day,
+          bonusType: 'renown_resonance',
+          bonusValue: 10
+        });
+
+        next.renown += 10;
+        next.characters.splice(i, 1);
+        retired.push(char);
+
+        const msg = `🏛️ ${char.name} has automatically retired to the Alumni Gallery (+10 Renown) after all cards reached ${retirementThreshold}d retirement age!`;
+        if (summary) summary.push(msg);
+        next.notices.push({
+          id: `auto-retire-${Date.now()}-${char.id}`,
+          time: Date.now(),
+          type: 'retirement',
+          text: msg
+        });
+      }
+    }
+
+    return { state: next, retired };
+  }
+
+  /**
+   * Evaluate Timed Term / examTimer status
+   */
+  static checkTimedTermStatus(
+    state: FullGameState,
+    currentTimeMs: number = Date.now()
+  ): { state: FullGameState; termEnded: boolean; report?: { cardsStudied: number; mastersGraduated: number; renownEarned: number; honorTier: string } } {
+    const next = state;
+    if (next.settings.mode !== 'timed' && !next.settings.examTimer) {
+      return { state: next, termEnded: false };
+    }
+
+    const termEndMs = next.termEndDateMs || (next.settings.termEndDate ? new Date(next.settings.termEndDate).getTime() : 0);
+    const hasEndedByDate = termEndMs > 0 && currentTimeMs >= termEndMs;
+    const termLength = next.settings.termLengthDays || 30;
+    const termStartDate = next.termStartDateMs || next.installBaselineMs || currentTimeMs;
+    const daysSinceTermStart = Math.floor((currentTimeMs - termStartDate) / (24 * 3600 * 1000));
+    const hasEndedByDays = daysSinceTermStart >= termLength;
+
+    if (hasEndedByDate || hasEndedByDays) {
+      const cardsStudied = Math.max(0, next.reviewIndex - (next.termInitialReviewIndex || 0));
+      const mastersGraduated = Math.max(0, (next.characters.filter(c => c.masteredSchools.length > 0).length + next.alumniGallery.length) - (next.termInitialMasters || 0));
+      const renownEarned = Math.max(0, next.renown - (next.termInitialRenown || 0));
+
+      let honorTier = 'Cum Laude';
+      if (mastersGraduated >= 5 || cardsStudied >= 500) honorTier = 'Summa Cum Laude (Valedictorian)';
+      else if (mastersGraduated >= 2 || cardsStudied >= 200) honorTier = 'Magna Cum Laude';
+
+      const report = {
+        cardsStudied,
+        mastersGraduated,
+        renownEarned,
+        honorTier,
+        completedAt: currentTimeMs
+      };
+
+      next.termFinishedReport = report;
+      return { state: next, termEnded: true, report };
+    }
+
+    return { state: next, termEnded: false };
+  }
+
+  /**
+   * Commence Next Term
+   */
+  static startNextTerm(
+    state: FullGameState,
+    termLengthDays: number = 30
+  ): { state: FullGameState } {
+    const next = structuredClone(state);
+    const now = Date.now();
+    next.termStartDateMs = now;
+    next.termEndDateMs = now + (termLengthDays * 24 * 3600 * 1000);
+    next.termInitialReviewIndex = next.reviewIndex;
+    next.termInitialMasters = next.characters.filter(c => c.masteredSchools.length > 0).length + next.alumniGallery.length;
+    next.termInitialRenown = next.renown;
+    next.termFinishedReport = undefined;
+    next.notices.push({
+      id: `term-start-${now}`,
+      time: now,
+      type: 'term_start',
+      text: `📜 New Academic Term commenced (${termLengthDays} days). Prepare your flashcards!`
+    });
+    return { state: next };
   }
 
   /**
@@ -1601,11 +1822,16 @@ export class AnkicasterEngine {
     }
 
     const targetLevel = curLevel + 1;
-    const required = 25 * targetLevel;
-    const cost = isGrimoire ? 250 : 25 * curLevel;
+    const req = getWizardLevelRequirements(targetLevel);
+    const cost = isGrimoire ? 250 : req.mana;
+    const required = isGrimoire ? 50 : req.reviews;
 
     if (next.mana < cost) {
       return { state, success: false, error: `Need ${cost} Mana to ponder this arcane mystery.` };
+    }
+
+    if (next.wizard.queuedSessions.length >= 5) {
+      return { state, success: false, error: 'Maximum of 5 wizard training sessions queued.' };
     }
 
     next.mana -= cost;
@@ -1618,20 +1844,28 @@ export class AnkicasterEngine {
       progress: 0,
       required,
       costPaid: cost,
-      state: 'active' as 'active'
+      state: 'active' as const
     };
 
     if (!next.wizard.activeSession) {
       next.wizard.activeSession = session;
     } else {
-      next.wizard.queuedSessions.push(session);
+      next.wizard.queuedSessions.push({
+        id: session.id,
+        kind: session.kind,
+        school: session.school,
+        targetLevel: session.targetLevel,
+        spellId: session.spellId,
+        required: session.required,
+        costPaid: session.costPaid
+      });
     }
 
     next.notices.push({
       id: `study-${Date.now()}`,
       time: Date.now(),
       type: 'wizard',
-      text: `Pondering the Orb: Training towards ${school.toUpperCase()} Level ${targetLevel} (${required} reviews).`
+      text: `Pondering the Orb: Training towards ${school.toUpperCase()} Level ${targetLevel} (${required} reviews, cost ${cost}m).`
     });
 
     return { state: next, success: true };
@@ -1965,6 +2199,359 @@ export class AnkicasterEngine {
       case 'grind_seed':
         next.resources.herbs += 30;
         summary = 'Ground the rare seeds into 30 fragrant medicinal Herbs!';
+        break;
+      case 'observe_comet':
+        next.resources.insight += 25;
+        summary = 'Starlight observations completed from the Observatory (+25 Insight)!';
+        break;
+      case 'crystal_comet':
+        next.resources.crystal = (next.resources.crystal || 0) + 2;
+        summary = 'Harmonized courtyard ward crystals (+2 Crystal)!';
+        break;
+      case 'wish_comet':
+        next.characters.forEach(c => {
+          c.needs.composure = Math.min(100, c.needs.composure + 15);
+          c.morale = Math.min(100, c.morale + 15);
+        });
+        summary = 'The student body gathered to make wishes (+15 Composure & Morale)!';
+        break;
+      case 'trade_sunstone':
+        if (next.resources.reagents >= 20) {
+          next.resources.reagents -= 20;
+          next.resources.sunstone = (next.resources.sunstone || 0) + 1;
+          summary = 'Exchanged 20 Reagents for a brilliant Sunstone with the alchemist!';
+        } else {
+          summary = 'Not enough Reagents to complete trade.';
+        }
+        break;
+      case 'demo_brew':
+        next.resources.reagents += 20;
+        next.renown += 5;
+        summary = 'Joint potion demonstration was a resounding success (+20 Reagents, +5 Renown)!';
+        break;
+      case 'water_bread':
+        next.renown += 5;
+        summary = 'The alchemist bowed warmly and shared travel tales (+5 Renown).';
+        break;
+      case 'shelter_fox':
+        next.creatures.push({
+          id: Date.now(),
+          defId: 'bramblefox',
+          nickname: 'Azure Bramblefox',
+          status: 'wary',
+          hungry: false,
+          hatchProgress: 0,
+          tamingProgress: 0,
+          bondLevel: 1,
+          bondProgress: 0,
+          arrivedDay: next.day
+        });
+        summary = 'Bramblefox welcomed warmly into the meadow habitat as a wary friend!';
+        break;
+      case 'return_fox':
+        next.renown += 15;
+        summary = 'Safely returned the lost familiar to its guildmaster in the capital (+15 Renown)!';
+        break;
+      case 'feed_fox':
+        next.resources.herbs += 15;
+        summary = 'Fed sweet berries to the fox; it left behind fresh wild herbs (+15 Herbs).';
+        break;
+      case 'tour_inspector':
+        next.renown += 20;
+        summary = 'The imperial envoy was thoroughly impressed by Academy standards (+20 Renown)!';
+        break;
+      case 'feast_inspector':
+        if (next.resources.provisions >= 15) {
+          next.resources.provisions -= 15;
+          next.renown += 15;
+          next.characters.forEach(c => { c.morale = Math.min(100, c.morale + 5); });
+          summary = 'The envoy praised the refectory feast (+15 Renown, +5 Morale)!';
+        } else {
+          next.renown += 5;
+          summary = 'Offered tea to the envoy (+5 Renown).';
+        }
+        break;
+      case 'greet_inspector':
+        next.renown += 8;
+        summary = 'Polite ceremonial greetings exchanged (+8 Renown).';
+        break;
+      case 'buy_grimoire':
+        if (next.mana >= 150) {
+          next.mana -= 150;
+          next.resources.insight += 30;
+          summary = 'Studied the illuminated Arcane Tome (+30 Insight)!';
+        } else {
+          summary = 'Insufficient mana for grimoire purchase.';
+        }
+        break;
+      case 'barter_scrolls':
+        if (next.resources.timber >= 25) {
+          next.resources.timber -= 25;
+          next.resources.insight += 25;
+          next.renown += 5;
+          summary = 'Bartered timber for architectural scrolls (+25 Insight, +5 Renown)!';
+        } else {
+          summary = 'Insufficient timber for barter.';
+        }
+        break;
+      case 'pass_books':
+        summary = 'Politely bid farewell to the wandering scholar.';
+        break;
+      case 'geyser_veil':
+        next.veil.strength = Math.min(100, next.veil.strength + 20);
+        summary = 'Harmonic leyline pulse resonated with the Veil Dome (+20% Strength)!';
+        break;
+      case 'geyser_mana':
+        next.mana += 150;
+        summary = 'Condensed pure crystalline liquid mana (+150 Mana)!';
+        break;
+      case 'geyser_garden':
+        next.resources.provisions += 30;
+        next.resources.herbs += 15;
+        summary = 'Grounds gardens irrigated with latent springwater (+30 Provisions, +15 Herbs)!';
+        break;
+      case 'host_troupe':
+        next.characters.forEach(c => {
+          c.needs.leisure = Math.min(100, c.needs.leisure + 25);
+          c.morale = Math.min(100, c.morale + 15);
+        });
+        summary = 'Grand midsummer drama filled the Great Hall (+25 Leisure, +15 Morale)!';
+        break;
+      case 'ballad_troupe':
+        if (next.mana >= 50) {
+          next.mana -= 50;
+          next.renown += 15;
+          summary = 'A heroic ballad of the Academy spreads across the realm (+15 Renown)!';
+        } else {
+          next.renown += 5;
+          summary = 'Troupe sang an impromptu chorus (+5 Renown).';
+        }
+        break;
+      case 'lawn_troupe':
+        next.renown += 5;
+        summary = 'Charming lawn performance delighted onlookers (+5 Renown).';
+        break;
+      case 'harvest_umbra':
+        next.resources.umbra += 25;
+        summary = 'Distilled essence of the violet eclipse (+25 Umbra)!';
+        break;
+      case 'fortify_umbra':
+        if (next.mana >= 50) {
+          next.mana -= 50;
+          next.veil.strength = Math.min(100, next.veil.strength + 15);
+          summary = 'Reinforced shadow ward lattices (+15% Veil Strength)!';
+        } else {
+          summary = 'Insufficient mana to fortify wards.';
+        }
+        break;
+      case 'meditate_umbra':
+        next.characters.forEach(c => {
+          c.needs.composure = Math.min(100, c.needs.composure + 20);
+        });
+        summary = 'Sanctuary meditation brought deep inner composure (+20 Composure)!';
+        break;
+      case 'harvest_orchard':
+        next.resources.provisions += 40;
+        next.resources.nectar += 10;
+        summary = 'Bountiful orchard harvest collected (+40 Provisions, +10 Nectar)!';
+        break;
+      case 'cider_orchard':
+        next.resources.nectar += 15;
+        next.characters.forEach(c => { c.morale = Math.min(100, c.morale + 15); });
+        summary = 'Sparkling cider enjoyed throughout the grounds (+15 Nectar, +15 Morale)!';
+        break;
+      case 'gift_orchard':
+        next.renown += 15;
+        summary = 'Donated fresh fruit crates to neighboring towns (+15 Renown)!';
+        break;
+      case 'repair_golem':
+        if (next.mana >= 40) {
+          next.mana -= 40;
+          next.resources.stone += 40;
+          next.resources.golem_core = (next.resources.golem_core || 0) + 1;
+          summary = 'Recharged dormant core; salvaged ancient golem parts (+40 Stone, +1 Golem Core)!';
+        } else {
+          summary = 'Insufficient mana to recharge core.';
+        }
+        break;
+      case 'salvage_golem':
+        next.resources.stone += 30;
+        next.resources.insight += 10;
+        summary = 'Carefully transcribed runes and salvaged stone (+30 Stone, +10 Insight)!';
+        break;
+      case 'statue_golem':
+        next.renown += 5;
+        summary = 'The mossy golem makes a stately academy garden monument (+5 Renown).';
+        break;
+      case 'healer_cure':
+        next.characters.forEach(c => { c.injury = undefined; });
+        summary = 'Silver Spring doctor treated all injuries across the Academy infirmary!';
+        break;
+      case 'healer_herbs':
+        next.resources.herbs += 30;
+        summary = 'Exchanged rare dried botanical specimens (+30 Herbs)!';
+        break;
+      case 'healer_donate':
+        if (next.mana >= 30) {
+          next.mana -= 30;
+          next.renown += 10;
+          summary = 'Donated to the traveling herbal clinic (+10 Renown)!';
+        } else {
+          summary = 'Insufficient mana for donation.';
+        }
+        break;
+      case 'astral_debate':
+        next.resources.insight += 25;
+        summary = 'Fascinating cosmological debate with the spectral scholar (+25 Insight)!';
+        break;
+      case 'astral_rift':
+        next.renown += 15;
+        summary = 'Recorded astral drift coordinates for Rift navigation (+15 Renown)!';
+        break;
+      case 'astral_peace':
+        next.characters.forEach(c => { c.needs.composure = Math.min(100, c.needs.composure + 15); });
+        summary = 'Scholarly spectral blessing soothed the dormitories (+15 Composure)!';
+        break;
+      case 'bubble_reagents':
+        next.resources.reagents += 20;
+        summary = 'Distilled magical bubbles into laboratory flasks (+20 Reagents)!';
+        break;
+      case 'bubble_light':
+        next.resources.radiance += 15;
+        summary = 'Absorbed radiant bubbles into ward lanterns (+15 Radiance)!';
+        break;
+      case 'bubble_fun':
+        next.characters.forEach(c => { c.morale = Math.min(100, c.morale + 10); });
+        summary = 'Apprentices chased floating bubbles through the cloisters (+10 Morale)!';
+        break;
+      case 'fix_wagon':
+        if (next.resources.timber >= 20) {
+          next.resources.timber -= 20;
+          next.resources.cloth += 25;
+          next.resources.glass += 15;
+          summary = 'Assisted merchant convoy; rewarded with fine silks and glassware (+25 Cloth, +15 Glass)!';
+        } else {
+          summary = 'Insufficient timber to repair wagon.';
+        }
+        break;
+      case 'trade_wagon':
+        if (next.resources.timber >= 25) {
+          next.resources.timber -= 25;
+          next.resources.provisions += 30;
+          summary = 'Traded seasoned timber for fine merchant rations (+30 Provisions)!';
+        } else {
+          summary = 'Insufficient timber for trade.';
+        }
+        break;
+      case 'shelter_wagon':
+        next.renown += 10;
+        summary = 'Sheltered merchants for the night (+10 Renown)!';
+        break;
+      case 'collect_starmetal':
+        next.resources.starmetal = (next.resources.starmetal || 0) + 2;
+        summary = 'Gathered fallen stardust nodules from the courtyard (+2 Starmetal)!';
+        break;
+      case 'starlight_mana':
+        next.mana += 120;
+        summary = 'Capacitor attuned to starlight pulse (+120 Mana)!';
+        break;
+      case 'starlight_picnic':
+        next.characters.forEach(c => {
+          c.needs.rest = Math.min(100, c.needs.rest + 25);
+          c.morale = Math.min(100, c.morale + 25);
+        });
+        summary = 'Midnight meteor watching refreshed all students (+25 Rest & Morale)!';
+        break;
+      case 'grant_mana':
+        next.mana += 200;
+        summary = 'Received Arcanum endowment research fund (+200 Mana)!';
+        break;
+      case 'grant_mats':
+        next.resources.timber += 40;
+        next.resources.stone += 40;
+        summary = 'Received Arcanum materials convoy (+40 Timber, +40 Stone)!';
+        break;
+      case 'grant_curios':
+        next.resources.reagents += 10;
+        next.resources.insight += 10;
+        summary = 'Unpacked ministerial laboratory curios (+10 Reagents, +10 Insight)!';
+        break;
+      case 'tune_bells':
+        if (next.mana >= 75) {
+          next.mana -= 75;
+          next.renown += 15;
+          summary = 'Clockwork horologist tuned bell harmonics perfectly (+15 Renown)!';
+        } else {
+          summary = 'Insufficient mana for horology tuning.';
+        }
+        break;
+      case 'trade_clock':
+        if ((next.resources.crystal || 0) >= 1) {
+          next.resources.crystal -= 1;
+          next.resources.golem_core = (next.resources.golem_core || 0) + 1;
+          next.resources.glass += 10;
+          summary = 'Exchanged crystal for an intricate Golem Core & precision glass (+1 Core, +10 Glass)!';
+        } else {
+          summary = 'Insufficient crystal for clock trade.';
+        }
+        break;
+      case 'pass_clock':
+        next.renown += 2;
+        summary = 'Exchanged courteous greetings with the artificer (+2 Renown).';
+        break;
+      case 'heron_light':
+        next.resources.radiance += 20;
+        summary = 'Luminous plumage bathed the water gardens (+20 Radiance)!';
+        break;
+      case 'heron_feed':
+        if (next.resources.provisions >= 10) {
+          next.resources.provisions -= 10;
+          next.renown += 10;
+          next.characters.forEach(c => { c.morale = Math.min(100, c.morale + 15); });
+          summary = 'Fed grains to celestial herons (+10 Renown, +15 Morale)!';
+        } else {
+          summary = 'Insufficient provisions to feed birds.';
+        }
+        break;
+      case 'heron_chart':
+        next.resources.insight += 15;
+        summary = 'Charted celestial migratory path in the library (+15 Insight)!';
+        break;
+      case 'bequest_mana':
+        next.mana += 150;
+        summary = 'Alumni scholarship bequest deposited (+150 Mana)!';
+        break;
+      case 'bequest_books':
+        next.resources.insight += 25;
+        summary = 'Unpacked rare astronomical volumes donated by graduate (+25 Insight)!';
+        break;
+      case 'bequest_plaque':
+        next.renown += 15;
+        summary = 'Hung court astrologer commendation in Great Hall (+15 Renown)!';
+        break;
+      case 'solstice_banquet':
+        if (next.resources.provisions >= 15) {
+          next.resources.provisions -= 15;
+          next.characters.forEach(c => {
+            c.needs.hunger = 100;
+            c.needs.rest = 100;
+            c.needs.leisure = 100;
+            c.needs.composure = 100;
+            c.morale = 100;
+          });
+          summary = 'Grand Solstice Feast restored all student needs to 100%!';
+        } else {
+          summary = 'Insufficient provisions for Solstice banquet.';
+        }
+        break;
+      case 'solstice_radiance':
+        next.resources.radiance += 35;
+        summary = 'Solar collectors focused midday rays (+35 Radiance)!';
+        break;
+      case 'solstice_veil':
+        next.veil.strength = Math.min(100, next.veil.strength + 15);
+        next.renown += 10;
+        summary = 'Consecrated boundary stones (+15% Veil Strength, +10 Renown)!';
         break;
       default:
         summary = 'The matter was handled gracefully by the Academy staff.';

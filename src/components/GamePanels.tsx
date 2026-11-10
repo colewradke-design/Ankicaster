@@ -187,10 +187,12 @@ export const WizardStudyPanel: React.FC<{
                 {!isMax ? (
                   <button
                     onClick={() => onQueueSession(sch, false)}
-                    disabled={!canAfford || !!wizard.activeSession}
+                    disabled={!canAfford || (wizard.queuedSessions && wizard.queuedSessions.length >= 5)}
                     className="w-full mt-2 py-2 px-3 bg-purple-600/20 hover:bg-purple-600/40 text-purple-200 border border-purple-500/40 rounded-xl text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed transition"
                   >
-                    Ponder {sch} Orb ({req.mana}m · {req.reviews} revs)
+                    {wizard.activeSession
+                      ? `Queue ${sch} Orb (${req.mana}m · ${req.reviews} revs)`
+                      : `Ponder ${sch} Orb (${req.mana}m · ${req.reviews} revs)`}
                   </button>
                 ) : (
                   <span className="text-center text-xs text-amber-400 font-bold py-1.5 bg-amber-500/10 rounded-lg border border-amber-500/20">

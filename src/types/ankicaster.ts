@@ -444,6 +444,7 @@ export interface GameSettings {
   textScale: number;
   mode: 'endless' | 'timed';
   termLengthDays?: number;
+  termEndDate?: string;
   examTimer?: boolean;
   devMode?: boolean;
 }
@@ -458,6 +459,18 @@ export interface FullGameState {
   renown: number;
   lastSessionTimeMs: number;
   installBaselineMs: number;
+  termStartDateMs?: number;
+  termEndDateMs?: number;
+  termInitialReviewIndex?: number;
+  termInitialMasters?: number;
+  termInitialRenown?: number;
+  termFinishedReport?: {
+    cardsStudied: number;
+    mastersGraduated: number;
+    renownEarned: number;
+    honorTier: string;
+    completedAt: number;
+  };
   wizard: WizardState;
   veil: VeilState;
   resources: ResourceInventory;

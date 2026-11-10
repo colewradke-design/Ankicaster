@@ -2818,5 +2818,205 @@ export const SCHOOL_EVENTS: SchoolEvent[] = [
       { text: 'Plant them in the greenhouse', reward: 'Unlock an exotic crop seed', action: 'plant_seed' },
       { text: 'Carefully dry and grind them for research', reward: '+30 Herbs', action: 'grind_seed' }
     ]
+  },
+  {
+    id: 'celestial_comet',
+    name: 'The Starlight Comet',
+    description: 'A radiant sapphire comet streaks across the twilight canopy above the academy spires.',
+    options: [
+      { text: 'Observe calculations from Observatory', reward: '+25 Insight', action: 'observe_comet' },
+      { text: 'Ground ward crystals in courtyard', reward: '+2 Crystal', action: 'crystal_comet' },
+      { text: 'Invite whole school to make wishes', reward: '+15 Composure & Morale', action: 'wish_comet' }
+    ]
+  },
+  {
+    id: 'traveling_alchemist',
+    name: 'The Wandering Alembic',
+    description: 'An itinerant potion master with a smoking knapsack requests permission to rest at the gate.',
+    options: [
+      { text: 'Trade 20 Reagents for Sunstone', cost: '20 Reagents', reward: '+1 Sunstone', action: 'trade_sunstone' },
+      { text: 'Host joint brewing demonstration', reward: '+20 Reagents & +5 Renown', action: 'demo_brew' },
+      { text: 'Offer fresh well water & bread', reward: '+5 Renown', action: 'water_bread' }
+    ]
+  },
+  {
+    id: 'lost_familiar',
+    name: 'A Stray Luminescent Fox',
+    description: 'A small fox with glowing azure fur and a tiny silver bell scratches politely at the academy gate.',
+    options: [
+      { text: 'Shelter in Meadow Paddock', reward: 'Bramblefox arrives as wary friend', action: 'shelter_fox' },
+      { text: 'Ring guild bell and safely escort home', reward: '+15 Renown', action: 'return_fox' },
+      { text: 'Feed sweet forest berries', reward: '+15 Herbs', action: 'feed_fox' }
+    ]
+  },
+  {
+    id: 'royal_inspector',
+    name: 'Envoy of the Arcanum',
+    description: 'An immaculate imperial emissary in velvet robes arrives with a seal to inspect the academy.',
+    options: [
+      { text: 'Present comprehensive academy tour', reward: '+20 Renown', action: 'tour_inspector' },
+      { text: 'Serve a formal refectory feast', cost: '15 Provisions', reward: '+15 Renown & +5 Morale', action: 'feast_inspector' },
+      { text: 'Polite ceremonial greeting at the gate', reward: '+8 Renown', action: 'greet_inspector' }
+    ]
+  },
+  {
+    id: 'ancient_grimoire_peddler',
+    name: 'The Weathered Bibliophile',
+    description: 'A scholar pushing a hand-cart stacked with ancient illuminated manuscripts stops by.',
+    options: [
+      { text: 'Purchase Arcane Tome', cost: '150 Mana', reward: '+30 Insight', action: 'buy_grimoire' },
+      { text: 'Barter 25 Timber for rare architectural scrolls', cost: '25 Timber', reward: '+25 Insight & +5 Renown', action: 'barter_scrolls' },
+      { text: 'Politely exchange pleasantries', reward: 'No cost', action: 'pass_books' }
+    ]
+  },
+  {
+    id: 'mana_geyser',
+    name: 'Surge of the Leyline',
+    description: 'A latent spring of crystalline mana erupts gently beneath the outer courtyard flagstones.',
+    options: [
+      { text: 'Channel harmonic pulse into Veil Dome', reward: '+20% Veil Strength', action: 'geyser_veil' },
+      { text: 'Condense into pure liquid mana', reward: '+150 Mana', action: 'geyser_mana' },
+      { text: 'Irrigate the herb and crop gardens', reward: '+30 Provisions & +15 Herbs', action: 'geyser_garden' }
+    ]
+  },
+  {
+    id: 'bard_troupe',
+    name: 'The Starlit Players',
+    description: 'A traveling troupe of lute-players and illusionists seek a venue for their midsummer tale.',
+    options: [
+      { text: 'Host a grand drama in the Great Hall', reward: 'All students +25 Leisure & +15 Morale', action: 'host_troupe' },
+      { text: 'Commission a heroic ballad about the Academy', cost: '50 Mana', reward: '+15 Renown', action: 'ballad_troupe' },
+      { text: 'Permit them to perform on the front lawn', reward: '+5 Renown', action: 'lawn_troupe' }
+    ]
+  },
+  {
+    id: 'shadow_conjunction',
+    name: 'The Umbral Alignment',
+    description: 'Twin moons align, bathing the high academy parapets in soft violet luminesce.',
+    options: [
+      { text: 'Harvest distilled essence of dusk', reward: '+25 Umbra', action: 'harvest_umbra' },
+      { text: 'Fortify shadow ward lattices', cost: '50 Mana', reward: '+15% Veil Strength', action: 'fortify_umbra' },
+      { text: 'Conduct quiet sanctuary meditation', reward: 'All students +20 Composure', action: 'meditate_umbra' }
+    ]
+  },
+  {
+    id: 'bountiful_harvest',
+    name: 'Boughs of the Sun Orchard',
+    description: 'The orchard trees have fruited overnight with enormous golden pears and sweet berries.',
+    options: [
+      { text: 'Organize academy harvest festival', reward: '+40 Provisions & +10 Nectar', action: 'harvest_orchard' },
+      { text: 'Brew sparkling celebratory cider', reward: '+15 Nectar & +15 Morale', action: 'cider_orchard' },
+      { text: 'Gift harvest baskets to neighboring villages', reward: '+15 Renown', action: 'gift_orchard' }
+    ]
+  },
+  {
+    id: 'stray_golem',
+    name: 'The Dormant Stone Guardian',
+    description: 'An ancient moss-grown stone golem has wandered out of the mountains and powered down near the gate.',
+    options: [
+      { text: 'Recharge core with magic crystals', cost: '40 Mana', reward: '+40 Stone & +1 Golem Core', action: 'repair_golem' },
+      { text: 'Carefully carve runes from outer casing', reward: '+30 Stone & +10 Insight', action: 'salvage_golem' },
+      { text: 'Leave as a dignified garden statue', reward: '+5 Renown', action: 'statue_golem' }
+    ]
+  },
+  {
+    id: 'wandering_healer',
+    name: 'Healer of the Silver Spring',
+    description: 'A renowned herbal doctor with a satchel of fresh poultices pays a courtesy call.',
+    options: [
+      { text: 'Invite to treat all academy injuries', reward: 'Heals all injured characters', action: 'healer_cure' },
+      { text: 'Exchange regional herbal secrets', reward: '+30 Herbs', action: 'healer_herbs' },
+      { text: 'Offer modest travel donation', cost: '30 Mana', reward: '+10 Renown', action: 'healer_donate' }
+    ]
+  },
+  {
+    id: 'astral_projection',
+    name: 'The Spectral Philosopher',
+    description: 'A shimmering phantom scholar emerges from a bookshelf to discuss ancient cosmological proofs.',
+    options: [
+      { text: 'Engage in lively philosophical debate', reward: '+25 Insight', action: 'astral_debate' },
+      { text: 'Inquire regarding Rift cartography', reward: '+15 Renown & expedition tips', action: 'astral_rift' },
+      { text: 'Offer peaceful scholarly blessing', reward: 'All students +15 Composure', action: 'astral_peace' }
+    ]
+  },
+  {
+    id: 'wild_magic_surge',
+    name: 'Chromatic Bubble Drift',
+    description: 'Playful globes of iridescent magic float through the academy colonnades.',
+    options: [
+      { text: 'Gently pop and gather reagents', reward: '+20 Reagents', action: 'bubble_reagents' },
+      { text: 'Absorb ambient light into ward lanterns', reward: '+15 Radiance', action: 'bubble_light' },
+      { text: 'Let apprentices study the levitation runes', reward: 'Morale +10 for all students', action: 'bubble_fun' }
+    ]
+  },
+  {
+    id: 'merchant_convoy',
+    name: 'Caravan in Distress',
+    description: 'A heavy spice and silk merchant wagon broke an axle on the cobblestones outside the gate.',
+    options: [
+      { text: 'Dispatch carpentry crew to fix axle', cost: '20 Timber', reward: '+25 Cloth & +15 Glass', action: 'fix_wagon' },
+      { text: 'Trade timber for gourmet rations', cost: '25 Timber', reward: '+30 Provisions', action: 'trade_wagon' },
+      { text: 'Offer refuge and warm soup', reward: '+10 Renown', action: 'shelter_wagon' }
+    ]
+  },
+  {
+    id: 'meteor_shower',
+    name: 'Night of the Falling Stars',
+    description: 'Luminous meteors leave sparkling silver trails that settle over the academy rooftops.',
+    options: [
+      { text: 'Scour grounds for starlight ore', reward: '+2 Starmetal', action: 'collect_starmetal' },
+      { text: 'Attune mana capacitor plates', reward: '+120 Mana', action: 'starlight_mana' },
+      { text: 'Courtyard midnight picnic', reward: 'All students +25 Morale & Rest', action: 'starlight_picnic' }
+    ]
+  },
+  {
+    id: 'guild_grant',
+    name: 'Arcanum Academic Endowment',
+    description: 'The High Council of Sorcery reviews your curriculum and bestows an academic grant.',
+    options: [
+      { text: 'Accept unrestricted mana research grant', reward: '+200 Mana', action: 'grant_mana' },
+      { text: 'Accept building materials shipment', reward: '+40 Timber & +40 Stone', action: 'grant_mats' },
+      { text: 'Accept rare laboratory curios', reward: '+10 Reagents & +10 Insight', action: 'grant_curios' }
+    ]
+  },
+  {
+    id: 'clockwork_tinkerer',
+    name: 'The Brass Artificer',
+    description: 'A clockmaker with magnifying goggles offers to tune the academy bell tower.',
+    options: [
+      { text: 'Commission acoustic harmonic tuning', cost: '75 Mana', reward: '+15 Renown & clearer bells', action: 'tune_bells' },
+      { text: 'Trade 1 Crystal for clockwork parts', cost: '1 Crystal', reward: '+1 Golem Core & +10 Glass', action: 'trade_clock' },
+      { text: 'Politely thank the visitor', reward: '+2 Renown', action: 'pass_clock' }
+    ]
+  },
+  {
+    id: 'spirit_migration',
+    name: 'Flight of the Moon Herons',
+    description: 'A glowing flock of celestial waterbirds rests along the edge of the academy reflecting pond.',
+    options: [
+      { text: 'Silently observe their luminous courtship', reward: '+20 Radiance', action: 'heron_light' },
+      { text: 'Offer fresh grain by the waterside', cost: '10 Provisions', reward: 'Morale +15 & +10 Renown', action: 'heron_feed' },
+      { text: 'Chart migratory flight lines', reward: '+15 Insight', action: 'heron_chart' }
+    ]
+  },
+  {
+    id: 'alumni_bequest',
+    name: 'A Graduate’s Gratitude',
+    description: 'An alumnus now serving as Court Astrologer sends an inscribed chest back to their alma mater.',
+    options: [
+      { text: 'Accept endowment for scholarship', reward: '+150 Mana', action: 'bequest_mana' },
+      { text: 'Unpack donated rare books and charts', reward: '+25 Insight', action: 'bequest_books' },
+      { text: 'Display royal recognition plaque', reward: '+15 Renown', action: 'bequest_plaque' }
+    ]
+  },
+  {
+    id: 'solstice_festival',
+    name: 'The Great Solstice Feast',
+    description: 'The midday sun rests in zenith above the academy spire, radiating golden harmony.',
+    options: [
+      { text: 'Celebrate with grand banquet', cost: '15 Provisions', reward: 'All student needs restored to 100%', action: 'solstice_banquet' },
+      { text: 'Focus sunbeams into the solar array', reward: '+35 Radiance', action: 'solstice_radiance' },
+      { text: 'Consecrate boundary stones', reward: '+15% Veil Strength & +10 Renown', action: 'solstice_veil' }
+    ]
   }
 ];

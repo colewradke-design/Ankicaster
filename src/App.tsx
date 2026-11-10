@@ -124,15 +124,49 @@ export default function App() {
     }
   }, [state]);
 
-  // Real-Time Clock Check on Mount: BR-04 & BR-25 Real Days Passed
+  // Build-time Dev Mode flag (BR-02, User Directive: build-time flag instead of player setting)
+  const IS_DEV_MODE = import.meta.env.DEV || import.meta.env.VITE_DEV_MODE === 'true';
+
+  // Check for real-time day elapsed (4 AM calendar day boundary, carrying over leftover hours)
+  const checkDayRollover = useCallback(() => {
+    setState(current => {
+      const res = AnkicasterEngine.processRealTimeElapsedDays(current, Date.now());
+      if (res.daysPassed > 0) {
+        setDaySummaryItems(res.summary);
+        setIsDaySummaryOpen(true);
+        return res.state;
+      }
+      return current;
+    });
+  }, []);
+
+  // 1. Check on load
   useEffect(() => {
-    const res = AnkicasterEngine.processRealTimeElapsedDays(state, Date.now());
-    if (res.daysPassed > 0) {
-      setState(res.state);
-      setDaySummaryItems(res.summary);
-      setIsDaySummaryOpen(true);
-    }
-  }, []); // Run once on startup
+    checkDayRollover();
+  }, [checkDayRollover]);
+
+  // 2. Check on automated interval timer (every 30 seconds)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      checkDayRollover();
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [checkDayRollover]);
+
+  // 3. Check when tab or window regains focus or visibility returns
+  useEffect(() => {
+    const handleFocusOrVisible = () => {
+      if (document.visibilityState === 'visible') {
+        checkDayRollover();
+      }
+    };
+    window.addEventListener('focus', handleFocusOrVisible);
+    document.addEventListener('visibilitychange', handleFocusOrVisible);
+    return () => {
+      window.removeEventListener('focus', handleFocusOrVisible);
+      document.removeEventListener('visibilitychange', handleFocusOrVisible);
+    };
+  }, [checkDayRollover]);
 
   // Audio synthesizer chime helper
   const playChime = useCallback((type: 'review' | 'bell' | 'mastery' | 'build') => {
@@ -564,13 +598,13 @@ export default function App() {
             )}
           </button>
 
-          {/* Dev / Debug button: visible ONLY when devMode is active */}
-          {state.settings.devMode && (
+          {/* Dev / Debug button: visible ONLY when build-time dev mode is active */}
+          {IS_DEV_MODE && (
             <div className="ml-auto flex items-center gap-2 shrink-0">
               <button
                 onClick={handleNextDay}
                 className="flex items-center gap-1.5 px-3 py-1 bg-indigo-900/60 hover:bg-indigo-900 text-indigo-200 border border-indigo-700/60 rounded-xl text-xs font-bold transition shadow"
-                title="Advance Day and calculate Veil upkeep (Dev Mode)"
+                title="Advance Day and calculate Veil upkeep (Build Dev Mode)"
               >
                 <Moon className="w-3.5 h-3.5 text-indigo-300" />
                 <span>Simulate Dawn</span>
@@ -602,7 +636,7 @@ export default function App() {
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                {state.settings.devMode && (
+                {IS_DEV_MODE && (
                   <>
                     <button
                       onClick={() => handleSimulateBatch(1)}
@@ -635,7 +669,7 @@ export default function App() {
               cards={state.allCards}
               onAnswerCard={handleAnswerCard}
               onSimulateBatch={handleSimulateBatch}
-              devMode={state.settings.devMode}
+              devMode={IS_DEV_MODE}
             />
           </div>
         )}
@@ -1113,25 +1147,17 @@ export default function App() {
             </div>
 
             <div className="space-y-3">
-              {/* Developer Test Tools Toggle */}
+              {/* Developer Test Tools Status (Build-Time Flag) */}
               <div className="flex items-center justify-between bg-slate-950 p-3.5 rounded-xl border border-slate-800">
                 <div>
-                  <span className="font-bold text-amber-300 block">Developer / Test Mode</span>
-                  <span className="text-xs text-slate-400">Shows +1 / +10 quick review and day skip tools</span>
+                  <span className="font-bold text-amber-300 block">Developer Mode (Build Flag)</span>
+                  <span className="text-xs text-slate-400">Controlled at compile-time via environment flag</span>
                 </div>
-                <button
-                  onClick={() => {
-                    setState(prev => ({
-                      ...prev,
-                      settings: { ...prev.settings, devMode: !prev.settings.devMode }
-                    }));
-                  }}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-                    state.settings.devMode ? 'bg-amber-600 text-white' : 'bg-slate-800 text-slate-400'
-                  }`}
-                >
-                  {state.settings.devMode ? 'Enabled' : 'Hidden'}
-                </button>
+                <span className={`px-2.5 py-1 rounded-lg text-xs font-bold ${
+                  IS_DEV_MODE ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'bg-slate-800 text-slate-400'
+                }`}>
+                  {IS_DEV_MODE ? 'DEV Flag Active' : 'Production Build'}
+                </span>
               </div>
 
               {/* Sound toggle */}
@@ -1155,13 +1181,85 @@ export default function App() {
               {/* Safe Floor indicator */}
               <div className="flex items-center justify-between bg-slate-950 p-3.5 rounded-xl border border-slate-800">
                 <span>Daily Veil Upkeep</span>
-                <span className="font-semibold text-indigo-300">Auto-Pay (BR-25 10% Floor)</span>
+                <span className="font-semibold text-indigo-300">Auto-Pay (BR-25 10% Floor Active)</span>
               </div>
 
-              {/* Term Mode */}
-              <div className="flex items-center justify-between bg-slate-950 p-3.5 rounded-xl border border-slate-800">
-                <span>Academy Mode</span>
-                <span className="font-bold text-slate-200 capitalize">{state.settings.mode || 'Endless'} Term</span>
+              {/* Timed Term / examTimer Configuration */}
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="font-bold text-sky-300 block">Timed Term (examTimer)</span>
+                    <span className="text-xs text-slate-400">Structured academic exam countdown</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setState(prev => ({
+                        ...prev,
+                        settings: {
+                          ...prev.settings,
+                          examTimer: !prev.settings.examTimer,
+                          mode: !prev.settings.examTimer ? 'timed' : 'endless'
+                        }
+                      }));
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                      state.settings.examTimer ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {state.settings.examTimer ? 'Timed Active' : 'Endless Mode'}
+                  </button>
+                </div>
+
+                {state.settings.examTimer && (
+                  <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-300">Term End Date:</span>
+                      <input
+                        type="date"
+                        value={state.settings.termEndDate || ''}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setState(prev => ({
+                            ...prev,
+                            settings: { ...prev.settings, termEndDate: val },
+                            termEndDateMs: val ? new Date(val).getTime() : undefined
+                          }));
+                        }}
+                        className="bg-slate-900 border border-slate-700 px-2 py-1 rounded-lg text-slate-200 text-xs"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-300">Term Length:</span>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          min="7"
+                          max="180"
+                          value={state.settings.termLengthDays || 30}
+                          onChange={e => {
+                            const val = Number(e.target.value) || 30;
+                            setState(prev => ({
+                              ...prev,
+                              settings: { ...prev.settings, termLengthDays: val }
+                            }));
+                          }}
+                          className="bg-slate-900 border border-slate-700 px-2 py-1 rounded-lg text-slate-200 text-xs w-16 text-center"
+                        />
+                        <span className="text-slate-400">days</span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const res = AnkicasterEngine.checkTimedTermStatus(state, Date.now() + 999999999);
+                        setState(res.state);
+                        setIsSettingsOpen(false);
+                      }}
+                      className="w-full py-1.5 bg-sky-950/60 hover:bg-sky-900 text-sky-200 border border-sky-800/60 font-bold rounded-lg transition text-xs"
+                    >
+                      Conclude Term & View Report
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div className="border-t border-slate-800 pt-3">
@@ -1180,6 +1278,68 @@ export default function App() {
                   Restart Academy (Reset State)
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 7: ACADEMIC TERM CONCLUDED REPORT */}
+      {state.termFinishedReport && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-5 text-center">
+            <div className="w-14 h-14 mx-auto rounded-full bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300">
+              <GraduationCap className="w-8 h-8" />
+            </div>
+
+            <div>
+              <h3 className="text-xl font-bold text-amber-300">
+                Academic Term Concluded!
+              </h3>
+              <p className="text-xs text-slate-300 mt-1">
+                The exam bells have tolled across the spires. Your apprentices and masters stand evaluated.
+              </p>
+            </div>
+
+            <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-3 text-left">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                <span className="text-slate-400 font-semibold text-xs">Academic Standing:</span>
+                <span className="text-amber-400 font-bold text-xs">
+                  {state.termFinishedReport.honorTier}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400 text-xs">Cards Studied This Term:</span>
+                <span className="text-slate-100 font-bold text-xs">{state.termFinishedReport.cardsStudied}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400 text-xs">Masters Graduated This Term:</span>
+                <span className="text-slate-100 font-bold text-xs">{state.termFinishedReport.mastersGraduated}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400 text-xs">Renown Earned This Term:</span>
+                <span className="text-purple-300 font-bold text-xs">+{state.termFinishedReport.renownEarned} Renown</span>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3 pt-2">
+              <button
+                onClick={() => {
+                  const updated = AnkicasterEngine.startNextTerm(state, state.settings.termLengthDays || 30);
+                  setState(updated.state);
+                  addToast('New academic semester commenced!', 'success');
+                }}
+                className="flex-1 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold rounded-xl shadow-lg transition text-xs"
+              >
+                Begin Next Academic Term
+              </button>
+              <button
+                onClick={() => {
+                  setState(prev => ({ ...prev, termFinishedReport: undefined }));
+                }}
+                className="py-3 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition text-xs"
+              >
+                Close Report
+              </button>
             </div>
           </div>
         </div>

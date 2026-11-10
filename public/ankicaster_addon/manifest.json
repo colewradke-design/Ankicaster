@@ -1,0 +1,9 @@
+{
+  "package": "ankicaster_magic_academy",
+  "name": "Ankicaster: Magic Academy Spaced-Repetition Simulator",
+  "version": "1.0.0",
+  "min_point_version": 45,
+  "max_point_version": 241100,
+  "author": "Ankicaster",
+  "human_version": "1.0.0"
+}
