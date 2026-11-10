@@ -22,8 +22,10 @@ import {
   FURNITURE_DEFINITIONS,
   CREATURE_DEFINITIONS,
   RIFT_DESTINATIONS,
-  SPELL_DEFINITIONS
+  SPELL_DEFINITIONS,
+  SCHOOL_EVENTS
 } from '../data/content';
+import { createInitialGameState } from '../data/initialState';
 import {
   calculateReviewMana,
   calculateDailyVeilCost,
@@ -216,7 +218,7 @@ export class AnkicasterEngine {
     // 7. Healing Injuries in Infirmary (accelerated by Infirmary, Healers, and Healing creatures)
     const hasInfirmary = next.rooms.some(r => r.state === 'built' && r.defId === 'infirmary');
     const activeHealers = next.characters.filter(c => c.career === 'healer' && c.careerState === 'active').length;
-    const hasHealingCreature = next.creatures.some(c => c.status === 'tamed' && (c.defId === 'healing_fawn' || c.defId === 'radiant_phoenix'));
+    const hasHealingCreature = next.creatures.some(c => c.status === 'tamed' && (c.defId === 'halo_lamb' || c.defId === 'fen_sprite' || c.defId === 'ember_phoenix'));
 
     for (const char of next.characters) {
       if (char.injury) {
@@ -321,20 +323,18 @@ export class AnkicasterEngine {
     }
 
     // 3. Creature Active Buffs per Bell
+    const hasGlimmerhornStag = state.creatures.some(c => c.status === 'tamed' && c.defId === 'glimmerhorn_stag');
+
     for (const c of state.creatures) {
       if (c.status !== 'tamed') continue;
       if (c.defId === 'thistle_hare') state.resources.herbs += 0.1;
-      else if (c.defId === 'star_owl') state.resources.insight += 0.1;
-      else if (c.defId === 'shadow_stalker') state.resources.umbra += 0.1;
-      else if (c.defId === 'radiant_phoenix') state.resources.radiance += 0.2;
-      else if (c.defId === 'alchemical_homunculus') state.resources.reagents += 0.1;
-      else if (c.defId === 'lumen_sprite') {
+      else if (c.defId === 'mistfeather_owl') state.resources.insight += 0.1;
+      else if (c.defId === 'night_lynx') state.resources.umbra += 0.1;
+      else if (c.defId === 'ember_phoenix') state.resources.radiance += 0.2;
+      else if (c.defId === 'alembic_salamander') state.resources.reagents += 0.1;
+      else if (c.defId === 'lantern_moth') {
         for (const char of state.characters) {
           char.needs.composure = Math.min(100, char.needs.composure + 1);
-        }
-      } else if (c.defId === 'glimmerhorn_stag') {
-        for (const char of state.characters) {
-          char.morale = Math.min(100, char.morale + 3);
         }
       }
     }
@@ -355,6 +355,10 @@ export class AnkicasterEngine {
       }
 
       char.morale = calculateMorale(char.needs);
+      // Glimmerhorn Stag applies +3 morale to all residents (applied after base morale recalculation so it is not overwritten)
+      if (hasGlimmerhornStag) {
+        char.morale = Math.min(100, char.morale + 3);
+      }
 
       // Student Misbehavior driven by low morale (<40) or low composure (<40)
       if (char.status === 'student' && (char.morale < 40 || char.needs.composure < 40) && Math.random() < 0.15) {
@@ -515,22 +519,34 @@ export class AnkicasterEngine {
         }
       }
 
+      // Real-day event arrival roll (one roll per real day picking from all 25 SCHOOL_EVENTS)
+      if (Math.random() < 0.4) {
+        const availableEvents = SCHOOL_EVENTS.filter(ev => !next.activeEvents.some(ae => ae.eventId === ev.id));
+        if (availableEvents.length > 0) {
+          const chosen = availableEvents[Math.floor(Math.random() * availableEvents.length)];
+          next.activeEvents.push({ eventId: chosen.id, dayArrived: next.day });
+          summary.push(`📜 Event arrived at Academy gates: ${chosen.name}.`);
+        }
+      }
+
       // Check thin Veil hazard spawn if Veil < 50%
-      // Warders actively lower hazard spawn odds (cuts chance by 30% per active warder)
-      const hazardChance = Math.max(0.02, 0.25 * Math.pow(0.7, warders));
-      if (next.veil.strength < 50 && Math.random() < hazardChance) {
-        const eligibleRooms = next.rooms.filter(r => r.state === 'built' && !r.hazard);
-        if (eligibleRooms.length > 0) {
-          const target = eligibleRooms[Math.floor(Math.random() * eligibleRooms.length)];
-          const hazards = [
-            { type: 'spill_of_night' as const, name: 'Spill of Night', description: 'Gloom residue seeped through the thinning Veil.', effect: 'Halves room efficiency until dispelled.' },
-            { type: 'hex_fog' as const, name: 'Hex Fog', description: 'Corrosive mist clinging to the floorboards.', effect: 'Students in this room lose composure faster.' },
-            { type: 'echo_loop' as const, name: 'Echo Loop', description: 'A temporal chime repeating indefinitely.', effect: 'Suppresses classroom essence generation.' },
-            { type: 'cold_snap' as const, name: 'Cold Snap', description: 'Sub-zero frost crystallizing across furnishings.', effect: 'Room unusable until thawed.' }
-          ];
-          const chosenHazard = hazards[Math.floor(Math.random() * hazards.length)];
-          target.hazard = chosenHazard;
-          summary.push(`⚠️ Thin Veil hazard emerged: ${chosenHazard.name} in ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}!`);
+      // Rule BR-25: While the player is away and the bank has hit the 10% floor, skip hazard rolls
+      if (!floorReached && next.mana > bankFloor) {
+        const hazardChance = Math.max(0.02, 0.25 * Math.pow(0.7, warders));
+        if (next.veil.strength < 50 && Math.random() < hazardChance) {
+          const eligibleRooms = next.rooms.filter(r => r.state === 'built' && !r.hazard);
+          if (eligibleRooms.length > 0) {
+            const target = eligibleRooms[Math.floor(Math.random() * eligibleRooms.length)];
+            const hazards = [
+              { type: 'spill_of_night' as const, name: 'Spill of Night', description: 'Gloom residue seeped through the thinning Veil.', effect: 'Halves room efficiency until dispelled.' },
+              { type: 'hex_fog' as const, name: 'Hex Fog', description: 'Corrosive mist clinging to the floorboards.', effect: 'Students in this room lose composure faster.' },
+              { type: 'echo_loop' as const, name: 'Echo Loop', description: 'A temporal chime repeating indefinitely.', effect: 'Suppresses classroom essence generation.' },
+              { type: 'cold_snap' as const, name: 'Cold Snap', description: 'Sub-zero frost crystallizing across furnishings.', effect: 'Room unusable until thawed.' }
+            ];
+            const chosenHazard = hazards[Math.floor(Math.random() * hazards.length)];
+            target.hazard = chosenHazard;
+            summary.push(`⚠️ Thin Veil hazard emerged: ${chosenHazard.name} in ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}!`);
+          }
         }
       }
     }
@@ -643,12 +659,12 @@ export class AnkicasterEngine {
     }
 
     // 3. New Random Event Arrival
-    if (Math.random() < 0.5) {
-      const eventCandidates = ['misaddressed_owl', 'peddler', 'doorstep_basket', 'birthday', 'mysterious_seeds'];
-      const chosen = eventCandidates[Math.floor(Math.random() * eventCandidates.length)];
-      if (!next.activeEvents.some(e => e.eventId === chosen)) {
-        next.activeEvents.push({ eventId: chosen, dayArrived: next.day });
-        summary.push('📜 A new event has arrived at the Academy gates.');
+    if (Math.random() < 0.4) {
+      const availableEvents = SCHOOL_EVENTS.filter(ev => !next.activeEvents.some(ae => ae.eventId === ev.id));
+      if (availableEvents.length > 0) {
+        const chosen = availableEvents[Math.floor(Math.random() * availableEvents.length)];
+        next.activeEvents.push({ eventId: chosen.id, dayArrived: next.day });
+        summary.push(`📜 A new event has arrived at the Academy gates: ${chosen.name}.`);
       }
     }
 
@@ -823,7 +839,10 @@ export class AnkicasterEngine {
   }
 
   /**
-   * Commence Next Term
+   * Commence Next Term (BR-30, BR-34, F36)
+   * Resets students, faculty, and creatures, frees their card sets, resets buildings and materials
+   * back to starting stock, sets unspent mana to 0.
+   * Carries over wizard levels, known blueprints/patterns, alumni gallery, and spellbooks.
    */
   static startNextTerm(
     state: FullGameState,
@@ -831,17 +850,84 @@ export class AnkicasterEngine {
   ): { state: FullGameState } {
     const next = structuredClone(state);
     const now = Date.now();
+
+    // 1. Move any graduated masters to alumni gallery before reset
+    for (const char of next.characters) {
+      if (char.masteredSchools.length > 0) {
+        if (!next.alumniGallery.some(a => a.name === char.name)) {
+          next.alumniGallery.push({
+            id: char.id,
+            name: char.name,
+            portrait: char.appearance?.hat || 'grand_hat',
+            titles: char.masteredSchools.map(s => `Master of ${s.toUpperCase()}`),
+            retiredDay: next.day,
+            bonusType: 'renown_resonance',
+            bonusValue: 10
+          });
+        }
+      }
+    }
+
+    // 2. Free all card sets so cards become free again
+    for (const set of next.cardSets) {
+      set.released = true;
+    }
+    next.cardSets = [];
+
+    // 3. Reset characters (students & faculty)
+    next.characters = [];
+
+    // 4. Reset creatures back to initial wary tortoise
+    next.creatures = [
+      {
+        id: 1,
+        defId: 'mossback_tortoise',
+        nickname: 'Old Barnaby',
+        status: 'wary',
+        hungry: false,
+        hatchProgress: 0,
+        tamingProgress: 18,
+        bondLevel: 1,
+        bondProgress: 0,
+        arrivedDay: next.day
+      }
+    ];
+
+    // 5. Reset rooms and materials back to starting layout & stock (BR-34 / F36)
+    const fresh = createInitialGameState();
+    next.rooms = fresh.rooms;
+    next.resources = fresh.resources;
+
+    // 6. Reset unspent mana to 0 (Rule BR-34 / F36)
+    next.mana = 0;
+    next.bankAtLastReview = 0;
+    next.manaDebt = 0;
+
+    // 7. Clear expeditions & active events
+    next.expeditions = [];
+    next.activeEvents = [];
+
+    // Preserved:
+    // next.wizard.levels
+    // next.wizard.knownSpells
+    // next.knownPlans
+    // next.knownPatterns
+    // next.spellbooks
+    // next.alumniGallery
+    // next.allCards
+
     next.termStartDateMs = now;
     next.termEndDateMs = now + (termLengthDays * 24 * 3600 * 1000);
     next.termInitialReviewIndex = next.reviewIndex;
-    next.termInitialMasters = next.characters.filter(c => c.masteredSchools.length > 0).length + next.alumniGallery.length;
+    next.termInitialMasters = next.alumniGallery.length;
     next.termInitialRenown = next.renown;
     next.termFinishedReport = undefined;
+
     next.notices.push({
       id: `term-start-${now}`,
       time: now,
       type: 'term_start',
-      text: `📜 New Academic Term commenced (${termLengthDays} days). Prepare your flashcards!`
+      text: `📜 New Academic Term commenced (${termLengthDays} days). Students, faculty, and creatures reset; card links freed; wizard masteries and alumni honored!`
     });
     return { state: next };
   }
@@ -1816,22 +1902,33 @@ export class AnkicasterEngine {
     spellId?: string
   ): { state: FullGameState; success: boolean; error?: string } {
     const next = structuredClone(state);
-    const curLevel = next.wizard.levels[school] || 0;
-    if (curLevel >= 10 && !isGrimoire) {
-      return { state, success: false, error: `${school.toUpperCase()} is already at Master Level 10.` };
+
+    // Total sessions cap: max 5 sessions including active session
+    const totalSessions = (next.wizard.activeSession ? 1 : 0) + next.wizard.queuedSessions.length;
+    if (totalSessions >= 5) {
+      return { state, success: false, error: 'Maximum of 5 wizard training sessions (active + queued).' };
     }
 
-    const targetLevel = curLevel + 1;
-    const req = getWizardLevelRequirements(targetLevel);
-    const cost = isGrimoire ? 250 : req.mana;
-    const required = isGrimoire ? 50 : req.reviews;
+    const curLevel = next.wizard.levels[school] || 0;
+    let targetLevel = 1;
+    let cost = 250;
+    let required = 50;
+
+    if (!isGrimoire) {
+      const activeForSchool = (next.wizard.activeSession && next.wizard.activeSession.school === school && next.wizard.activeSession.kind === 'orb') ? 1 : 0;
+      const queuedForSchool = next.wizard.queuedSessions.filter(s => s.school === school && s.kind === 'orb').length;
+      targetLevel = curLevel + activeForSchool + queuedForSchool + 1;
+
+      if (targetLevel > 10) {
+        return { state, success: false, error: `${school.toUpperCase()} training capped at Master Level 10.` };
+      }
+
+      cost = 80 * targetLevel;
+      required = 25 * targetLevel;
+    }
 
     if (next.mana < cost) {
       return { state, success: false, error: `Need ${cost} Mana to ponder this arcane mystery.` };
-    }
-
-    if (next.wizard.queuedSessions.length >= 5) {
-      return { state, success: false, error: 'Maximum of 5 wizard training sessions queued.' };
     }
 
     next.mana -= cost;
@@ -2016,12 +2113,12 @@ export class AnkicasterEngine {
         { id: `c-ar-1`, deck: 'arcane', rarity: 'common', name: 'Classroom of Arcane', type: 'blueprint', targetId: 'class_arcane', description: 'Blueprint for Arcane Lecture Hall (+5 student capacity).' },
         { id: `c-ar-2`, deck: 'arcane', rarity: 'uncommon', name: 'Observatory Plan', type: 'blueprint', targetId: 'observatory', description: 'Rooftop observatory yielding high Insight and celestial fortune.' },
         { id: `c-ar-3`, deck: 'arcane', rarity: 'rare', name: 'Astral Influx Boon', type: 'boon', description: 'Instant burst of knowledge: +35 Insight and +150 Mana.' },
-        { id: `c-ar-4`, deck: 'arcane', rarity: 'epic', name: 'Ley Tap Blueprint', type: 'blueprint', targetId: 'ley_tap', description: 'Deep earth resonance tap generating continuous free mana.' }
+        { id: `c-ar-4`, deck: 'arcane', rarity: 'epic', name: 'Scriptorium Plan', type: 'blueprint', targetId: 'scriptorium', description: 'Architectural blueprint for an academy scriptorium to craft scrolls and study records.' }
       ],
       nature: [
         { id: `c-na-1`, deck: 'nature', rarity: 'common', name: 'Classroom of Nature', type: 'blueprint', targetId: 'class_nature', description: 'Blueprint for Nature Conservatory classroom.' },
         { id: `c-na-2`, deck: 'nature', rarity: 'uncommon', name: 'Greenhouse Plan', type: 'blueprint', targetId: 'greenhouse', description: 'Enclosed botanical greenhouse for year-round exotic herbs.' },
-        { id: `c-na-3`, deck: 'nature', rarity: 'rare', name: 'Leaf-Fox Lure', type: 'lure', targetId: 'leaf_fox', description: 'Attracts an inquisitive Leaf-Fox kit to your academy habitat.' },
+        { id: `c-na-3`, deck: 'nature', rarity: 'rare', name: 'Bramblefox Lure', type: 'lure', targetId: 'bramblefox', description: 'Attracts an inquisitive Azure Bramblefox to your academy meadow habitat.' },
         { id: `c-na-4`, deck: 'nature', rarity: 'uncommon', name: 'Luminescent Seed Packet', type: 'seed', targetId: 'moonglow_fern', description: 'Unlock Moonglow Fern crop in sacred plots.' }
       ],
       light: [
@@ -2083,9 +2180,10 @@ export class AnkicasterEngine {
         message = 'Veil Tether attuned: +35% Veil Strength, +25 Umbra!';
       }
     } else if (card.type === 'lure') {
+      const creatureDefId = (card.targetId && card.targetId in CREATURE_DEFINITIONS) ? card.targetId : 'bramblefox';
       next.creatures.push({
         id: Date.now(),
-        defId: card.targetId || 'leaf_fox',
+        defId: creatureDefId,
         nickname: 'Wild Wanderer',
         status: 'wary',
         hungry: false,

@@ -124,8 +124,15 @@ export default function App() {
     }
   }, [state]);
 
-  // Build-time Dev Mode flag (BR-02, User Directive: build-time flag instead of player setting)
-  const IS_DEV_MODE = import.meta.env.DEV || import.meta.env.VITE_DEV_MODE === 'true';
+  // Check if running inside Anki add-on (QWebEngineView or pycmd bridge)
+  const isAddonMode = typeof window !== 'undefined' && (
+    new URLSearchParams(window.location.search).get('addon') === '1' ||
+    !!(window as any).pycmd ||
+    !!(window as any).qt
+  );
+
+  // Build-time Dev Mode flag (must NEVER be on inside Anki)
+  const IS_DEV_MODE = !isAddonMode && (import.meta.env.DEV || import.meta.env.VITE_DEV_MODE === 'true');
 
   // Check for real-time day elapsed (4 AM calendar day boundary, carrying over leftover hours)
   const checkDayRollover = useCallback(() => {
@@ -216,21 +223,54 @@ export default function App() {
   };
 
   // Handler: Honest Review Answer with real measured elapsed time
-  const handleAnswerCard = (cardId: number, ease: 1 | 2 | 3 | 4, elapsedMs: number = 2400) => {
-    const result = AnkicasterEngine.applyHonestReview(state, cardId, ease, elapsedMs);
-    setState(result.state);
+  const handleAnswerCard = useCallback((cardId: number, ease: 1 | 2 | 3 | 4, elapsedMs: number = 2400) => {
+    setState(current => {
+      const result = AnkicasterEngine.applyHonestReview(current, cardId, ease, elapsedMs);
+      if (result.toast) {
+        addToast(result.toast, ease === 1 ? 'warning' : 'success');
+      }
+      result.notifications.forEach(n => addToast(n, 'notice'));
 
-    if (result.toast) {
-      addToast(result.toast, ease === 1 ? 'warning' : 'success');
-    }
-    result.notifications.forEach(n => addToast(n, 'notice'));
+      if (result.state.bellIndex > current.bellIndex) {
+        playChime('bell');
+      } else {
+        playChime('review');
+      }
+      return result.state;
+    });
+  }, [playChime]);
 
-    if (result.state.bellIndex > state.bellIndex) {
-      playChime('bell');
-    } else {
-      playChime('review');
-    }
-  };
+  // Real Anki Review Bridge (receives reviews from Anki addon pycmd/runJavaScript)
+  useEffect(() => {
+    (window as any).ankicasterOnReview = (payload: {
+      card_id?: number;
+      cardId?: number;
+      ease: 1 | 2 | 3 | 4;
+      elapsed_ms?: number;
+      elapsedMs?: number;
+    }) => {
+      const cid = payload.cardId ?? payload.card_id ?? 1;
+      const ms = payload.elapsedMs ?? payload.elapsed_ms ?? 2400;
+      handleAnswerCard(cid, payload.ease, ms);
+    };
+
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data && event.data.type === 'ankicaster_review') {
+        const payload = event.data.payload;
+        if (payload) {
+          const cid = payload.cardId ?? payload.card_id ?? 1;
+          const ms = payload.elapsedMs ?? payload.elapsed_ms ?? 2400;
+          handleAnswerCard(cid, payload.ease, ms);
+        }
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => {
+      delete (window as any).ankicasterOnReview;
+      window.removeEventListener('message', handleMessage);
+    };
+  }, [handleAnswerCard]);
 
   // Handler: Batch Simulation of Honest Reviews (gated behind devMode)
   const handleSimulateBatch = (count: number) => {
@@ -670,6 +710,7 @@ export default function App() {
               onAnswerCard={handleAnswerCard}
               onSimulateBatch={handleSimulateBatch}
               devMode={IS_DEV_MODE}
+              isAddonMode={isAddonMode}
             />
           </div>
         )}

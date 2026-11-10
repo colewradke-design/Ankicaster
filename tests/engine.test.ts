@@ -14,6 +14,8 @@ import {
 import { AnkicasterEngine, getAnkiDayNumber } from '../src/utils/engine.ts';
 import { createInitialGameState } from '../src/data/initialState.ts';
 import { SchoolType, Character, PlacedRoom } from '../src/types/ankicaster.ts';
+import { CREATURE_DEFINITIONS } from '../src/data/content.ts';
+import fs from 'node:fs';
 
 test('F1: Review Mana awards 10 base mana and arcane buff', () => {
   assert.equal(calculateReviewMana(0), 10);
@@ -318,7 +320,7 @@ test('4. Creature Buffs: mopslime cleans, thistle_hare produces herbs, healing_f
   assert.ok(state.resources.herbs > initialHerbs, 'Thistle hare should produce extra herbs on bell ring');
   assert.ok(room.cleanliness > 50, 'Mopslime should clean the room on bell ring');
 
-  // Healing fawn test
+  // Halo Lamb healing test
   const patient: Character = {
     id: 301,
     name: 'Injured Student',
@@ -344,8 +346,8 @@ test('4. Creature Buffs: mopslime cleans, thistle_hare produces herbs, healing_f
 
   state.creatures.push({
     id: 703,
-    defId: 'healing_fawn',
-    nickname: 'Fawn',
+    defId: 'halo_lamb',
+    nickname: 'Halo Lamb',
     status: 'tamed',
     hungry: false,
     hatchProgress: 0,
@@ -358,37 +360,120 @@ test('4. Creature Buffs: mopslime cleans, thistle_hare produces herbs, healing_f
   const cardId = Object.keys(state.allCards)[0];
   const res = AnkicasterEngine.applyHonestReview(state, Number(cardId), 3, 2000);
   const updatedPatient = res.state.characters.find(c => c.id === 301);
-  assert.ok((updatedPatient?.injury?.points || 0) >= 2.5, 'Healing fawn should accelerate injury recovery');
+  assert.ok((updatedPatient?.injury?.points || 0) >= 2.5, 'Halo lamb should accelerate injury recovery');
+
+  // Glimmerhorn Stag morale bonus test (applied after morale is recalculated from needs)
+  state.creatures.push({
+    id: 704,
+    defId: 'glimmerhorn_stag',
+    nickname: 'Stag',
+    status: 'tamed',
+    hungry: false,
+    hatchProgress: 0,
+    tamingProgress: 50,
+    bondLevel: 1,
+    bondProgress: 0,
+    arrivedDay: 1
+  });
+
+  const stagStudent: Character = {
+    id: 302,
+    name: 'Stag Student',
+    pronouns: 'she/her',
+    appearance: { skin: '#fff', hair: 'short', hairColor: '#000', robeColor: '#4E8B3A', hat: 'cap' },
+    personality: 'Bookish',
+    traits: ['Diligent'],
+    status: 'student',
+    masteredSchools: [],
+    needs: { hunger: 80, rest: 80, leisure: 80, composure: 80, health: 80 },
+    morale: 80,
+    readyDays: {},
+    enrolledDay: 1,
+    chronicle: [],
+    careerSetIds: []
+  };
+  state.characters = [stagStudent];
+  AnkicasterEngine.ringBell(state, []);
+
+  // Base needs after decay: hunger 77, rest 78, leisure 78, composure 79, health 80
+  // calculateMorale: 0.25*77 + 0.25*78 + 0.2*78 + 0.2*79 + 0.1*80 = 19.25 + 19.5 + 15.6 + 15.8 + 8 = 78.15 -> 78
+  // With Glimmerhorn Stag: 78 + 3 = 81
+  assert.equal(stagStudent.morale, 81, 'Glimmerhorn Stag should give +3 morale on top of recalculated needs morale');
 });
 
-test('5. Wizard Cost: button and charge match getWizardLevelRequirements, and queuing is supported', () => {
+test('Automated check: every creature id referenced in engine.ts exists in content.ts', () => {
+  const engineSource = fs.readFileSync('src/utils/engine.ts', 'utf-8');
+  const validCreatureIds = new Set(Object.keys(CREATURE_DEFINITIONS));
+
+  const m1 = [...engineSource.matchAll(/c\.defId === '([a-z_]+)'/g)].map(m => m[1]);
+  const m2 = [...engineSource.matchAll(/creatures\.some\([^)]*defId === '([a-z_]+)'/g)].map(m => m[1]);
+  const m3 = [...engineSource.matchAll(/creatures\.push\(\{[^}]*defId:\s*'([a-z_]+)'/gs)].map(m => m[1]);
+  const checkedIds = new Set([...m1, ...m2, ...m3]);
+
+  assert.ok(checkedIds.size > 5, 'Should find multiple creature references in engine.ts');
+
+  for (const id of checkedIds) {
+    assert.ok(
+      validCreatureIds.has(id),
+      `Creature id '${id}' referenced in engine.ts must exist in CREATURE_DEFINITIONS`
+    );
+  }
+
+  // Ensure real creatures requested are verified
+  assert.ok(checkedIds.has('mistfeather_owl'), 'Should include mistfeather_owl');
+  assert.ok(checkedIds.has('ember_phoenix'), 'Should include ember_phoenix');
+  assert.ok(checkedIds.has('alembic_salamander'), 'Should include alembic_salamander');
+  assert.ok(checkedIds.has('halo_lamb'), 'Should include halo_lamb');
+  assert.ok(checkedIds.has('fen_sprite'), 'Should include fen_sprite');
+  assert.ok(checkedIds.has('thistle_hare'), 'Should include thistle_hare');
+  assert.ok(checkedIds.has('glimmerhorn_stag'), 'Should include glimmerhorn_stag');
+  assert.ok(checkedIds.has('mossback_tortoise'), 'Should include mossback_tortoise');
+  assert.ok(checkedIds.has('bramblefox'), 'Should include bramblefox');
+});
+
+test('5. Wizard Cost & Queue: targetLevel accounts for active and queued sessions; capped at 5', () => {
   const state = createInitialGameState();
-  state.mana = 1000;
+  state.mana = 5000;
   state.wizard.levels.arcane = 1;
 
-  const targetLevel = 2;
-  const req = getWizardLevelRequirements(targetLevel);
-  assert.equal(req.mana, 80 * targetLevel, 'Requirement formula must be 80 * level');
-
-  const initialMana = state.mana;
+  // 1st Arcane session: targetLevel = 1 + 0 + 0 + 1 = 2
+  // Cost: 80 * 2 = 160, Reviews: 25 * 2 = 50
   const res1 = AnkicasterEngine.queueWizardSession(state, 'arcane', false);
   assert.equal(res1.success, true);
-  assert.equal(res1.state.mana, initialMana - req.mana, 'Charge must exactly equal req.mana from formula');
-  assert.ok(res1.state.wizard.activeSession, 'First session becomes active');
+  assert.equal(res1.state.wizard.activeSession?.targetLevel, 2);
+  assert.equal(res1.state.wizard.activeSession?.costPaid, 160);
+  assert.equal(res1.state.wizard.activeSession?.required, 50);
 
-  // Now queue second session while first is active
-  const res2 = AnkicasterEngine.queueWizardSession(res1.state, 'nature', false);
-  assert.equal(res2.success, true, 'Must allow queuing session while active session is running');
-  assert.equal(res2.state.wizard.queuedSessions.length, 1, 'Second session should be in queuedSessions');
+  // 2nd Arcane session queued: targetLevel = 1 + 1 (active) + 0 (queued) + 1 = 3
+  // Cost: 80 * 3 = 240, Reviews: 25 * 3 = 75
+  const res2 = AnkicasterEngine.queueWizardSession(res1.state, 'arcane', false);
+  assert.equal(res2.success, true);
+  assert.equal(res2.state.wizard.queuedSessions[0].targetLevel, 3);
+  assert.equal(res2.state.wizard.queuedSessions[0].costPaid, 240);
+  assert.equal(res2.state.wizard.queuedSessions[0].required, 75);
+
+  // 3rd Arcane session queued: targetLevel = 1 + 1 + 1 + 1 = 4
+  const res3 = AnkicasterEngine.queueWizardSession(res2.state, 'arcane', false);
+  assert.equal(res3.success, true);
+  assert.equal(res3.state.wizard.queuedSessions[1].targetLevel, 4);
+  assert.equal(res3.state.wizard.queuedSessions[1].costPaid, 320);
+
+  // Queue 4th and 5th sessions (reaching 5 total sessions)
+  const res4 = AnkicasterEngine.queueWizardSession(res3.state, 'nature', false);
+  assert.equal(res4.success, true);
+  const res5 = AnkicasterEngine.queueWizardSession(res4.state, 'light', false);
+  assert.equal(res5.success, true);
+  assert.equal((res5.state.wizard.activeSession ? 1 : 0) + res5.state.wizard.queuedSessions.length, 5);
+
+  // Attempting 6th session should be rejected by the 5-session cap
+  const res6 = AnkicasterEngine.queueWizardSession(res5.state, 'shadow', false);
+  assert.equal(res6.success, false);
+  assert.ok(res6.error?.includes('Maximum of 5'));
 });
 
 test('6. Day Rollover: 4:00 AM Anki boundary calculation and leftover hours carryover', () => {
-  // Same calendar date: 3:30 AM vs 23:00 PM previous night
-  // Suppose user reviewed at 23:00 on Nov 10
   const eveningMs = new Date('2026-11-10T23:00:00').getTime();
-  // Next morning at 03:30 AM (before 4 AM rollover)
   const earlyMorningMs = new Date('2026-11-11T03:30:00').getTime();
-  // Next morning at 04:05 AM (after 4 AM rollover)
   const afterRolloverMs = new Date('2026-11-11T04:05:00').getTime();
 
   const dayEvening = getAnkiDayNumber(eveningMs);
@@ -398,7 +483,6 @@ test('6. Day Rollover: 4:00 AM Anki boundary calculation and leftover hours carr
   assert.equal(dayEarlyMorning, dayEvening, '3:30 AM belongs to the same Anki study day as 23:00 the prior night');
   assert.equal(dayAfterRollover, dayEvening + 1, '4:05 AM crosses into the new Anki study day');
 
-  // Verify processRealTimeElapsedDays respects 4 AM boundary
   const state = createInitialGameState();
   state.lastSessionTimeMs = eveningMs;
 
@@ -407,4 +491,88 @@ test('6. Day Rollover: 4:00 AM Anki boundary calculation and leftover hours carr
 
   const resAfter = AnkicasterEngine.processRealTimeElapsedDays(state, afterRolloverMs);
   assert.equal(resAfter.daysPassed, 1, 'Rollover triggers after 4:00 AM');
+});
+
+test('7. Timed Terms reset: students, faculty and creatures reset; card links freed; wizard mastery, alumni, and blueprints kept', () => {
+  const state = createInitialGameState();
+  state.mana = 800;
+  state.wizard.levels.arcane = 7;
+  state.wizard.levels.nature = 6;
+  state.wizard.knownSpells = ['foresight'];
+  state.knownPlans.push('scriptorium');
+  state.knownPatterns.push('canopy_bed');
+
+  // Add characters, card sets, and extra creatures
+  state.characters.push({
+    id: 991,
+    name: 'Graduating Student',
+    pronouns: 'they/them',
+    appearance: { skin: '#fff', hair: 'short', hairColor: '#000', robeColor: '#4E8B3A', hat: 'cap' },
+    personality: 'Bold',
+    traits: ['Brave'],
+    status: 'resident',
+    masteredSchools: ['nature'],
+    needs: { hunger: 100, rest: 100, leisure: 100, composure: 100, health: 100 },
+    morale: 100,
+    readyDays: {},
+    enrolledDay: 1,
+    chronicle: [],
+    careerSetIds: []
+  });
+  state.cardSets.push({
+    id: 1,
+    characterId: 991,
+    kind: 'study',
+    school: 'nature',
+    cardIds: [1, 2, 3],
+    size: 3,
+    createdDay: 1,
+    released: false
+  });
+  state.creatures.push({
+    id: 881,
+    defId: 'mistfeather_owl',
+    nickname: 'Archimedes',
+    status: 'tamed',
+    hungry: false,
+    hatchProgress: 0,
+    tamingProgress: 100,
+    bondLevel: 2,
+    bondProgress: 0,
+    arrivedDay: 1
+  });
+
+  const res = AnkicasterEngine.startNextTerm(state, 30);
+
+  // Assert reset details (BR-30, BR-34, F36)
+  assert.equal(res.state.characters.length, 0, 'Characters must be cleared on term reset');
+  assert.equal(res.state.cardSets.length, 0, 'Card sets must be cleared on term reset');
+  assert.equal(res.state.creatures.length, 1, 'Creatures reset to initial starting wary creature');
+  assert.equal(res.state.creatures[0].defId, 'mossback_tortoise');
+  assert.equal(res.state.mana, 0, 'Unspent mana must reset to 0 (Rule BR-34)');
+
+  // Assert kept meta data
+  assert.equal(res.state.wizard.levels.arcane, 7, 'Wizard levels carry over');
+  assert.equal(res.state.wizard.levels.nature, 6, 'Wizard levels carry over');
+  assert.deepEqual(res.state.wizard.knownSpells, ['foresight'], 'Spellbooks carry over');
+  assert.ok(res.state.knownPlans.includes('scriptorium'), 'Blueprints carry over');
+  assert.ok(res.state.knownPatterns.includes('canopy_bed'), 'Patterns carry over');
+  assert.ok(res.state.alumniGallery.some(a => a.name === 'Graduating Student'), 'Master should be preserved in alumni gallery');
+});
+
+test('8. Safe rest: while player is away and bank has hit 10% floor, skip hazard rolls', () => {
+  const state = createInitialGameState();
+  state.bankAtLastReview = 100;
+  state.mana = 10; // Exactly at the 10% floor
+  state.veil.strength = 20; // Thin veil (<50) that would normally roll hazards
+
+  // Simulate 5 days away
+  const fiveDaysMs = 5 * 24 * 3600 * 1000;
+  state.lastSessionTimeMs = Date.now() - fiveDaysMs;
+
+  const res = AnkicasterEngine.processRealTimeElapsedDays(state, Date.now());
+
+  // Check no hazards spawned because bank is at the 10% floor
+  const roomsWithHazard = res.state.rooms.filter(r => r.hazard !== undefined);
+  assert.equal(roomsWithHazard.length, 0, 'Hazards must be skipped while bank is at 10% floor (BR-25)');
 });

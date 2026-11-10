@@ -1,7 +1,0 @@
-{
-  "install_baseline_ms": 0,
-  "app_url": "http://localhost:3000",
-  "min_answer_elapsed_ms": 800,
-  "auto_open_on_startup": false,
-  "export_filename": "ankicaster_cards_export.json"
-}

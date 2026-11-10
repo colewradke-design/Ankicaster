@@ -17,13 +17,15 @@ interface FlashcardReviewerProps {
   onAnswerCard: (cardId: number, ease: 1 | 2 | 3 | 4, elapsedMs: number) => void;
   onSimulateBatch: (count: number) => void;
   devMode?: boolean;
+  isAddonMode?: boolean;
 }
 
 export const FlashcardReviewer: React.FC<FlashcardReviewerProps> = ({
   cards,
   onAnswerCard,
   onSimulateBatch,
-  devMode = false
+  devMode = false,
+  isAddonMode = false
 }) => {
   const cardList = Object.values(cards);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -104,80 +106,108 @@ export const FlashcardReviewer: React.FC<FlashcardReviewerProps> = ({
         </div>
       )}
 
-      {/* Active Card Body */}
-      {activeCard ? (
-        <div className="flex flex-col items-center justify-center p-6 bg-slate-950/80 border border-slate-800 rounded-xl min-h-[180px] text-center shadow-inner">
-          <div className="text-xs uppercase tracking-widest text-slate-400 font-bold mb-2">
-            Front (Prompt)
+      {/* Add-on Mode Live Bridge Indicator */}
+      {isAddonMode ? (
+        <div className="p-6 bg-slate-950/90 border border-indigo-500/30 rounded-xl text-center space-y-4">
+          <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/30 rounded-full text-emerald-400 text-xs font-semibold">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            Anki Live Review Bridge Active
           </div>
-          <div className="text-sm md:text-base font-semibold text-slate-100 max-w-xl leading-relaxed">
-            {activeCard.front}
-          </div>
-
-          {showAnswer ? (
-            <div className="mt-4 pt-4 border-t border-slate-800 w-full animate-fadeIn space-y-2">
-              <div className="text-xs uppercase tracking-widest text-amber-400 font-bold">
-                Back (Answer)
-              </div>
-              <div className="text-sm text-slate-200 max-w-xl mx-auto leading-relaxed">
-                {activeCard.back}
-              </div>
-              <div className="text-xs text-slate-400 pt-2 font-mono">
-                Current Memory Retention: <strong>{activeCard.honestIvl} days</strong> interval
-              </div>
+          <h3 className="text-base font-bold text-slate-100">
+            Reviews Handled Directly Inside Anki
+          </h3>
+          <p className="text-xs text-slate-300 max-w-md mx-auto leading-relaxed">
+            Answer cards normally in your Anki review window. Each completed honest review feeds directly into Ankicaster through the internal Qt/pycmd bridge, advancing mana, bells, student mastery, and wizard training automatically.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-left max-w-lg mx-auto pt-2">
+            <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
+              <span className="text-amber-400 font-bold block mb-1">Strictly Read-Only (BR-01)</span>
+              <span className="text-slate-400">Anki intervals, due dates, and ease factors are never modified by the game.</span>
             </div>
-          ) : (
-            <button
-              onClick={() => setShowAnswer(true)}
-              className="mt-5 px-6 py-2 bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/50 rounded-xl text-xs font-bold transition shadow-lg"
-            >
-              Show Answer (Space)
-            </button>
-          )}
+            <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
+              <span className="text-amber-400 font-bold block mb-1">Anti-Mash Guard (H5)</span>
+              <span className="text-slate-400">Card answers completed in under 0.8s award 0 mana to protect spaced repetition integrity.</span>
+            </div>
+          </div>
         </div>
       ) : (
-        <div className="text-center text-xs text-slate-400 py-10">
-          No flashcards currently in collection.
-        </div>
-      )}
+        <>
+          {/* Active Card Body */}
+          {activeCard ? (
+            <div className="flex flex-col items-center justify-center p-6 bg-slate-950/80 border border-slate-800 rounded-xl min-h-[180px] text-center shadow-inner">
+              <div className="text-xs uppercase tracking-widest text-slate-400 font-bold mb-2">
+                Front (Prompt)
+              </div>
+              <div className="text-sm md:text-base font-semibold text-slate-100 max-w-xl leading-relaxed">
+                {activeCard.front}
+              </div>
 
-      {/* Spaced Repetition Answering Buttons */}
-      {showAnswer && (
-        <div className="space-y-2 pt-1">
-          <div className="text-xs text-center text-slate-400">
-            Grade your honest memory recall. All 4 buttons award identical mana (+10 neutral mana).
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-            <button
-              onClick={() => handleAnswer(1)}
-              className="py-2.5 px-2 bg-red-950/50 hover:bg-red-900/60 text-red-200 border border-red-700/50 rounded-xl text-xs font-bold transition flex flex-col items-center justify-center gap-0.5 shadow"
-            >
-              <span>1. Again</span>
-              <span className="text-xs text-red-300 font-normal">Lapse (1 day)</span>
-            </button>
-            <button
-              onClick={() => handleAnswer(2)}
-              className="py-2.5 px-2 bg-amber-950/50 hover:bg-amber-900/60 text-amber-200 border border-amber-700/50 rounded-xl text-xs font-bold transition flex flex-col items-center justify-center gap-0.5 shadow"
-            >
-              <span>2. Hard</span>
-              <span className="text-xs text-amber-300 font-normal">+20% ivl</span>
-            </button>
-            <button
-              onClick={() => handleAnswer(3)}
-              className="py-2.5 px-2 bg-emerald-950/50 hover:bg-emerald-900/60 text-emerald-200 border border-emerald-700/50 rounded-xl text-xs font-bold transition flex flex-col items-center justify-center gap-0.5 shadow"
-            >
-              <span>3. Good</span>
-              <span className="text-xs text-emerald-300 font-normal">+120% ivl</span>
-            </button>
-            <button
-              onClick={() => handleAnswer(4)}
-              className="py-2.5 px-2 bg-sky-950/50 hover:bg-sky-900/60 text-sky-200 border border-sky-700/50 rounded-xl text-xs font-bold transition flex flex-col items-center justify-center gap-0.5 shadow"
-            >
-              <span>4. Easy</span>
-              <span className="text-xs text-sky-300 font-normal">+180% ivl</span>
-            </button>
-          </div>
-        </div>
+              {showAnswer ? (
+                <div className="mt-4 pt-4 border-t border-slate-800 w-full animate-fadeIn space-y-2">
+                  <div className="text-xs uppercase tracking-widest text-amber-400 font-bold">
+                    Back (Answer)
+                  </div>
+                  <div className="text-sm text-slate-200 max-w-xl mx-auto leading-relaxed">
+                    {activeCard.back}
+                  </div>
+                  <div className="text-xs text-slate-400 pt-2 font-mono">
+                    Current Memory Retention: <strong>{activeCard.honestIvl} days</strong> interval
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowAnswer(true)}
+                  className="mt-5 px-6 py-2 bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/50 rounded-xl text-xs font-bold transition shadow-lg"
+                >
+                  Show Answer (Space)
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="text-center text-xs text-slate-400 py-10">
+              No flashcards currently in collection.
+            </div>
+          )}
+
+          {/* Spaced Repetition Answering Buttons */}
+          {showAnswer && (
+            <div className="space-y-2 pt-1">
+              <div className="text-xs text-center text-slate-400">
+                Grade your honest memory recall. All 4 buttons award identical mana (+10 neutral mana).
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <button
+                  onClick={() => handleAnswer(1)}
+                  className="py-2.5 px-2 bg-red-950/50 hover:bg-red-900/60 text-red-200 border border-red-700/50 rounded-xl text-xs font-bold transition flex flex-col items-center justify-center gap-0.5 shadow"
+                >
+                  <span>1. Again</span>
+                  <span className="text-xs text-red-300 font-normal">Lapse (1 day)</span>
+                </button>
+                <button
+                  onClick={() => handleAnswer(2)}
+                  className="py-2.5 px-2 bg-amber-950/50 hover:bg-amber-900/60 text-amber-200 border border-amber-700/50 rounded-xl text-xs font-bold transition flex flex-col items-center justify-center gap-0.5 shadow"
+                >
+                  <span>2. Hard</span>
+                  <span className="text-xs text-amber-300 font-normal">+20% ivl</span>
+                </button>
+                <button
+                  onClick={() => handleAnswer(3)}
+                  className="py-2.5 px-2 bg-emerald-950/50 hover:bg-emerald-900/60 text-emerald-200 border border-emerald-700/50 rounded-xl text-xs font-bold transition flex flex-col items-center justify-center gap-0.5 shadow"
+                >
+                  <span>3. Good</span>
+                  <span className="text-xs text-emerald-300 font-normal">+120% ivl</span>
+                </button>
+                <button
+                  onClick={() => handleAnswer(4)}
+                  className="py-2.5 px-2 bg-sky-950/50 hover:bg-sky-900/60 text-sky-200 border border-sky-700/50 rounded-xl text-xs font-bold transition flex flex-col items-center justify-center gap-0.5 shadow"
+                >
+                  <span>4. Easy</span>
+                  <span className="text-xs text-sky-300 font-normal">+180% ivl</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       <div className="text-xs text-slate-400 text-center pt-2 border-t border-slate-800">
