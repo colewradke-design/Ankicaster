@@ -79,7 +79,13 @@ export class AnkicasterEngine {
 
     const next: FullGameState = {
       ...state,
-      wizard: { ...state.wizard, levels: { ...state.wizard.levels }, spellCooldowns: { ...state.wizard.spellCooldowns } },
+      wizard: {
+        ...state.wizard,
+        levels: { ...state.wizard.levels },
+        spellCooldowns: { ...state.wizard.spellCooldowns },
+        activeSession: state.wizard.activeSession ? { ...state.wizard.activeSession } : undefined,
+        queuedSessions: state.wizard.queuedSessions ? state.wizard.queuedSessions.map(s => ({ ...s })) : []
+      },
       allCards: { ...state.allCards },
       characters: state.characters.map(c => ({
         ...c,
@@ -899,7 +905,7 @@ export class AnkicasterEngine {
         back: prior?.back ?? 'Answer',
         ivl: item.card_age,
         lastAnswerIvl: item.card_age,
-        honestIvl: prior?.honestIvl !== undefined ? prior.honestIvl : item.card_age,
+        honestIvl: item.card_age,
         type: item.type ?? prior?.type ?? 2,
         queue: item.queue ?? prior?.queue ?? 2,
         due: 0,

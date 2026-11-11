@@ -26,18 +26,15 @@ try:
     from anki.cards import Card
     from aqt.qt import QDialog, QVBoxLayout, QUrl, Qt
     try:
-        from aqt.qt import QWebEngineView, QWebEnginePage
+        from aqt.webview import AnkiWebView
     except ImportError:
-        try:
-            from PyQt6.QtWebEngineWidgets import QWebEngineView, QWebEnginePage  # type: ignore
-        except ImportError:
-            from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage  # type: ignore
+        AnkiWebView = None  # type: ignore
 except ImportError:
     # Standalone execution fallback
     mw = None
     gui_hooks = None
     QDialog = object  # type: ignore
-    QWebEngineView = None  # type: ignore
+    AnkiWebView = None  # type: ignore
 
 ADDON_PACKAGE_NAME = "ankicaster_magic_academy"
 DEFAULT_CONFIG = {
@@ -98,7 +95,7 @@ def query_previous_interval(card_id: int) -> int:
 def calculate_card_age(card: Any) -> int:
     """
     Card age = min(current interval, previous interval from revlog).
-    Prevents artificial interval jumps from exploiting skill gains.
+    Treat lastIvl <= 0 as 0 in card_age.
     """
     cur_ivl = getattr(card, "ivl", 0)
     if cur_ivl < 0:
@@ -106,8 +103,7 @@ def calculate_card_age(card: Any) -> int:
 
     last_ivl = query_previous_interval(getattr(card, "id", 0))
     if last_ivl <= 0:
-        # If no previous revlog entry, last interval is 0 or current interval for brand new cards
-        last_ivl = cur_ivl
+        last_ivl = 0
 
     return max(0, min(int(cur_ivl), int(last_ivl)))
 
@@ -233,7 +229,7 @@ def get_non_suspended_cards_snapshot() -> list:
             ctype = int(row[3]) if row[3] is not None else 2
             queue = int(row[4]) if row[4] is not None else 2
             raw_last_ivl = row[5]
-            last_ivl = max(0, int(raw_last_ivl)) if (raw_last_ivl is not None and int(raw_last_ivl) > 0) else cur_ivl
+            last_ivl = max(0, int(raw_last_ivl)) if (raw_last_ivl is not None and int(raw_last_ivl) > 0) else 0
             card_age = max(0, min(cur_ivl, last_ivl))
             deck_name = deck_map.get(did, "Anki Collection")
 
@@ -268,13 +264,18 @@ def get_all_pending_reviews() -> list:
 
     return records
 
-def acknowledge_pending_reviews_up_to(ack_review_id: str) -> None:
+def acknowledge_pending_reviews(ack_ids: list) -> None:
     """
-    Remove acknowledged lines from ankicaster_pending_reviews.jsonl up to and including ack_review_id.
+    Remove ONLY the exact acknowledged review IDs from ankicaster_pending_reviews.jsonl.
+    Never wipes the file when an ID isn't found.
     """
     user_dir = mw.pm.profileFolder() if mw and mw.pm else "."
     log_path = os.path.join(user_dir, "ankicaster_pending_reviews.jsonl")
     if not os.path.exists(log_path):
+        return
+
+    ack_set = {str(i) for i in ack_ids if i}
+    if not ack_set:
         return
 
     try:
@@ -282,29 +283,26 @@ def acknowledge_pending_reviews_up_to(ack_review_id: str) -> None:
             lines = [line.strip() for line in f if line.strip()]
 
         remaining = []
-        found_ack = False
         for line in lines:
             try:
                 rec = json.loads(line)
                 r_id = str(rec.get("review_id", ""))
-                if not found_ack:
-                    if r_id == str(ack_review_id):
-                        found_ack = True
+                if r_id in ack_set:
                     continue
                 remaining.append(line)
             except Exception:
                 remaining.append(line)
 
-        # If ack_review_id was empty or not found in lines, but ack was sent, check if all were processed
-        with open(log_path, "w", encoding="utf-8") as f:
+        tmp_path = log_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             for line in remaining:
                 f.write(line + "\n")
+        os.replace(tmp_path, log_path)
     except Exception as e:
         print(f"[Ankicaster] Error acknowledging reviews: {e}")
 
 def get_save_file_path() -> str:
     """Return path to user_files/save.json in the add-on folder."""
-    pkg = get_package_name()
     addon_dir = os.path.dirname(os.path.abspath(__file__))
     user_files_dir = os.path.join(addon_dir, "user_files")
     if not os.path.exists(user_files_dir):
@@ -323,11 +321,13 @@ def load_saved_game_state() -> Optional[Dict[str, Any]]:
     return None
 
 def write_saved_game_state(save_data: str) -> bool:
-    """Write game state JSON string to user_files/save.json."""
+    """Write game state JSON string atomically to user_files/save.json using tmp file + os.replace."""
     try:
         path = get_save_file_path()
-        with open(path, "w", encoding="utf-8") as f:
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(save_data)
+        os.replace(tmp_path, path)
         return True
     except Exception as e:
         print(f"[Ankicaster] Error saving save.json: {e}")
@@ -341,16 +341,24 @@ class AnkicasterDialog(QDialog):
         self.resize(1340, 880)
         self.setMinimumSize(960, 640)
         self.is_ready = False
+        self.local_url = local_url
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        if QWebEngineView is not None:
-            self.web_view = QWebEngineView(self)
-            self.web_view.setUrl(QUrl(local_url))
+        if AnkiWebView is not None:
+            self.web_view = AnkiWebView(self)
+            self.web_view.set_bridge_command(self.handle_pycmd, self)
+            self.web_view.load_url(QUrl(local_url))
             layout.addWidget(self.web_view)
         else:
-            showInfo("QtWebEngine is required to display Ankicaster within Anki.")
+            showInfo("AnkiWebView is required to display Ankicaster within Anki.")
+
+    def reload_view(self) -> None:
+        """Reset is_ready and reload page URL."""
+        self.is_ready = False
+        if hasattr(self, 'web_view') and self.web_view:
+            self.web_view.load_url(QUrl(self.local_url))
 
     def handle_pycmd(self, cmd: str) -> None:
         """Handle pycmd messages from Ankicaster web application."""
@@ -359,7 +367,8 @@ class AnkicasterDialog(QDialog):
             self.on_frontend_ready()
         elif cmd.startswith("ankicaster:ack:"):
             ack_id = cmd[len("ankicaster:ack:"):]
-            acknowledge_pending_reviews_up_to(ack_id)
+            ids = [i.strip() for i in ack_id.split(",") if i.strip()]
+            acknowledge_pending_reviews(ids)
         elif cmd.startswith("ankicaster:save:"):
             save_payload = cmd[len("ankicaster:save:"):]
             write_saved_game_state(save_payload)
@@ -369,12 +378,14 @@ class AnkicasterDialog(QDialog):
         if not self.web_view:
             return
 
-        # 1. Send saved game state from user_files/save.json if it exists
+        # 1. Send saved game state from user_files/save.json if it exists, otherwise send null
         saved_state = load_saved_game_state()
         if saved_state is not None:
             save_json = json.dumps(saved_state)
             js_load = f"if (window.ankicasterLoadSavedGame) {{ window.ankicasterLoadSavedGame({save_json}); }}"
-            self.web_view.page().runJavaScript(js_load)
+        else:
+            js_load = "if (window.ankicasterLoadSavedGame) {{ window.ankicasterLoadSavedGame(null); }}"
+        self.web_view.page().runJavaScript(js_load)
 
         # 2. Send full collection snapshot
         snapshot = get_non_suspended_cards_snapshot()
@@ -407,21 +418,11 @@ def open_ankicaster_window() -> None:
     if _ankicaster_dialog is None:
         _ankicaster_dialog = AnkicasterDialog(mw, local_url)
     elif getattr(_ankicaster_dialog, "is_ready", False):
-        # Refresh snapshot & pending on subsequent foregrounding
         _ankicaster_dialog.on_frontend_ready()
 
     _ankicaster_dialog.show()
     _ankicaster_dialog.raise_()
     _ankicaster_dialog.activateWindow()
-
-def on_webview_bridge_cmd(handled: Any, cmd: str, context: Any) -> Any:
-    """Intercept pycmd messages from webview."""
-    global _ankicaster_dialog
-    if cmd.startswith("ankicaster:"):
-        if _ankicaster_dialog:
-            _ankicaster_dialog.handle_pycmd(cmd)
-        return (True, None)
-    return handled
 
 def init_addon() -> None:
     """Register hooks, install baseline, web exports, and menu actions."""
@@ -442,13 +443,6 @@ def init_addon() -> None:
     gui_hooks.reviewer_did_show_question.append(on_card_will_show)
     gui_hooks.reviewer_did_answer_card.append(on_card_answered)
 
-    # 4. Pycmd hook for web communication
-    if hasattr(gui_hooks, "webview_did_receive_js_message"):
-        gui_hooks.webview_did_receive_js_message.append(on_webview_bridge_cmd)
-
-    # 5. Menu items under Tools
+    # 4. Menu item under Tools (removed undefined export_collection_snapshot)
     action_open = mw.form.menuTools.addAction("Open Ankicaster Magic Academy")
     action_open.triggered.connect(open_ankicaster_window)
-
-    action_export = mw.form.menuTools.addAction("Export Ankicaster Snapshot (Read-Only)")
-    action_export.triggered.connect(export_collection_snapshot)

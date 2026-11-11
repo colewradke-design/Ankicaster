@@ -122,6 +122,29 @@ export default function App() {
     !!(window as any).qt
   );
 
+  // Hydration flag: in addon mode, do NOT auto-save until saved game loads (or null is sent)
+  const [hydrated, setHydrated] = useState(!isAddonMode);
+
+  // Poll for window.pycmd asynchronously up to timeoutMs (every 50ms)
+  const waitForPycmd = useCallback((timeoutMs: number = 10000): Promise<boolean> => {
+    return new Promise(resolve => {
+      if (typeof (window as any).pycmd === 'function') {
+        resolve(true);
+        return;
+      }
+      const startTime = Date.now();
+      const interval = setInterval(() => {
+        if (typeof (window as any).pycmd === 'function') {
+          clearInterval(interval);
+          resolve(true);
+        } else if (Date.now() - startTime >= timeoutMs) {
+          clearInterval(interval);
+          resolve(false);
+        }
+      }, 50);
+    });
+  }, []);
+
   // Helper to serialize state without unbounded allCards
   const getSerializableState = (full: FullGameState) => {
     // Collect all linked card IDs
@@ -150,26 +173,32 @@ export default function App() {
     };
   };
 
-  // Auto-save state: In addon mode, save through Python pycmd to user_files/save.json
-  // Fall back to localStorage in standalone web mode
+  // Auto-save state:
+  // - In addon mode: NEVER use localStorage! Only save after hydration, and wait for pycmd
+  // - In standalone web mode: save to localStorage
   useEffect(() => {
-    const compact = getSerializableState(state);
-    const jsonStr = JSON.stringify(compact);
-
-    if (isAddonMode && typeof (window as any).pycmd === 'function') {
-      try {
-        (window as any).pycmd(`ankicaster:save:${jsonStr}`);
-      } catch (e) {
-        console.error('Addon save failed:', e);
-      }
+    if (isAddonMode) {
+      if (!hydrated) return;
+      const compact = getSerializableState(state);
+      const jsonStr = JSON.stringify(compact);
+      waitForPycmd().then(hasPycmd => {
+        if (hasPycmd && typeof (window as any).pycmd === 'function') {
+          try {
+            (window as any).pycmd(`ankicaster:save:${jsonStr}`);
+          } catch (e) {
+            console.error('Addon save failed:', e);
+          }
+        }
+      });
     } else {
       try {
-        localStorage.setItem(STORAGE_KEY, jsonStr);
+        const compact = getSerializableState(state);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(compact));
       } catch (e) {
         console.error('LocalStorage save failed:', e);
       }
     }
-  }, [state, isAddonMode]);
+  }, [state, isAddonMode, hydrated, waitForPycmd]);
 
   // Build-time Dev Mode flag (must NEVER be on inside Anki)
   const IS_DEV_MODE = !isAddonMode && (import.meta.env.DEV || import.meta.env.VITE_DEV_MODE === 'true');
@@ -311,13 +340,17 @@ export default function App() {
           playChime('review');
         }
 
-        // Acknowledge review to Anki
-        if (rid && isAddonMode && typeof (window as any).pycmd === 'function') {
-          try {
-            (window as any).pycmd(`ankicaster:ack:${rid}`);
-          } catch (e) {
-            console.error('Ack failed:', e);
-          }
+        // Acknowledge review to Anki (ack every review_id applied OR found as duplicate)
+        if (rid && isAddonMode) {
+          waitForPycmd().then(hasPycmd => {
+            if (hasPycmd && typeof (window as any).pycmd === 'function') {
+              try {
+                (window as any).pycmd(`ankicaster:ack:${rid}`);
+              } catch (e) {
+                console.error('Ack failed:', e);
+              }
+            }
+          });
         }
 
         return result.state;
@@ -326,18 +359,20 @@ export default function App() {
 
     // 2. Load Saved Game State from Python (user_files/save.json)
     (window as any).ankicasterLoadSavedGame = (savedState: any) => {
-      if (!savedState || typeof savedState !== 'object') return;
-      setState(current => {
-        // Merge saved state, preserving any existing allCards until snapshot arrives
-        return {
-          ...current,
-          ...savedState,
-          allCards: {
-            ...current.allCards,
-            ...(savedState.allCards || {})
-          }
-        };
-      });
+      if (savedState && typeof savedState === 'object') {
+        setState(current => {
+          // Merge saved state, preserving any existing allCards until snapshot arrives
+          return {
+            ...current,
+            ...savedState,
+            allCards: {
+              ...current.allCards,
+              ...(savedState.allCards || {})
+            }
+          };
+        });
+      }
+      setHydrated(true);
     };
 
     // 3. Load Snapshot of Non-Suspended Real Cards from Anki
@@ -345,14 +380,18 @@ export default function App() {
       if (!Array.isArray(snapshot) || snapshot.length === 0) return;
       setState(current => {
         const next = AnkicasterEngine.loadCardSnapshot(current, snapshot);
-        // Persist immediately in addon mode
-        if (isAddonMode && typeof (window as any).pycmd === 'function') {
-          try {
-            const compact = getSerializableState(next);
-            (window as any).pycmd(`ankicaster:save:${JSON.stringify(compact)}`);
-          } catch (e) {
-            console.error('Save after snapshot failed:', e);
-          }
+        // Persist immediately in addon mode if hydrated
+        if (isAddonMode && hydrated) {
+          waitForPycmd().then(hasPycmd => {
+            if (hasPycmd && typeof (window as any).pycmd === 'function') {
+              try {
+                const compact = getSerializableState(next);
+                (window as any).pycmd(`ankicaster:save:${JSON.stringify(compact)}`);
+              } catch (e) {
+                console.error('Save after snapshot failed:', e);
+              }
+            }
+          });
         }
         addToast(`Synchronized ${snapshot.length} cards from Anki collection!`, 'info');
         return next;
@@ -371,19 +410,28 @@ export default function App() {
         reviewId: r.review_id ?? r.reviewId // Only review_id, no Date.now() fallback
       }));
 
+      // Collect all review IDs from the batch to acknowledge all of them (applied or duplicate)
+      const batchIds = reviewBatch
+        .map(r => r.reviewId)
+        .filter((id): id is string => Boolean(id));
+
       setState(current => {
         const res = AnkicasterEngine.applyBatchHonestReviews(current, reviewBatch);
         if (res.count > 0) {
           addToast(`Processed ${res.count} study reviews from Anki!`, 'success');
         }
 
-        // Send pycmd ack for the last review id applied
-        if (res.lastReviewId && isAddonMode && typeof (window as any).pycmd === 'function') {
-          try {
-            (window as any).pycmd(`ankicaster:ack:${res.lastReviewId}`);
-          } catch (e) {
-            console.error('Batch ack failed:', e);
-          }
+        // Send pycmd ack for every review_id replayed or recognized as duplicate
+        if (batchIds.length > 0 && isAddonMode) {
+          waitForPycmd().then(hasPycmd => {
+            if (hasPycmd && typeof (window as any).pycmd === 'function') {
+              try {
+                (window as any).pycmd(`ankicaster:ack:${batchIds.join(',')}`);
+              } catch (e) {
+                console.error('Batch ack failed:', e);
+              }
+            }
+          });
         }
 
         return res.state;
@@ -418,13 +466,17 @@ export default function App() {
 
     window.addEventListener('message', handleMessage);
 
-    // Ready handshake: Signal to Anki python addon that handlers are fully registered
-    if (isAddonMode && typeof (window as any).pycmd === 'function') {
-      try {
-        (window as any).pycmd('ankicaster:ready');
-      } catch (e) {
-        console.error('Ready handshake failed:', e);
-      }
+    // Ready handshake: Signal to Anki python addon after pycmd is ready
+    if (isAddonMode) {
+      waitForPycmd().then(hasPycmd => {
+        if (hasPycmd && typeof (window as any).pycmd === 'function') {
+          try {
+            (window as any).pycmd('ankicaster:ready');
+          } catch (e) {
+            console.error('Ready handshake failed:', e);
+          }
+        }
+      });
     }
 
     return () => {
