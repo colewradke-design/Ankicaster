@@ -253,10 +253,16 @@ export const RosterPanel: React.FC<{
   onAssignCareer: (charId: number, career: CareerType) => void;
   onRetireCharacter?: (charId: number) => void;
   onEnrollSecondSchool?: (charId: number, school: SchoolType) => void;
-}> = ({ state, onAssignCareer, onRetireCharacter, onEnrollSecondSchool }) => {
-  const { characters, cardSets, allCards, alumniGallery } = state;
+  /** Room-based view: dorms show students, Faculty Quarters shows faculty, Trophy Hall alumni. */
+  view?: 'all' | 'students' | 'faculty' | 'alumni';
+}> = ({ state, onAssignCareer, onRetireCharacter, onEnrollSecondSchool, view = 'all' }) => {
+  const { cardSets, allCards, alumniGallery } = state;
+  const characters =
+    view === 'students' ? state.characters.filter(c => !c.career) :
+    view === 'faculty' ? state.characters.filter(c => !!c.career || c.masteredSchools.length > 0) :
+    state.characters;
   const [selectedCharId, setSelectedCharId] = useState<number | null>(characters[0]?.id || null);
-  const [activeSubTab, setActiveSubTab] = useState<'roster' | 'alumni'>('roster');
+  const [activeSubTab, setActiveSubTab] = useState<'roster' | 'alumni'>(view === 'alumni' ? 'alumni' : 'roster');
 
   const selectedChar = characters.find(c => c.id === selectedCharId);
   const studySet = cardSets.find(s => s.id === selectedChar?.studySetId && !s.released);
@@ -274,7 +280,7 @@ export const RosterPanel: React.FC<{
   const totalWiz = Object.values(state.wizard.levels).reduce((a, b) => a + b, 0);
   const facBeds = state.rooms.reduce((acc, r) => acc + (r.defId === 'faculty_quarters' ? 2 : 0), 0);
   const classCount = state.rooms.filter(r => r.defId.startsWith('class_') || r.defId.startsWith('hall_')).length;
-  const studentCount = characters.filter(c => c.status === 'student').length;
+  const studentCount = state.characters.filter(c => c.status === 'student').length;
   const { limit: facultyLimit, breakdown } = calculateFacultyLimit(totalWiz, facBeds, classCount, studentCount);
 
   return (
@@ -289,7 +295,7 @@ export const RosterPanel: React.FC<{
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          <span>Active Students &amp; Faculty ({characters.length})</span>
+          <span>{view === 'students' ? 'Students' : view === 'faculty' ? 'Faculty' : 'Students & Faculty'} ({characters.length})</span>
         </button>
         <button
           onClick={() => setActiveSubTab('alumni')}
@@ -307,11 +313,7 @@ export const RosterPanel: React.FC<{
       {activeSubTab === 'alumni' ? (
         <div className="space-y-4">
           <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl text-xs text-slate-300">
-            <h4 className="text-sm font-bold text-amber-300 mb-1">🏛️ The Great Hall of Alumni</h4>
-            <p className="leading-relaxed">
-              Graduated Masters whose flashcards have matured past the {retirementThreshold}-day retirement age.
-              They have returned their flashcards to the free pool, leaving behind their legacy and granting permanent Renown resonance.
-            </p>
+            <h4 className="text-sm font-bold text-amber-300" title={`Graduated Masters whose flashcards matured past the ${retirementThreshold}-day retirement age. Their cards return to the free pool; they grant permanent Renown.`}>🏛️ Alumni ⓘ</h4>
           </div>
 
           {alumniGallery.length === 0 ? (
@@ -353,7 +355,7 @@ export const RosterPanel: React.FC<{
             <div className="flex items-center justify-between text-xs font-bold text-slate-300 pb-2 border-b border-slate-800">
               <span>Academy Roster ({characters.length})</span>
               <span className="text-amber-400 text-xs">
-                Faculty: {characters.filter(c => c.career).length}/{facultyLimit}
+                Faculty: {state.characters.filter(c => c.career).length}/{facultyLimit}
               </span>
             </div>
 
@@ -422,12 +424,9 @@ export const RosterPanel: React.FC<{
               {/* 50-Card Constellation Grid */}
               <div className="bg-slate-950/80 border border-slate-800 p-4 rounded-xl shadow-inner">
                 <div className="flex items-center justify-between text-xs font-semibold text-slate-200 mb-2">
-                  <span>Card Constellation (50 Linked Anki Flashcards)</span>
+                  <span title="Rule BR-13/14: Cards are never shared. Intervals directly mirror your real memory retention and reset honestly on lapses.">Constellation · 50 cards ⓘ</span>
                   <span className="text-xs text-amber-300 font-mono">Gold = &gt;30d interval (Mastery)</span>
                 </div>
-                <p className="text-xs text-slate-400 mb-3 leading-relaxed">
-                  Rule BR-13/14: Cards are never shared. Intervals directly mirror your real memory retention and reset honestly on lapses.
-                </p>
 
                 <div className="grid grid-cols-10 gap-2 p-3 bg-slate-900/70 rounded-xl border border-slate-800">
                   {studyCardIds.map((cid, idx) => {
@@ -558,7 +557,9 @@ export const RosterPanel: React.FC<{
             </div>
           ) : (
             <div className="col-span-2 text-center text-slate-500 py-12 text-xs">
-              No students enrolled yet. Open the Recruitment tab to admit young apprentices!
+              {view === 'faculty'
+                ? 'No faculty yet. Graduated Masters can be appointed to a career here.'
+                : 'No students yet. Admit apprentices from the Entrance Hall (Admissions).'}
             </div>
           )}
         </div>
@@ -770,10 +771,7 @@ export const CardDraftPanel: React.FC<{
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-sm md:text-base font-bold text-amber-200">The Grimoire Card Draft (Draw 3, Keep 1)</h3>
-        <p className="text-xs text-slate-400">
-          Rule BR-26: Draw rare room blueprints, creature lures, furniture patterns, and instant boons.
-        </p>
+        <h3 className="text-sm font-bold text-amber-200" title="Rule BR-26: Draw rare room blueprints, creature lures, furniture patterns, and instant boons.">Draw 3, keep 1 ⓘ</h3>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -786,10 +784,7 @@ export const CardDraftPanel: React.FC<{
             <div key={d.id} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow">
               <div>
                 <h4 className="font-bold text-xs text-slate-100 mb-1">{d.name}</h4>
-                <p className="text-xs text-slate-300 mb-2 leading-relaxed">
-                  Draw 3 cards, keep 1. Price increases with recent draws, relaxing over 7 days.
-                </p>
-                <div className="text-xs font-mono text-amber-300 mb-3">
+                <div className="text-xs font-mono text-amber-300 mb-3" title="Price rises with recent draws and relaxes over 7 days.">
                   Current Cost: <strong>{currentPrice} Mana</strong>
                 </div>
               </div>
@@ -829,9 +824,7 @@ export const BestiaryPanel: React.FC<{
           <h3 className="text-base font-bold text-emerald-300 flex items-center gap-2">
             <PawPrint className="w-5 h-5" /> The Academy Bestiary &amp; Menagerie
           </h3>
-          <p className="text-xs text-slate-300 mt-1">
-            40 Magically Diverse Species (GDD Section 22). Tamed creatures grant passive buffs, assist in cleaning, and join Rift expeditions.
-          </p>
+          <p className="text-xs text-slate-400 mt-1" title="40 species (GDD 22). Tamed creatures grant passive buffs, help clean, and join Rift expeditions.">Tamed creatures give buffs ⓘ</p>
         </div>
         <div className="text-right">
           <div className="text-xs text-slate-400">Total In Menagerie</div>
@@ -960,10 +953,7 @@ export const AlchemyPanel: React.FC<{
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-base font-bold text-amber-200">The Alchemy Laboratory</h3>
-        <p className="text-xs text-slate-300 mt-0.5">
-          GDD Section 24: Combine 3 distinct ingredients into restorative and fortifying elixirs.
-        </p>
+        <h3 className="text-sm font-bold text-amber-200" title="GDD 24: Combine 3 distinct ingredients into restorative and fortifying elixirs.">Recipes ⓘ</h3>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1064,10 +1054,7 @@ export const RiftPanel: React.FC<{
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-base font-bold text-amber-200">The Otherworldly Rift (Rule BR-27 to BR-33)</h3>
-        <p className="text-xs text-slate-300 mt-0.5">
-          Party Skill is the true average review interval of your adventurers' flashcards. Safe odds are capped; heroes never die.
-        </p>
+        <h3 className="text-sm font-bold text-amber-200" title="Rules BR-27 to BR-33. Party Skill is the true average review interval of your adventurers' flashcards. Safe odds are capped; heroes never die.">Plan an expedition ⓘ</h3>
       </div>
 
       {/* Rift 3-Master Seal Lockdown */}

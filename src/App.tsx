@@ -19,25 +19,19 @@ import {
 import { createInitialGameState } from './data/initialState';
 import { createNewAcademy } from './visual/onboarding/freshStart';
 import { CharacterCreationModal } from './visual/onboarding/CharacterCreationModal';
-import { AnkicasterEngine, HAZARD_DISPEL_MANA_COST } from './utils/engine';
-import {
-  ROOM_DEFINITIONS,
-  FURNITURE_DEFINITIONS,
-  SCHOOL_EVENTS,
-  RIFT_DESTINATIONS
-} from './data/content';
-import {
-  calculateRoomQuality,
-  calculateRoomEfficiency,
-  calculateStudentSkill
-} from './utils/formulas';
+import { AnkicasterEngine } from './utils/engine';
+import { FURNITURE_DEFINITIONS } from './data/content';
 
 // Components
 import { TopBar } from './components/TopBar';
+import { RoomWindow } from './components/RoomWindow';
+import { ScreenWindow } from './components/ScreenWindow';
+import { PonderOrbPicker, GrimoireBook } from './components/StudyModals';
+import { StoresPanel, JournalPanel, VisitorsPanel } from './components/AcademyPanels';
+import { ScreenId } from './ui/screens';
 import { CastleGrid } from './components/CastleGrid';
 import { FlashcardReviewer } from './components/FlashcardReviewer';
 import {
-  WizardStudyPanel,
   RosterPanel,
   RecruitmentPanel,
   BuildMenuPanel,
@@ -48,30 +42,7 @@ import {
 } from './components/GamePanels';
 
 // Icons
-import {
-  Castle,
-  BookOpen,
-  Sparkles,
-  Users,
-  GraduationCap,
-  Hammer,
-  Layers,
-  FlaskConical,
-  Compass,
-  HelpCircle,
-  Settings as SettingsIcon,
-  Moon,
-  PawPrint,
-  X,
-  CheckCircle2,
-  AlertTriangle,
-  Wrench,
-  Bed,
-  Heart,
-  Volume2,
-  VolumeX,
-  RotateCcw
-} from 'lucide-react';
+import { GraduationCap, Settings as SettingsIcon, Moon, X } from 'lucide-react';
 
 const STORAGE_KEY = 'ankicaster_save_v2';
 
@@ -89,20 +60,9 @@ export default function App() {
     return createInitialGameState();
   });
 
-  // Active Main Navigation Tab
-  type TabType =
-    | 'castle'
-    | 'reviewer'
-    | 'study'
-    | 'roster'
-    | 'recruitment'
-    | 'build'
-    | 'draft'
-    | 'bestiary'
-    | 'alchemy'
-    | 'rift';
-
-  const [activeTab, setActiveTab] = useState<TabType>('castle');
+  // Room-based navigation (UI declutter pass): the castle map is always the main view.
+  // A management screen opens in a window over it, from a room window or the Academy menu.
+  const [openScreen, setOpenScreen] = useState<ScreenId | null>(null);
 
   // Modals & Active Inspector State
   const [selectedRoom, setSelectedRoom] = useState<PlacedRoom | null>(null);
@@ -531,6 +491,7 @@ export default function App() {
       addToast(res.error || 'Failed to queue session', 'warning');
     } else {
       setState(res.state);
+      setOpenScreen(current => (current === 'ponder' ? null : current));
       addToast(`Orb session queued for ${school.toUpperCase()}!`, 'success');
       playChime('review');
     }
@@ -613,7 +574,7 @@ export default function App() {
       setState(res.state);
       addToast(`New room commissioned!`, 'success');
       playChime('review');
-      setActiveTab('castle');
+      setOpenScreen(null);
     }
   };
 
@@ -718,6 +679,82 @@ export default function App() {
     addToast(res.summary, 'success');
   };
 
+  // Navigation: open a management screen (from a room window, the Academy menu or the top bar)
+  const handleOpenScreen = (id: ScreenId) => {
+    if (id === 'codex') { setIsCodexOpen(true); return; }
+    if (id === 'settings') { setIsSettingsOpen(true); return; }
+    setOpenScreen(id);
+  };
+
+  const handleOpenRoomById = (roomId: number) => {
+    const room = state.rooms.find(r => r.id === roomId);
+    if (room) {
+      setOpenScreen(null);
+      setSelectedRoom(room);
+    }
+  };
+
+  // Body of each screen window. Exhaustive over ScreenId so no screen can be left unrendered.
+  const renderScreenBody = (id: ScreenId): React.ReactNode => {
+    switch (id) {
+      case 'reviewer':
+        return (
+          <FlashcardReviewer
+            cards={state.allCards}
+            onAnswerCard={handleAnswerCard}
+            onSimulateBatch={handleSimulateBatch}
+            devMode={IS_DEV_MODE}
+            isAddonMode={isAddonMode}
+          />
+        );
+      case 'students':
+      case 'faculty':
+      case 'alumni':
+        return (
+          <RosterPanel
+            key={id}
+            state={state}
+            view={id}
+            onAssignCareer={handleAssignCareer}
+            onRetireCharacter={handleRetireCharacter}
+            onEnrollSecondSchool={handleEnrollSecondSchool}
+          />
+        );
+      case 'admissions':
+        return <RecruitmentPanel state={state} onEnroll={handleEnrollStudent} />;
+      case 'build':
+        return <BuildMenuPanel state={state} onPlaceRoom={handlePlaceRoom} />;
+      case 'draft':
+        return <CardDraftPanel state={state} onDrawDeck={handleDrawDeck} />;
+      case 'bestiary':
+        return <BestiaryPanel state={state} onFeedCreature={handleFeedCreature} onAssignTamer={handleAssignTamer} />;
+      case 'alchemy':
+        return <AlchemyPanel state={state} onBrewPotion={handleBrewPotion} onUsePotion={handleUsePotion} />;
+      case 'rift':
+        return <RiftPanel state={state} onLaunchExpedition={handleLaunchExpedition} />;
+      case 'stores':
+        return <StoresPanel state={state} />;
+      case 'journal':
+        return <JournalPanel state={state} />;
+      case 'events':
+        return (
+          <VisitorsPanel
+            state={state}
+            onOpenEvent={ev => { setOpenScreen(null); setActiveEventModal(ev); }}
+          />
+        );
+      case 'ponder':
+      case 'grimoire':
+      case 'codex':
+      case 'settings':
+        return null; // rendered as their own modals
+      default: {
+        const unreachable: never = id;
+        return unreachable;
+      }
+    }
+  };
+
   // Refresh Selected Room Reference if State Changes
   const currentSelectedRoom = selectedRoom
     ? state.rooms.find(r => r.id === selectedRoom.id) || null
@@ -725,274 +762,53 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans select-none antialiased">
-      {/* Sticky Top Header Container holding TopBar, Tabs, and Controls */}
-      <div className="sticky top-0 z-40 bg-slate-950/95 backdrop-blur border-b border-amber-900/30 shadow-xl">
+      {/* Slim top bar: mana, day/term, Veil, hazards, Build, Academy menu, Settings */}
+      <div className="sticky top-0 z-40">
         <TopBar
           state={state}
-          onOpenCodex={() => setIsCodexOpen(true)}
-          onOpenSettings={() => setIsSettingsOpen(true)}
-        />
-
-        {/* Unified Tab Navigation Bar */}
-        <nav className="bg-slate-900/90 border-t border-slate-800/80 px-4 py-2 flex flex-wrap items-center gap-1.5">
-          <button
-            onClick={() => setActiveTab('castle')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
-              activeTab === 'castle'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <Castle className="w-4 h-4 text-amber-400" />
-            Castle &amp; Grounds
-          </button>
-
-          <button
-            onClick={() => setActiveTab('reviewer')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
-              activeTab === 'reviewer'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <BookOpen className="w-4 h-4 text-sky-400" />
-            Anki Gateway
-            <span className="bg-sky-950/80 text-sky-300 text-xs px-1.5 py-0.5 rounded border border-sky-800 font-mono">
-              +10⚡
-            </span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('study')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
-              activeTab === 'study'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <Sparkles className="w-4 h-4 text-purple-400" />
-            Wizard Study
-          </button>
-
-          <button
-            onClick={() => setActiveTab('roster')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
-              activeTab === 'roster'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <Users className="w-4 h-4 text-emerald-400" />
-            Students &amp; Faculty
-            <span className="bg-slate-800 text-slate-300 text-xs px-2 py-0.5 rounded font-mono">
-              {state.characters.length}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('recruitment')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
-              activeTab === 'recruitment'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <GraduationCap className="w-4 h-4 text-amber-400" />
-            Admissions
-          </button>
-
-          <button
-            onClick={() => setActiveTab('build')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
-              activeTab === 'build'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <Hammer className="w-4 h-4 text-amber-500" />
-            Architect
-          </button>
-
-          <button
-            onClick={() => setActiveTab('draft')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
-              activeTab === 'draft'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <Layers className="w-4 h-4 text-indigo-400" />
-            Grimoire Draft
-          </button>
-
-          <button
-            onClick={() => setActiveTab('bestiary')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
-              activeTab === 'bestiary'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <PawPrint className="w-4 h-4 text-emerald-400" />
-            Bestiary
-            <span className="bg-slate-800 text-slate-300 text-xs px-2 py-0.5 rounded font-mono">
-              {state.creatures.length}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('alchemy')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
-              activeTab === 'alchemy'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <FlaskConical className="w-4 h-4 text-orange-400" />
-            Alchemy Lab
-          </button>
-
-          <button
-            onClick={() => setActiveTab('rift')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
-              activeTab === 'rift'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-inner'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <Compass className="w-4 h-4 text-rose-400" />
-            The Rift
-            {state.expeditions.some(e => e.state === 'active') && (
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
-            )}
-          </button>
-
-          {/* Dev / Debug button: visible ONLY when build-time dev mode is active */}
-          {IS_DEV_MODE && (
-            <div className="ml-auto flex items-center gap-2 shrink-0">
-              <button
-                onClick={handleNextDay}
-                className="flex items-center gap-1.5 px-3 py-1 bg-indigo-900/60 hover:bg-indigo-900 text-indigo-200 border border-indigo-700/60 rounded-xl text-xs font-bold transition shadow"
-                title="Advance Day and calculate Veil upkeep (Build Dev Mode)"
-              >
-                <Moon className="w-3.5 h-3.5 text-indigo-300" />
-                <span>Simulate Dawn</span>
+          onOpenScreen={handleOpenScreen}
+          onOpenRoom={handleOpenRoomById}
+          devControls={IS_DEV_MODE ? (
+            <div className="hidden md:flex items-center gap-1.5">
+              <button onClick={() => handleSimulateBatch(1)} className="px-2.5 py-1.5 min-h-[32px] bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-[12px] font-bold" title="Dev: one simulated review">+1 Rev</button>
+              <button onClick={() => handleSimulateBatch(10)} className="px-2.5 py-1.5 min-h-[32px] bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-[12px] font-bold" title="Dev: ten simulated reviews">+10</button>
+              <button onClick={handleNextDay} className="flex items-center gap-1 px-2.5 py-1.5 min-h-[32px] bg-indigo-900/60 hover:bg-indigo-900 text-indigo-200 border border-indigo-700/60 rounded-lg text-[12px] font-bold" title="Dev: advance day (Veil upkeep)">
+                <Moon className="w-3.5 h-3.5" /> Dawn
               </button>
             </div>
-          )}
-        </nav>
+          ) : undefined}
+        />
       </div>
 
-      {/* Main Content Area */}
-      <main className="flex-1 p-4 md:p-6 max-w-7xl mx-auto w-full">
-        {activeTab === 'castle' && (
-          <div className="space-y-4">
-            <CastleGrid
-              state={state}
-              onSelectRoom={room => setSelectedRoom(room)}
-              selectedRoomId={selectedRoom?.id}
-              onResolveHazard={handleResolveHazard}
-            />
-
-            {/* Quick study desk shortcut */}
-            <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl flex items-center justify-between gap-4 text-xs shadow-lg">
-              <div className="flex items-center gap-3">
-                <span className="font-bold text-amber-300 flex items-center gap-1 text-sm">
-                  ⚡ Mana Study Gateway:
-                </span>
-                <span className="text-slate-300 hidden sm:inline">
-                  Every honest review awards +10 neutral Mana. All 4 ease buttons award identical mana.
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                {IS_DEV_MODE && (
-                  <>
-                    <button
-                      onClick={() => handleSimulateBatch(1)}
-                      className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl font-bold transition"
-                    >
-                      +1 Dev Rev
-                    </button>
-                    <button
-                      onClick={() => handleSimulateBatch(10)}
-                      className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/50 rounded-xl font-bold transition"
-                    >
-                      +10 Dev Bell
-                    </button>
-                  </>
-                )}
-                <button
-                  onClick={() => setActiveTab('reviewer')}
-                  className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl shadow transition"
-                >
-                  Open Study Desk
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'reviewer' && (
-          <div className="max-w-2xl mx-auto py-2">
-            <FlashcardReviewer
-              cards={state.allCards}
-              onAnswerCard={handleAnswerCard}
-              onSimulateBatch={handleSimulateBatch}
-              devMode={IS_DEV_MODE}
-              isAddonMode={isAddonMode}
-            />
-          </div>
-        )}
-
-        {activeTab === 'study' && (
-          <WizardStudyPanel
-            state={state}
-            onQueueSession={handleQueueWizardSession}
-            onCastSpell={handleCastSpell}
-          />
-        )}
-
-        {activeTab === 'roster' && (
-          <RosterPanel
-            state={state}
-            onAssignCareer={handleAssignCareer}
-            onRetireCharacter={handleRetireCharacter}
-            onEnrollSecondSchool={handleEnrollSecondSchool}
-          />
-        )}
-
-        {activeTab === 'recruitment' && (
-          <RecruitmentPanel state={state} onEnroll={handleEnrollStudent} />
-        )}
-
-        {activeTab === 'build' && (
-          <BuildMenuPanel state={state} onPlaceRoom={handlePlaceRoom} />
-        )}
-
-        {activeTab === 'draft' && (
-          <CardDraftPanel state={state} onDrawDeck={handleDrawDeck} />
-        )}
-
-        {activeTab === 'bestiary' && (
-          <BestiaryPanel
-            state={state}
-            onFeedCreature={handleFeedCreature}
-            onAssignTamer={handleAssignTamer}
-          />
-        )}
-
-        {activeTab === 'alchemy' && (
-          <AlchemyPanel
-            state={state}
-            onBrewPotion={handleBrewPotion}
-            onUsePotion={handleUsePotion}
-          />
-        )}
-
-        {activeTab === 'rift' && (
-          <RiftPanel state={state} onLaunchExpedition={handleLaunchExpedition} />
+      {/* Main view: the castle map. Rooms are the navigation. */}
+      <main className="flex-1 p-3 md:p-5 max-w-7xl mx-auto w-full">
+        <CastleGrid
+          state={state}
+          onSelectRoom={room => setSelectedRoom(room)}
+          selectedRoomId={selectedRoom?.id}
+          onResolveHazard={handleResolveHazard}
+        />
+        {state.rooms.length === 0 && (
+          <div className="mt-3 text-center text-[13px] text-slate-400">No rooms yet. Use <strong className="text-amber-300">Build</strong> to plan one.</div>
         )}
       </main>
+
+      {/* Management screen windows (former tabs) */}
+      {openScreen && openScreen !== 'ponder' && openScreen !== 'grimoire' && openScreen !== 'codex' && openScreen !== 'settings' && (
+        <ScreenWindow
+          id={openScreen}
+          onClose={() => setOpenScreen(null)}
+          width={openScreen === 'reviewer' || openScreen === 'journal' || openScreen === 'events' ? 'max-w-2xl' : 'max-w-5xl'}
+        >
+          {renderScreenBody(openScreen)}
+        </ScreenWindow>
+      )}
+      {openScreen === 'ponder' && (
+        <PonderOrbPicker state={state} onPick={sch => handleQueueWizardSession(sch, false)} onClose={() => setOpenScreen(null)} />
+      )}
+      {openScreen === 'grimoire' && (
+        <GrimoireBook state={state} onCast={handleCastSpell} onClose={() => setOpenScreen(null)} />
+      )}
 
       {/* Floating Notice Toasts */}
       <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm pointer-events-none">
@@ -1012,233 +828,37 @@ export default function App() {
         ))}
       </div>
 
-      {/* MODAL 1: ROOM INSPECTOR & FILTERED FURNITURE PLACEMENT */}
+      {/* MODAL 1: ROOM WINDOW (header, stats, hazard, 1-3 actions, collapsed details) */}
       {currentSelectedRoom && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-amber-900/40 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 shadow-2xl space-y-6">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-lg font-bold text-amber-300">
-                    {ROOM_DEFINITIONS[currentSelectedRoom.defId]?.name || currentSelectedRoom.defId}
-                  </h3>
-                  <span className="text-xs bg-amber-500/20 border border-amber-500/40 text-amber-200 px-2 py-0.5 rounded-lg font-bold">
-                    Level {currentSelectedRoom.level}
-                  </span>
-                  <span className="text-xs text-slate-400 font-mono">
-                    ({currentSelectedRoom.area === 'castle' ? `Floor ${currentSelectedRoom.y}` : 'Sacred Grounds'})
-                  </span>
-                </div>
-                <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-                  {ROOM_DEFINITIONS[currentSelectedRoom.defId]?.description}
-                </p>
-              </div>
-              <button
-                onClick={() => setSelectedRoom(null)}
-                className="p-1.5 text-slate-400 hover:text-slate-100 rounded-lg hover:bg-slate-800 transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Room Stats & Efficiency Breakdown */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950/70 p-4 rounded-xl border border-slate-800 text-xs">
-              <div>
-                <span className="text-slate-400 block text-xs uppercase font-bold">Quality Tier</span>
-                {(() => {
-                  const { q, tier } = calculateRoomQuality(currentSelectedRoom);
-                  return (
-                    <span className="font-bold text-amber-300 capitalize text-sm">
-                      {tier} (Q: {Math.round(q)})
-                    </span>
-                  );
-                })()}
-              </div>
-              <div>
-                <span className="text-slate-400 block text-xs uppercase font-bold">Cleanliness</span>
-                <span className="font-bold text-slate-100 text-sm">
-                  {Math.round(currentSelectedRoom.cleanliness)}%
-                </span>
-              </div>
-              <div>
-                <span className="text-slate-400 block text-xs uppercase font-bold">Daily Veil</span>
-                <span className="font-bold text-indigo-300 text-sm">
-                  {ROOM_DEFINITIONS[currentSelectedRoom.defId]?.veil || 4} Mana
-                </span>
-              </div>
-              <div>
-                <span className="text-slate-400 block text-xs uppercase font-bold">Efficiency</span>
-                {(() => {
-                  const eff = calculateRoomEfficiency(currentSelectedRoom, true, true);
-                  return (
-                    <span className="font-bold text-emerald-300 text-sm">
-                      {(eff * 100).toFixed(0)}%
-                    </span>
-                  );
-                })()}
-              </div>
-            </div>
-
-            {/* Active Hazard Banner & Dispel Actions */}
-            {currentSelectedRoom.hazard && (
-              <div className="bg-rose-950/40 border border-rose-500/50 p-4 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-rose-200">
-                <div className="flex items-start gap-3">
-                  <div className="p-2 rounded-lg bg-rose-500/20 text-rose-300 mt-0.5">
-                    <AlertTriangle className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-sm text-rose-300 capitalize">
-                        Hazard: {currentSelectedRoom.hazard.type.replace(/_/g, ' ')}
-                      </span>
-                      <span className="text-xs bg-rose-900/60 text-rose-300 px-2 py-0.5 rounded font-mono">
-                        Lock: {Math.max(0, (currentSelectedRoom.lockedUntilReviewIndex || 0) - state.reviewIndex)} reviews
-                      </span>
-                    </div>
-                    <p className="text-xs text-rose-300/80 mt-1">
-                      {currentSelectedRoom.hazard.description}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={() => handleResolveHazard(currentSelectedRoom.id, 'warder')}
-                    className="px-3.5 py-2 bg-rose-800 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow transition"
-                    title="Assign active Warder to cleanse room"
-                  >
-                    Dispel (Warder)
-                  </button>
-                  <button
-                    onClick={() => handleResolveHazard(currentSelectedRoom.id, 'spell')}
-                    className="px-3.5 py-2 bg-purple-700 hover:bg-purple-600 text-white font-bold text-xs rounded-xl shadow transition"
-                    title={`Dispel immediately using ${HAZARD_DISPEL_MANA_COST} Mana`}
-                  >
-                    Dispel ({HAZARD_DISPEL_MANA_COST} Mana)
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Renovation Upgrade Button */}
-            {currentSelectedRoom.level < 3 && (
-              <div className="bg-amber-950/30 border border-amber-600/30 p-4 rounded-xl flex items-center justify-between">
-                <div>
-                  <h4 className="text-xs font-bold text-amber-200">
-                    Renovate to Level {currentSelectedRoom.level + 1}
-                  </h4>
-                  <p className="text-xs text-slate-400">
-                    +2 optional furniture slots, improved efficiency, and unlocks Level 3 perk.
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
-                    const res = AnkicasterEngine.upgradeRoom(state, currentSelectedRoom.id);
-                    if (!res.success) addToast(res.error || 'Upgrade failed', 'warning');
-                    else {
-                      setState(res.state);
-                      addToast('Room renovated to next level!', 'success');
-                      playChime('mastery');
-                    }
-                  }}
-                  className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-xl shadow transition"
-                >
-                  Upgrade ({Math.round((ROOM_DEFINITIONS[currentSelectedRoom.defId]?.cost.mana || 100) * 0.75) + 50} Mana)
-                </button>
-              </div>
-            )}
-
-            {/* Installed Furniture */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
-                  Installed Furniture &amp; Fixtures ({currentSelectedRoom.furniture.length} items)
-                </h4>
-              </div>
-
-              {currentSelectedRoom.furniture.length === 0 ? (
-                <div className="text-center py-6 text-xs text-slate-400 bg-slate-950/40 rounded-xl border border-dashed border-slate-800">
-                  No furniture installed yet. Choose fixtures below to furnish this room.
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {currentSelectedRoom.furniture.map(f => {
-                    const fDef = FURNITURE_DEFINITIONS[f.defId];
-                    return (
-                      <div
-                        key={f.id}
-                        className="bg-slate-950/80 border border-slate-800 p-3 rounded-xl flex items-center justify-between text-xs"
-                      >
-                        <div>
-                          <div className="font-semibold text-slate-200">{fDef?.name || f.defId}</div>
-                          <div className="text-xs text-slate-400">
-                            {f.slotKind.startsWith('required:') ? 'Required Fixture' : 'Optional Furnishing'}
-                          </div>
-                        </div>
-                        {!f.slotKind.startsWith('required:') && (
-                          <button
-                            onClick={() => {
-                              const res = AnkicasterEngine.removeFurniture(state, currentSelectedRoom.id, f.id);
-                              if (res.success) setState(res.state);
-                            }}
-                            className="text-xs text-rose-400 hover:text-rose-300 px-2 py-1 font-semibold"
-                          >
-                            Remove
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Filtered Furniture Options for this Room's Slots */}
-            <div className="border-t border-slate-800 pt-4">
-              <h4 className="text-xs font-bold text-amber-200 mb-2">
-                Install Compatible Furniture
-              </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-56 overflow-y-auto pr-1">
-                {Object.values(FURNITURE_DEFINITIONS)
-                  .filter(fDef => {
-                    if (fDef.role === 'required') return false;
-                    if (fDef.rooms === 'any') return true;
-                    if (Array.isArray(fDef.rooms) && fDef.rooms.includes(currentSelectedRoom.defId)) return true;
-                    if (fDef.role === 'bed' && currentSelectedRoom.defId.includes('dorm')) return true;
-                    return false;
-                  })
-                  .slice(0, 12)
-                  .map(fDef => (
-                    <div
-                      key={fDef.id}
-                      className="bg-slate-950 border border-slate-800/80 p-3 rounded-xl flex items-center justify-between text-xs"
-                    >
-                      <div>
-                        <div className="font-semibold text-slate-200">{fDef.name}</div>
-                        <div className="text-xs text-slate-400">
-                          {fDef.cost.mana}m · {fDef.cost.timber || 0}T
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => {
-                          const res = AnkicasterEngine.addFurniture(state, currentSelectedRoom.id, fDef.id);
-                          if (!res.success) addToast(res.error || 'Cannot install', 'warning');
-                          else {
-                            setState(res.state);
-                            addToast(`Installed ${fDef.name}!`, 'success');
-                            playChime('review');
-                          }
-                        }}
-                        className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-xl text-xs font-bold"
-                      >
-                        Install
-                      </button>
-                    </div>
-                  ))}
-              </div>
-            </div>
-          </div>
-        </div>
+        <RoomWindow
+          state={state}
+          room={currentSelectedRoom}
+          onClose={() => setSelectedRoom(null)}
+          onOpenScreen={handleOpenScreen}
+          onResolveHazard={handleResolveHazard}
+          onUpgrade={roomId => {
+            const res = AnkicasterEngine.upgradeRoom(state, roomId);
+            if (!res.success) addToast(res.error || 'Upgrade failed', 'warning');
+            else {
+              setState(res.state);
+              addToast('Room renovated to next level!', 'success');
+              playChime('mastery');
+            }
+          }}
+          onAddFurniture={(roomId, fDefId) => {
+            const res = AnkicasterEngine.addFurniture(state, roomId, fDefId);
+            if (!res.success) addToast(res.error || 'Cannot install', 'warning');
+            else {
+              setState(res.state);
+              addToast(`Installed ${FURNITURE_DEFINITIONS[fDefId]?.name || fDefId}!`, 'success');
+              playChime('review');
+            }
+          }}
+          onRemoveFurniture={(roomId, fId) => {
+            const res = AnkicasterEngine.removeFurniture(state, roomId, fId);
+            if (res.success) setState(res.state);
+          }}
+        />
       )}
 
       {/* MODAL 2: GRIMOIRE DRAFT PICKER */}
@@ -1486,6 +1106,24 @@ export default function App() {
                   }`}
                 >
                   {state.settings.sound ? 'Enabled' : 'Disabled'}
+                </button>
+              </div>
+
+              {/* Reduce motion (existing setting; Choreographer snaps agents only at phase changes) */}
+              <div className="flex items-center justify-between bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+                <span>Reduce Motion</span>
+                <button
+                  onClick={() => {
+                    setState(prev => ({
+                      ...prev,
+                      settings: { ...prev.settings, reduceMotion: !prev.settings.reduceMotion }
+                    }));
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                    state.settings.reduceMotion ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  {state.settings.reduceMotion ? 'On' : 'Off'}
                 </button>
               </div>
 

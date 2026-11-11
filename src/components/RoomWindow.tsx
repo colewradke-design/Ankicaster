@@ -1,0 +1,314 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Room window (UI declutter pass). Consistent layout for every room:
+ *   1. header: room name, level, quality tier, floor
+ *   2. key stats row (chips)
+ *   3. hazard banner, when there is one (dispel cost comes from the engine constant)
+ *   4. 1-3 primary actions: the management screens this room holds (src/ui/screens.ts)
+ *   5. "Room details" secondary section, collapsed by default: description, renovate, furniture
+ *
+ * Every action still goes through the same App handlers / engine calls as before.
+ */
+
+import React from 'react';
+import {
+  X, AlertTriangle, Sparkles, Droplets, Shield, Gauge, ChevronRight, Info, Hammer, Users, Briefcase, Award
+} from 'lucide-react';
+import { FullGameState, PlacedRoom } from '../types/ankicaster';
+import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS, SPELL_DEFINITIONS } from '../data/content';
+import { calculateRoomQuality, calculateRoomEfficiency, calculateFacultyLimit } from '../utils/formulas';
+import { HAZARD_DISPEL_MANA_COST } from '../utils/engine';
+import { ScreenId, SCREEN_DEFS, getRoomScreens } from '../ui/screens';
+import { ScreenIcon } from './ScreenIcon';
+
+export const Chip: React.FC<{ icon?: React.ReactNode; label: string; value: React.ReactNode; title?: string; tone?: string }> = ({
+  icon, label, value, title, tone = 'text-slate-100'
+}) => (
+  <span
+    title={title || label}
+    className="inline-flex items-center gap-1.5 bg-slate-950/70 border border-slate-800 px-2.5 py-1 rounded-lg text-[13px]"
+  >
+    {icon}
+    <span className="text-slate-400">{label}</span>
+    <strong className={tone}>{value}</strong>
+  </span>
+);
+
+export function upgradeCost(room: PlacedRoom): number {
+  return Math.round((ROOM_DEFINITIONS[room.defId]?.cost.mana || 100) * 0.75) + 50;
+}
+
+export function facultyLimitFor(state: FullGameState) {
+  const totalWiz = Object.values(state.wizard.levels).reduce((a, b) => a + b, 0);
+  const facBeds = state.rooms.reduce((acc, r) => acc + (r.defId === 'faculty_quarters' ? 2 : 0), 0);
+  const classCount = state.rooms.filter(r => r.defId.startsWith('class_') || r.defId.startsWith('hall_')).length;
+  const studentCount = state.characters.filter(c => c.status === 'student').length;
+  return calculateFacultyLimit(totalWiz, facBeds, classCount, studentCount).limit;
+}
+
+/** Small room-specific summary line (status only, no actions). */
+const RoomSummary: React.FC<{ state: FullGameState; room: PlacedRoom }> = ({ state, room }) => {
+  const id = room.defId;
+  if (id === 'wizard_study') {
+    const s = state.wizard.activeSession;
+    const queued = state.wizard.queuedSessions?.length || 0;
+    const total = Object.values(state.wizard.levels).reduce((a, b) => a + b, 0);
+    return (
+      <div className="bg-purple-950/40 border border-purple-500/30 rounded-xl p-3 space-y-2" data-testid="study-summary">
+        <div className="flex items-center justify-between text-[13px]">
+          <span className="font-bold text-purple-200 capitalize flex items-center gap-1.5">
+            <Sparkles className="w-4 h-4 text-purple-400" />
+            {s
+              ? s.kind === 'orb'
+                ? `${s.school} orb · Lv ${s.targetLevel}`
+                : `Grimoire: ${SPELL_DEFINITIONS[s.spellId || '']?.name || 'Spell'}`
+              : 'Orb idle'}
+          </span>
+          <span className="text-slate-400">
+            Mastery <strong className="text-amber-300">{total}/50</strong>
+            {queued > 0 && <> · <strong className="text-purple-300">{queued}</strong> queued</>}
+          </span>
+        </div>
+        {s && (
+          <div title={`${s.progress} / ${s.required} honest reviews. Pauses safely during breaks.`}>
+            <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+              <div
+                className="bg-gradient-to-r from-purple-500 to-amber-400 h-full"
+                style={{ width: `${Math.min(100, (s.progress / Math.max(1, s.required)) * 100)}%` }}
+              />
+            </div>
+            <div className="text-[12px] text-slate-400 mt-1 font-mono">{s.progress}/{s.required} reviews</div>
+          </div>
+        )}
+      </div>
+    );
+  }
+  const chips: React.ReactNode[] = [];
+  if (id === 'faculty_quarters' || id === 'faculty_lounge') {
+    const fac = state.characters.filter(c => c.career).length;
+    chips.push(<Chip key="f" icon={<Briefcase className="w-3.5 h-3.5 text-amber-300" />} label="Faculty" value={`${fac}/${facultyLimitFor(state)}`} title="Faculty / limit (F12)" />);
+  }
+  if (getRoomScreens(id).includes('students')) {
+    const st = state.characters.filter(c => !c.career).length;
+    chips.push(<Chip key="s" icon={<Users className="w-3.5 h-3.5 text-emerald-400" />} label="Students" value={st} />);
+  }
+  if (id === 'entrance_hall') {
+    chips.push(<Chip key="r" icon={<Award className="w-3.5 h-3.5 text-amber-400" />} label="Renown" value={state.renown} />);
+    if (state.activeEvents.length) chips.push(<Chip key="v" label="Visitors" value={state.activeEvents.length} tone="text-amber-300" />);
+  }
+  if (!chips.length) return null;
+  return <div className="flex flex-wrap gap-2">{chips}</div>;
+};
+
+export interface RoomWindowProps {
+  state: FullGameState;
+  room: PlacedRoom;
+  onClose: () => void;
+  onOpenScreen: (id: ScreenId) => void;
+  onResolveHazard: (roomId: number, method: 'warder' | 'spell') => void;
+  onUpgrade: (roomId: number) => void;
+  onAddFurniture: (roomId: number, furnitureDefId: string) => void;
+  onRemoveFurniture: (roomId: number, furnitureId: number) => void;
+  /** For tests/screenshots: render the details section expanded. */
+  detailsOpen?: boolean;
+}
+
+export const RoomWindow: React.FC<RoomWindowProps> = ({
+  state, room, onClose, onOpenScreen, onResolveHazard, onUpgrade, onAddFurniture, onRemoveFurniture, detailsOpen = false
+}) => {
+  const def = ROOM_DEFINITIONS[room.defId];
+  const { q, tier } = calculateRoomQuality(room);
+  const eff = calculateRoomEfficiency(room, true, true);
+  const screens = getRoomScreens(room.defId, state);
+  const primary = screens.slice(0, 3);
+  const extra = screens.slice(3);
+  const isSite = room.state === 'site';
+
+  const compatible = Object.values(FURNITURE_DEFINITIONS)
+    .filter(fDef => {
+      if (fDef.role === 'required') return false;
+      if (fDef.rooms === 'any') return true;
+      if (Array.isArray(fDef.rooms) && fDef.rooms.includes(room.defId)) return true;
+      if (fDef.role === 'bed' && room.defId.includes('dorm')) return true;
+      return false;
+    })
+    .slice(0, 12);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[1px] flex items-center justify-center p-4" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div
+        role="dialog"
+        aria-label={`${def?.name || room.defId} window`}
+        data-room-window={room.defId}
+        className="bg-slate-900 border border-amber-900/50 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl"
+      >
+        {/* 1. Header */}
+        <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-slate-800 bg-gradient-to-r from-amber-900/30 to-transparent rounded-t-2xl">
+          <div className="flex items-center gap-2 flex-wrap min-w-0">
+            <h3 className="text-base font-bold text-amber-300 truncate">{def?.name || room.defId}</h3>
+            <span className="text-[12px] bg-amber-500/20 border border-amber-500/40 text-amber-200 px-2 py-0.5 rounded-md font-bold">Lv {room.level}</span>
+            <span className="text-[12px] bg-slate-800 border border-slate-700 text-slate-200 px-2 py-0.5 rounded-md capitalize" title={`Quality ${Math.round(q)}`}>{tier}</span>
+            <span className="text-[12px] text-slate-500 font-mono">{room.area === 'castle' ? `F${room.y}` : 'Grounds'}</span>
+            {def?.description && (
+              <span title={def.description} className="text-slate-500 hover:text-slate-300 cursor-help"><Info className="w-3.5 h-3.5" /></span>
+            )}
+          </div>
+          <button onClick={onClose} aria-label="Close" className="p-1.5 min-w-[32px] min-h-[32px] text-slate-400 hover:text-slate-100 rounded-lg hover:bg-slate-800">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {/* 2. Key stats */}
+          <div className="flex flex-wrap gap-2" data-testid="room-stats">
+            {isSite ? (
+              <Chip icon={<Hammer className="w-3.5 h-3.5 text-amber-400" />} label="Building" value={`${room.buildProgress}/${room.buildRequired}`} title="Honest reviews toward construction" />
+            ) : (
+              <Chip icon={<Gauge className="w-3.5 h-3.5 text-emerald-400" />} label="Eff" value={`${(eff * 100).toFixed(0)}%`} title="Efficiency" tone="text-emerald-300" />
+            )}
+            <Chip icon={<Droplets className="w-3.5 h-3.5 text-sky-400" />} label="Clean" value={`${Math.round(room.cleanliness)}%`} title="Cleanliness" />
+            <Chip icon={<Shield className="w-3.5 h-3.5 text-indigo-300" />} label="Veil" value={`${def?.veil ?? 4}/day`} title="Daily Veil upkeep (mana)" tone="text-indigo-300" />
+            <Chip label="Q" value={Math.round(q)} title="Quality score" tone="text-amber-300" />
+          </div>
+
+          {/* 3. Hazard */}
+          {room.hazard && (
+            <div className="bg-rose-950/40 border border-rose-500/50 p-3 rounded-xl space-y-2 text-rose-200" data-testid="hazard-banner">
+              <div className="flex items-center gap-2 flex-wrap">
+                <AlertTriangle className="w-4 h-4 text-rose-300" />
+                <span className="font-bold text-[13px] capitalize" title={room.hazard.description}>
+                  {room.hazard.type.replace(/_/g, ' ')}
+                </span>
+                <span className="text-[12px] bg-rose-900/60 px-2 py-0.5 rounded font-mono" title="Room locked for this many honest reviews">
+                  🔒 {Math.max(0, (room.lockedUntilReviewIndex || 0) - state.reviewIndex)} reviews
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => onResolveHazard(room.id, 'warder')}
+                  className="flex-1 min-h-[32px] px-3 py-1.5 bg-rose-800 hover:bg-rose-700 text-white font-bold text-[13px] rounded-lg"
+                  title="Send an active Warder to cleanse the room"
+                >
+                  Dispel (Warder)
+                </button>
+                <button
+                  onClick={() => onResolveHazard(room.id, 'spell')}
+                  className="flex-1 min-h-[32px] px-3 py-1.5 bg-purple-700 hover:bg-purple-600 text-white font-bold text-[13px] rounded-lg"
+                  title={`Dispel immediately using ${HAZARD_DISPEL_MANA_COST} Mana`}
+                >
+                  Dispel ({HAZARD_DISPEL_MANA_COST} Mana)
+                </button>
+              </div>
+            </div>
+          )}
+
+          <RoomSummary state={state} room={room} />
+
+          {/* 4. Primary actions */}
+          {primary.length > 0 && (
+            <div className={`grid gap-2 ${primary.length === 1 ? 'grid-cols-1' : primary.length === 2 ? 'grid-cols-2' : 'grid-cols-3'}`} data-testid="room-actions">
+              {primary.map((id, i) => (
+                <button
+                  key={id}
+                  data-screen={id}
+                  onClick={() => onOpenScreen(id)}
+                  title={SCREEN_DEFS[id].hint}
+                  className={`flex flex-col items-center justify-center gap-1 min-h-[64px] px-2 py-2 rounded-xl text-[13px] font-bold transition border-b-2 ${
+                    i === 0
+                      ? 'bg-amber-600 hover:bg-amber-500 text-slate-950 border-amber-800'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-100 border-slate-950 border border-slate-700'
+                  }`}
+                >
+                  <ScreenIcon id={id} className="w-5 h-5" />
+                  {SCREEN_DEFS[id].label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* 5. Secondary, collapsed by default */}
+          <details className="group bg-slate-950/40 border border-slate-800 rounded-xl" open={detailsOpen || undefined}>
+            <summary className="cursor-pointer list-none flex items-center justify-between px-3 py-2 min-h-[36px] text-[13px] font-bold text-slate-300">
+              <span>Room details</span>
+              <span className="flex items-center gap-1 text-slate-500 font-normal">
+                {room.furniture.length} items
+                <ChevronRight className="w-4 h-4 transition group-open:rotate-90" />
+              </span>
+            </summary>
+            <div className="px-3 pb-3 space-y-3 text-[13px]">
+              {def?.description && <p className="text-slate-400 leading-relaxed">{def.description}</p>}
+
+              {extra.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {extra.map(id => (
+                    <button key={id} data-screen={id} onClick={() => onOpenScreen(id)} className="flex items-center gap-1.5 px-3 py-1.5 min-h-[32px] rounded-lg border border-slate-700 text-slate-200 hover:bg-slate-800">
+                      <ScreenIcon id={id} /> {SCREEN_DEFS[id].label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {room.level < 3 && (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-300" title="+2 optional furniture slots, better efficiency; Level 3 unlocks the room perk">
+                    Renovate → Lv {room.level + 1}
+                  </span>
+                  <button
+                    onClick={() => onUpgrade(room.id)}
+                    className="px-3 py-1.5 min-h-[32px] bg-amber-600/90 hover:bg-amber-500 text-slate-950 font-bold rounded-lg"
+                  >
+                    {upgradeCost(room)} Mana
+                  </button>
+                </div>
+              )}
+
+              <div>
+                <div className="text-[12px] uppercase tracking-wider font-bold text-slate-500 mb-1.5">Installed</div>
+                {room.furniture.length === 0 ? (
+                  <div className="text-slate-500">Nothing yet.</div>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {room.furniture.map(f => {
+                      const fDef = FURNITURE_DEFINITIONS[f.defId];
+                      const req = f.slotKind.startsWith('required:');
+                      return (
+                        <span key={f.id} className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border ${req ? 'border-amber-800/50 text-amber-200' : 'border-slate-700 text-slate-200'}`} title={req ? 'Required fixture' : 'Optional furnishing'}>
+                          {fDef?.name || f.defId}
+                          {!req && (
+                            <button onClick={() => onRemoveFurniture(room.id, f.id)} className="text-rose-400 hover:text-rose-300 ml-0.5" aria-label={`Remove ${fDef?.name || f.defId}`} title="Remove">
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <div className="text-[12px] uppercase tracking-wider font-bold text-slate-500 mb-1.5">Furnish</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1">
+                  {compatible.map(fDef => (
+                    <div key={fDef.id} className="flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 px-2.5 py-1.5 rounded-lg">
+                      <span className="text-slate-200 truncate" title={fDef.name}>{fDef.name}</span>
+                      <button
+                        onClick={() => onAddFurniture(room.id, fDef.id)}
+                        className="shrink-0 px-2 py-1 min-h-[28px] bg-amber-500/15 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-md text-[12px] font-bold"
+                        title={`Install ${fDef.name}`}
+                      >
+                        {fDef.cost.mana}m{fDef.cost.timber ? ` · ${fDef.cost.timber}T` : ''}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </details>
+        </div>
+      </div>
+    </div>
+  );
+};
