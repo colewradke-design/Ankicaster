@@ -32,6 +32,7 @@ import {
   GROUNDS_PLOTS_PER_SIDE
 } from '../layout/gridToWorld';
 import { unlockedPlotIndices } from '../../utils/groundsLayout';
+import { drawRoomInterior, drawEmitter, drawAnimatedItem, Emitter, AnimatedItem } from '../rooms/roomArt';
 
 export interface GhostFootprint {
   area: 'castle' | 'grounds';
@@ -52,6 +53,13 @@ export class VisualWorld {
 
   skyGraphics = new Graphics();
   castleGraphics = new Graphics();
+  /** Cosmetic room animations (torches, glows, animated furniture); frame 0 under reduce motion. */
+  ambientGraphics = new Graphics();
+  /** Per-room status art above furniture: unreachable dim, selection outline. */
+  statusGraphics = new Graphics();
+  ambientEmitters: Emitter[] = [];
+  ambientItems: AnimatedItem[] = [];
+  ambientFrame = -1;
   roomLabelsContainer = new Container();
   agentsGraphics = new Graphics();
   roofsGraphics = new Graphics();
@@ -91,6 +99,8 @@ export class VisualWorld {
 
     this.worldContainer.addChild(this.skyGraphics);
     this.worldContainer.addChild(this.castleGraphics);
+    this.worldContainer.addChild(this.ambientGraphics);
+    this.worldContainer.addChild(this.statusGraphics);
     this.worldContainer.addChild(this.agentsGraphics);
     this.worldContainer.addChild(this.roofsGraphics);
     this.worldContainer.addChild(this.ghostGraphics);
@@ -188,6 +198,10 @@ export class VisualWorld {
 
     // 2. Castle & Grounds Rooms
     this.castleGraphics.clear();
+    this.statusGraphics.clear();
+    this.ambientEmitters = [];
+    this.ambientItems = [];
+    const robeColor = this.state.wizard?.appearance?.robeColor;
     const rooms = this.state.rooms;
     const currentRoomIds = new Set<number>();
     let labelsCreated = false;
@@ -212,7 +226,14 @@ export class VisualWorld {
         hasRightDoor = !!rightNeighbour && isReachable;
       }
 
-      ForgeRenderer.drawRoom(this.castleGraphics, room, box, isReachable, isSelected, hasLeftDoor, hasRightDoor);
+      if (room.state === 'built') {
+        const art = drawRoomInterior(this.castleGraphics, room, box, { robeColor, hasLeftDoor, hasRightDoor });
+        this.ambientEmitters.push(...art.emitters);
+        this.ambientItems.push(...art.animated);
+        ForgeRenderer.drawRoomStatus(this.statusGraphics, box, isReachable, isSelected);
+      } else {
+        ForgeRenderer.drawRoom(this.castleGraphics, room, box, isReachable, isSelected, hasLeftDoor, hasRightDoor);
+      }
 
       // Render room name on the canvas (readable at 2x and never cut off)
       const def = ROOM_DEFINITIONS[room.defId];
@@ -274,9 +295,23 @@ export class VisualWorld {
       }
     }
 
-    // 4. Overlays & Unreachable Badges
+    // 4. Ambient layer (redrawn by update() when the animation frame changes)
+    this.ambientFrame = -1;
+    this.renderAmbient(0);
+
+    // 5. Overlays & Unreachable Badges
     this.renderOverlays();
     this.renderGhost();
+  }
+
+  /** Redraw the cosmetic ambient layer for an animation frame (0..3). */
+  renderAmbient(frame: number) {
+    if (frame === this.ambientFrame) return;
+    this.ambientFrame = frame;
+    const g = this.ambientGraphics;
+    g.clear();
+    for (const it of this.ambientItems) drawAnimatedItem(g, it, frame);
+    for (const e of this.ambientEmitters) drawEmitter(g, e, frame, 0);
   }
 
   /** Show (or clear) the placement ghost. */

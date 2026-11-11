@@ -123,6 +123,13 @@ export class ForgeRenderer {
     }
   }
 
+  /** Unreachable dim + selection outline drawn above a room's furniture (status layer). */
+  static drawRoomStatus(g: Graphics, box: { left: number; top: number; width: number; height: number }, isReachable: boolean, isSelected: boolean) {
+    if (!isReachable) g.rect(box.left, box.top, box.width, box.height).fill({ color: 0x202020, alpha: 0.4 });
+    if (isSelected) g.rect(box.left - 2, box.top - 2, box.width + 4, box.height + 4).stroke({ color: 0xf6e08c, width: 3 });
+    else g.rect(box.left, box.top, box.width, box.height).stroke({ color: 0x1b1822, width: 1 });
+  }
+
   /**
    * Draw Roof on top room of column
    */
