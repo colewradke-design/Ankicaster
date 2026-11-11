@@ -397,9 +397,6 @@ export class Choreographer {
       } else {
         // Move towards target
         const speed = 28 * (deltaMs / 1000); // 28 art px / s
-        agent.x += (dx / dist) * Math.min(speed, dist);
-        agent.y += (dy / dist) * Math.min(speed, dist);
-
         if (Math.abs(dx) > 1) {
           agent.facing = dx > 0 ? 'R' : 'L';
         }
