@@ -23,8 +23,7 @@ from typing import Dict, Any, Optional
 try:
     from aqt import mw, gui_hooks
     from aqt.utils import showInfo, tooltip
-    from anki.cards import Card
-    from aqt.qt import QDialog, QVBoxLayout, QUrl, Qt
+    from aqt.qt import QDialog, QVBoxLayout, QUrl
     try:
         from aqt.webview import AnkiWebView
     except ImportError:
@@ -127,12 +126,11 @@ def on_card_will_show(card: Any) -> None:
     global _card_shown_timestamp
     _card_shown_timestamp = time.time()
 
-def on_card_answered(reviewer: Any, card: Card, ease: int) -> None:
+def on_card_answered(reviewer: Any, card: Any, ease: int) -> None:
     """
     Hook called after user answers a card.
     STRICTLY READ-ONLY: Reads card state without altering database or scheduling.
     """
-    global _card_shown_timestamp, _ankicaster_dialog
     answered_at_ms = int(time.time() * 1000)
     elapsed_ms = int((time.time() - _card_shown_timestamp) * 1000)
 
@@ -302,15 +300,16 @@ def acknowledge_pending_reviews(ack_ids: list) -> None:
         print(f"[Ankicaster] Error acknowledging reviews: {e}")
 
 def get_save_file_path() -> str:
-    """Return path to user_files/save.json in the add-on folder."""
+    """Return path to user_files/<profile name>/save.json to match per-profile reviews."""
     addon_dir = os.path.dirname(os.path.abspath(__file__))
-    user_files_dir = os.path.join(addon_dir, "user_files")
+    profile_name = mw.pm.name if mw and mw.pm and hasattr(mw.pm, 'name') and mw.pm.name else "default"
+    user_files_dir = os.path.join(addon_dir, "user_files", str(profile_name))
     if not os.path.exists(user_files_dir):
         os.makedirs(user_files_dir, exist_ok=True)
     return os.path.join(user_files_dir, "save.json")
 
 def load_saved_game_state() -> Optional[Dict[str, Any]]:
-    """Load game state from user_files/save.json."""
+    """Load game state from user_files/<profile name>/save.json."""
     path = get_save_file_path()
     if os.path.exists(path):
         try:
@@ -321,7 +320,7 @@ def load_saved_game_state() -> Optional[Dict[str, Any]]:
     return None
 
 def write_saved_game_state(save_data: str) -> bool:
-    """Write game state JSON string atomically to user_files/save.json using tmp file + os.replace."""
+    """Write game state JSON string atomically to user_files/<profile name>/save.json using tmp file + os.replace."""
     try:
         path = get_save_file_path()
         tmp_path = path + ".tmp"
@@ -348,6 +347,7 @@ class AnkicasterDialog(QDialog):
 
         if AnkiWebView is not None:
             self.web_view = AnkiWebView(self)
+            self.web_view.set_open_links_externally(False)
             self.web_view.set_bridge_command(self.handle_pycmd, self)
             self.web_view.load_url(QUrl(local_url))
             layout.addWidget(self.web_view)
@@ -355,9 +355,10 @@ class AnkicasterDialog(QDialog):
             showInfo("AnkiWebView is required to display Ankicaster within Anki.")
 
     def reload_view(self) -> None:
-        """Reset is_ready and reload page URL."""
+        """Reset is_ready, set link handling, and reload page URL."""
         self.is_ready = False
         if hasattr(self, 'web_view') and self.web_view:
+            self.web_view.set_open_links_externally(False)
             self.web_view.load_url(QUrl(self.local_url))
 
     def handle_pycmd(self, cmd: str) -> None:
