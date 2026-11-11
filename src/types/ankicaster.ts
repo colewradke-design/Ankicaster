@@ -387,6 +387,17 @@ export interface WizardState {
   }>;
   knownSpells: string[];
   spellCooldowns: Record<string, number>; // spellId -> reviews remaining
+  appearance?: {
+    bodyShape?: number;
+    skin?: string;
+    hair?: string;
+    hairColor?: string;
+    robeColor?: string;
+    hat?: string;
+    staff?: string;
+  };
+  foundingSchool?: SchoolType;
+  foundedAt?: string;
 }
 
 export interface VeilState {

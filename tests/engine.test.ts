@@ -15,6 +15,10 @@ import { AnkicasterEngine, getAnkiDayNumber } from '../src/utils/engine.ts';
 import { createInitialGameState } from '../src/data/initialState.ts';
 import { SchoolType, Character, PlacedRoom } from '../src/types/ankicaster.ts';
 import { CREATURE_DEFINITIONS } from '../src/data/content.ts';
+import { computeReachability } from '../src/utils/reachability.ts';
+import { NavGraph } from '../src/visual/layout/navGraph.ts';
+import { Choreographer } from '../src/visual/agents/Choreographer.ts';
+import { createNewAcademy } from '../src/visual/onboarding/freshStart.ts';
 import fs from 'node:fs';
 
 test('F1: Review Mana awards 10 base mana and arcane buff', () => {
@@ -678,3 +682,83 @@ test('8. Safe rest: while player is away and bank has hit 10% floor, skip hazard
   const roomsWithHazard = res.state.rooms.filter(r => r.hazard !== undefined);
   assert.equal(roomsWithHazard.length, 0, 'Hazards must be skipped while bank is at 10% floor (BR-25)');
 });
+
+test('Section 17.1 & VR-01: State immutability test under deep freeze and VisualWorld simulation', () => {
+  const state = createInitialGameState();
+
+  // Deep freeze helper
+  function deepFreeze(obj: any): any {
+    Object.freeze(obj);
+    for (const key of Object.getOwnPropertyNames(obj)) {
+      const val = obj[key];
+      if (val && typeof val === 'object' && !Object.isFrozen(val)) {
+        deepFreeze(val);
+      }
+    }
+    return obj;
+  }
+
+  const frozenState = deepFreeze(JSON.parse(JSON.stringify(state)));
+
+  // Test that computeReachability does not mutate state
+  const reachability = computeReachability(frozenState.rooms);
+  assert.ok(reachability.size > 0);
+  assert.equal(reachability.get(1)?.reachable, true, 'Entrance Hall must be reachable');
+
+  // Test NavGraph construction on frozen state
+  const navGraph = new NavGraph(frozenState.rooms, 400);
+  assert.ok(navGraph.nodes.size > 0, 'NavGraph nodes should be populated');
+
+  // Test Choreographer tick on frozen state
+  const choreo = new Choreographer(navGraph, 400);
+  choreo.syncState(frozenState);
+
+  // Run 100 ticks on frozen state; must not throw mutation error
+  assert.doesNotThrow(() => {
+    for (let i = 0; i < 100; i++) {
+      choreo.tick(16, frozenState, false);
+    }
+  }, 'Choreographer and visual layer must never mutate FullGameState');
+});
+
+test('computeReachability: unlinked upper room shows as unreachable', () => {
+  const state = createInitialGameState();
+
+  // Add an unlinked floor-1 room with no staircase
+  state.rooms.push({
+    id: 888,
+    defId: 'dormitory',
+    x: 0,
+    y: 1, // Floor 1
+    w: 2,
+    h: 1,
+    area: 'castle',
+    level: 1,
+    state: 'built',
+    buildRequired: 0,
+    buildProgress: 0,
+    buildPaused: false,
+    cleanliness: 100,
+    settings: {},
+    furniture: []
+  });
+
+  const reachability = computeReachability(state.rooms);
+  assert.equal(reachability.get(888)?.reachable, false, 'Floor 1 room without stair connection must be unreachable');
+});
+
+test('Section 10.4: Fresh start creates clean slate with 0 mana, 0 renown, level 0 wizard, and 6 rooms', () => {
+  const fresh = createNewAcademy({ name: 'Rowan', title: 'Mage', foundingSchool: 'arcane' });
+
+  assert.equal(fresh.mana, 0);
+  assert.equal(fresh.manaDebt, 0);
+  assert.equal(fresh.renown, 0);
+  assert.equal(fresh.wizard.levels.arcane, 0);
+  assert.equal(fresh.wizard.levels.nature, 0);
+  assert.equal(fresh.wizard.knownSpells.length, 0);
+  assert.equal(fresh.rooms.length, 6);
+  assert.equal(fresh.creatures.length, 0);
+  assert.equal(fresh.characters.length, 0);
+  assert.equal(fresh.achievements.length, 0);
+});
+

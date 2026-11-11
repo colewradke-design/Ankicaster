@@ -17,6 +17,8 @@ import {
   SchoolEvent
 } from './types/ankicaster';
 import { createInitialGameState } from './data/initialState';
+import { createNewAcademy } from './visual/onboarding/freshStart';
+import { CharacterCreationModal } from './visual/onboarding/CharacterCreationModal';
 import { AnkicasterEngine } from './utils/engine';
 import {
   ROOM_DEFINITIONS,
@@ -111,6 +113,12 @@ export default function App() {
   const [activeEventModal, setActiveEventModal] = useState<SchoolEvent | null>(null);
   const [isCodexOpen, setIsCodexOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  // Character Creation / "Choose Your Look" modal
+  // Opens if wizard.appearance is missing (either fresh start or old save migration)
+  const [isCreationModalOpen, setIsCreationModalOpen] = useState<boolean>(() => {
+    return !state.wizard.appearance;
+  });
 
   // Transient feedback toasts
   const [toasts, setToasts] = useState<Array<{ id: string; text: string; type: string }>>([]);
@@ -1601,6 +1609,52 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* MODAL 8: CHARACTER CREATION / CHOOSE YOUR LOOK */}
+      <CharacterCreationModal
+        isOpen={isCreationModalOpen}
+        isExistingSave={state.reviewIndex > 0 || state.characters.length > 0 || state.mana > 0 || state.renown > 0}
+        initialValues={{
+          name: state.wizard.name,
+          title: state.wizard.title,
+          pronouns: state.wizard.pronouns,
+          robeColor: state.wizard.appearance?.robeColor,
+          hat: state.wizard.appearance?.hat,
+          foundingSchool: state.wizard.foundingSchool
+        }}
+        onComplete={choices => {
+          setState(prev => {
+            // If already has progress, update wizard look only
+            const hasProgress = prev.reviewIndex > 0 || prev.characters.length > 0 || prev.mana > 0 || prev.renown > 0;
+            if (hasProgress) {
+              return {
+                ...prev,
+                wizard: {
+                  ...prev.wizard,
+                  name: choices.name,
+                  title: choices.title,
+                  pronouns: choices.pronouns,
+                  appearance: {
+                    bodyShape: choices.bodyShape,
+                    skin: choices.skin,
+                    hair: choices.hair,
+                    hairColor: choices.hairColor,
+                    robeColor: choices.robeColor,
+                    hat: choices.hat,
+                    staff: choices.staff
+                  }
+                }
+              };
+            } else {
+              // Fresh start: initialize with choices
+              return createNewAcademy(choices);
+            }
+          });
+          setIsCreationModalOpen(false);
+          addToast('Headmaster profile established!', 'success');
+        }}
+        onClose={() => setIsCreationModalOpen(false)}
+      />
     </div>
   );
 }
