@@ -217,3 +217,29 @@ test('UI-11: navigation helpers never mutate state', () => {
   renderToStaticMarkup(<AcademyMenu state={s} onOpenScreen={noop} onOpenRoom={noop} defaultOpen />);
   renderToStaticMarkup(<PonderOrbPicker state={s} onPick={noop} onClose={noop} />);
 });
+
+test('UI-12: crisp canvas text: labels are screen-space, sized by zoom and snapped to device pixels', async () => {
+  const { VisualWorld } = await import('../src/visual/world/VisualWorld.ts');
+  const world = new VisualWorld();
+  assert.ok(!world.worldContainer.children.includes(world.roomLabelsContainer), 'labels are not scaled by the camera');
+  assert.ok(world.rootContainer.children.includes(world.roomLabelsContainer));
+  assert.deepEqual([1, 2, 3, 4].map(z => VisualWorld.labelFontSize(z)), [9, 14, 21, 28]);
+  for (const dpr of [1, 1.25, 1.5, 2]) {
+    world.setPixelRatio(dpr);
+    for (const v of [10.1, 33.37, 101.66, 640.5]) {
+      const sv = world.snap(v);
+      assert.ok(Math.abs(sv * dpr - Math.round(sv * dpr)) < 1e-9, `snap(${v}) on a device pixel at DPR ${dpr}`);
+    }
+  }
+  world.setPixelRatio(1.5);
+  world.setSnapshot(fresh());
+  for (const z of [1, 2, 4]) {
+    world.camera.setZoom(z);
+    world.update(16);
+    for (const t of world.roomNameTexts.values()) {
+      assert.equal(t.resolution, 1.5);
+      assert.equal(t.style.fontSize, VisualWorld.labelFontSize(z));
+      assert.ok(Math.abs(t.y * 1.5 - Math.round(t.y * 1.5)) < 1e-9);
+    }
+  }
+});

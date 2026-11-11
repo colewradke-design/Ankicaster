@@ -40,6 +40,40 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
 
   const [currentZoom, setCurrentZoom] = useState(2);
 
+  // Latest props for the async Pixi init (the add-on hydrates the save while Pixi is starting)
+  const latestRef = useRef({ state, selectedRoomId });
+  latestRef.current = { state, selectedRoomId };
+
+  /**
+   * Size the canvas so its backing store maps 1:1 onto device pixels and sits on a whole
+   * device pixel. Otherwise the browser resamples the whole canvas (blurry text) at
+   * fractional DPRs such as 1.25 / 1.5 (common for Anki on Windows).
+   */
+  const fitCanvasToDevicePixels = useCallback(() => {
+    const app = appRef.current;
+    const container = containerRef.current;
+    const world = worldRef.current;
+    if (!app || !container || !app.renderer) return;
+    const dpr = window.devicePixelRatio || 1;
+    if (app.renderer.resolution !== dpr) app.renderer.resolution = dpr;
+    const w = Math.floor(container.clientWidth * dpr) / dpr;
+    const h = Math.floor(container.clientHeight * dpr) / dpr;
+    if (w <= 0 || h <= 0) return;
+    app.renderer.resize(w, h);
+    const canvas = app.canvas as HTMLCanvasElement;
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    canvas.style.transform = '';
+    const r = canvas.getBoundingClientRect();
+    const fx = ((r.left + window.scrollX) * dpr) % 1;
+    const fy = ((r.top + window.scrollY) * dpr) % 1;
+    if (fx > 0.001 || fy > 0.001) canvas.style.transform = `translate(${-fx / dpr}px, ${-fy / dpr}px)`;
+    if (world) {
+      world.setPixelRatio(dpr);
+      world.camera.setViewportSize(w, h);
+    }
+  }, []);
+
   // Initialize Pixi Application
   useEffect(() => {
     let isMounted = true;
@@ -55,10 +89,13 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     async function initPixi() {
       if (!container) return;
       await app.init({
-        resizeTo: container,
+        width: Math.max(1, container.clientWidth),
+        height: Math.max(1, container.clientHeight),
         antialias: false,
+        // Render at the device pixel ratio (Anki on Windows/HiDPI is often 1.25-2x)
         resolution: window.devicePixelRatio || 1,
         autoDensity: true,
+        roundPixels: true,
         backgroundAlpha: 0,
         preference: 'webgl'
       });
@@ -69,14 +106,15 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
       }
 
       container.appendChild(app.canvas);
+      (app.canvas as HTMLCanvasElement).style.display = 'block';
       app.stage.addChild(world.rootContainer);
-
-      world.camera.setViewportSize(container.clientWidth, container.clientHeight);
+      fitCanvasToDevicePixels();
       // Default to Home on Entrance Hall
       world.camera.home(castleCellToWorldX(4), world.groundY);
       setCurrentZoom(world.camera.zoom);
 
-      world.setSnapshot(state, selectedRoomId);
+      // Use the LATEST state: an add-on save may have loaded while Pixi was initialising
+      world.setSnapshot(latestRef.current.state, latestRef.current.selectedRoomId);
 
       // Animation ticker loop
       let lastTime = performance.now();
@@ -84,6 +122,8 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
         const now = performance.now();
         const deltaMs = now - lastTime;
         lastTime = now;
+        // Follow DPR changes (moving the Anki window between monitors, page zoom)
+        if ((window.devicePixelRatio || 1) !== app.renderer.resolution) fitCanvasToDevicePixels();
         world.update(deltaMs);
       });
     }
@@ -110,18 +150,14 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     const container = containerRef.current;
     if (!container) return;
 
-    const ro = new ResizeObserver(entries => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect;
-        if (worldRef.current && width > 0 && height > 0) {
-          worldRef.current.camera.setViewportSize(width, height);
-        }
-      }
-    });
-
+    const ro = new ResizeObserver(() => fitCanvasToDevicePixels());
     ro.observe(container);
-    return () => ro.disconnect();
-  }, []);
+    window.addEventListener('resize', fitCanvasToDevicePixels);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', fitCanvasToDevicePixels);
+    };
+  }, [fitCanvasToDevicePixels]);
 
   // Mouse / Pointer Controls: Pan, Click Room, Zoom Wheel
   const handlePointerDown = (e: React.PointerEvent) => {

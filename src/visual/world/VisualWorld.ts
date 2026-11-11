@@ -7,6 +7,9 @@
  * - Manages PixiJS containers: skyLayer, castleLayer, roomLabelsContainer, agentsLayer, roofsLayer, overlayLayer
  * - Coordinates Camera, Choreographer, NavGraph, and ForgeRenderer
  * - Draws room names on canvas (readable at 2x and never cut off)
+ * - Crisp text: labels live in a SCREEN-SPACE layer (not scaled by the camera), are rasterized at
+ *   fontSize x zoom and resolution = devicePixelRatio, and are snapped to whole device pixels.
+ *   Pixel art stays in the zoomed world layer (nearest-neighbour look unchanged).
  * - Pools & destroys Unreachable badge text per room once
  * - Handles hit testing for room clicks
  */
@@ -51,6 +54,12 @@ export class VisualWorld {
   selectedRoomId?: number;
 
   roomNameTexts = new Map<number, Text>();
+  /** World-space anchor (top-centre) and box width for each room label. */
+  roomLabelAnchors = new Map<number, { cx: number; top: number; width: number }>();
+  /** Device pixel ratio the canvas renders at (renderer.resolution). */
+  pixelRatio = 1;
+  private labelZoom = 0;
+  private labelRatio = 0;
   unreachableBadgeTexts = new Map<number, Text>();
 
   constructor() {
@@ -64,10 +73,59 @@ export class VisualWorld {
 
     this.worldContainer.addChild(this.skyGraphics);
     this.worldContainer.addChild(this.castleGraphics);
-    this.worldContainer.addChild(this.roomLabelsContainer);
     this.worldContainer.addChild(this.agentsGraphics);
     this.worldContainer.addChild(this.roofsGraphics);
+    // Labels sit above the world but are NOT inside the zoomed worldContainer
+    this.rootContainer.addChildAt(this.roomLabelsContainer, 1);
     this.overlayContainer.addChild(this.overlayGraphics);
+  }
+
+  /** Snap a screen coordinate (CSS px) to a whole device pixel. */
+  snap(v: number): number {
+    const r = this.pixelRatio || 1;
+    return Math.round(v * r) / r;
+  }
+
+  setPixelRatio(ratio: number) {
+    this.pixelRatio = ratio > 0 ? ratio : 1;
+  }
+
+  /** Label font size in screen px for a camera zoom (world size 7 art px, min 9 px for legibility). */
+  static labelFontSize(zoom: number): number {
+    return Math.max(9, Math.round(7 * zoom));
+  }
+
+  /** Re-raster label textures when zoom or DPR changes, so text is never bitmap-scaled. */
+  private refreshLabelStyles(force = false) {
+    const zoom = this.camera.zoom;
+    if (!force && zoom === this.labelZoom && this.pixelRatio === this.labelRatio) return;
+    this.labelZoom = zoom;
+    this.labelRatio = this.pixelRatio;
+    const fontSize = VisualWorld.labelFontSize(zoom);
+    const strokeW = Math.max(2, Math.round(1.5 * zoom));
+    for (const [roomId, text] of this.roomNameTexts.entries()) {
+      const a = this.roomLabelAnchors.get(roomId);
+      text.resolution = this.pixelRatio;
+      text.style.fontSize = fontSize;
+      text.style.stroke = { color: 0x1b1822, width: strokeW };
+      text.style.wordWrapWidth = Math.max(28 * zoom, ((a?.width ?? 64) - 6) * zoom);
+    }
+    for (const text of this.unreachableBadgeTexts.values()) text.resolution = this.pixelRatio;
+  }
+
+  /** Position labels from the camera transform, snapped to device pixels. */
+  private layoutLabels() {
+    const z = this.camera.zoom;
+    const ox = this.worldContainer.x;
+    const oy = this.worldContainer.y;
+    for (const [roomId, text] of this.roomNameTexts.entries()) {
+      const a = this.roomLabelAnchors.get(roomId);
+      if (!a) continue;
+      let w = 0;
+      try { w = text.width; } catch { w = 0; } // measuring needs a canvas; absent in node tests
+      text.x = this.snap(ox + a.cx * z - w / 2);
+      text.y = this.snap(oy + (a.top + 3) * z);
+    }
   }
 
   setSnapshot(state: FullGameState, selectedRoomId?: number) {
@@ -101,6 +159,7 @@ export class VisualWorld {
     this.castleGraphics.clear();
     const rooms = this.state.rooms;
     const currentRoomIds = new Set<number>();
+    let labelsCreated = false;
 
     for (const room of rooms) {
       currentRoomIds.add(room.id);
@@ -129,32 +188,32 @@ export class VisualWorld {
       const roomName = def?.name || room.defId;
       const maxW = Math.max(28, box.width - 6);
 
+      const zoom = this.camera.zoom;
       let roomText = this.roomNameTexts.get(room.id);
       if (!roomText) {
         roomText = new Text({
           text: roomName,
+          resolution: this.pixelRatio,
           style: new TextStyle({
             fontFamily: 'sans-serif',
-            fontSize: 7,
+            fontSize: VisualWorld.labelFontSize(zoom),
             fill: 0xffffff,
             fontWeight: 'bold',
             align: 'center',
             wordWrap: true,
-            wordWrapWidth: maxW,
-            stroke: { color: 0x1b1822, width: 2 }
+            wordWrapWidth: maxW * zoom,
+            stroke: { color: 0x1b1822, width: Math.max(2, Math.round(1.5 * zoom)) }
           })
         });
-        roomText.anchor.set(0.5, 0);
         this.roomLabelsContainer.addChild(roomText);
         this.roomNameTexts.set(room.id, roomText);
-      } else {
+        labelsCreated = true;
+      } else if (roomText.text !== roomName) {
         roomText.text = roomName;
-        roomText.style.wordWrapWidth = maxW;
       }
-
-      roomText.x = box.left + box.width / 2;
-      roomText.y = box.top + 3;
+      this.roomLabelAnchors.set(room.id, { cx: box.left + box.width / 2, top: box.top, width: box.width });
     }
+    this.refreshLabelStyles(labelsCreated);
 
     // Clean up room names for rooms no longer in state
     for (const [roomId, text] of this.roomNameTexts.entries()) {
@@ -162,6 +221,7 @@ export class VisualWorld {
         this.roomLabelsContainer.removeChild(text);
         text.destroy();
         this.roomNameTexts.delete(roomId);
+        this.roomLabelAnchors.delete(roomId);
       }
     }
 
@@ -214,6 +274,7 @@ export class VisualWorld {
         if (!badgeText) {
           badgeText = new Text({
             text: 'Unreachable',
+            resolution: this.pixelRatio,
             style: new TextStyle({
               fontFamily: 'sans-serif',
               fontSize: 10,
@@ -226,8 +287,8 @@ export class VisualWorld {
           this.unreachableBadgeTexts.set(room.id, badgeText);
         }
 
-        badgeText.x = screenX - 60;
-        badgeText.y = screenY - 7;
+        badgeText.x = this.snap(screenX - 60);
+        badgeText.y = this.snap(screenY - 7);
         badgeText.visible = true;
       }
     }
@@ -257,8 +318,13 @@ export class VisualWorld {
 
     // Apply Camera transform to worldContainer
     this.worldContainer.scale.set(this.camera.zoom, this.camera.zoom);
-    this.worldContainer.x = this.camera.viewportWidth / 2 - this.camera.x * this.camera.zoom;
-    this.worldContainer.y = this.camera.viewportHeight / 2 - this.camera.y * this.camera.zoom;
+    // Snap the world origin to whole device pixels so art and labels stay on the pixel grid
+    this.worldContainer.x = this.snap(this.camera.viewportWidth / 2 - this.camera.x * this.camera.zoom);
+    this.worldContainer.y = this.snap(this.camera.viewportHeight / 2 - this.camera.y * this.camera.zoom);
+
+    // Crisp screen-space labels: re-raster on zoom/DPR change, then position
+    this.refreshLabelStyles();
+    this.layoutLabels();
 
     // Update overlay position sync
     this.renderOverlays();
