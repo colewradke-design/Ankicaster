@@ -126,6 +126,10 @@ export interface RoomDefinition {
   area: 'castle' | 'grounds';
   size: [number, number]; // [width, height]
   needsSky?: boolean;
+  /** Max rooms of this type per Academy, counting construction sites (undefined = unlimited). */
+  maxCount?: number;
+  /** Cannot be demolished (GDD 16.1: Entrance Hall, Wizard's Study). */
+  noDemolish?: boolean;
   floorRule?: 'floor_0' | 'floors_0_1' | 'highest_floor';
   unlock: {
     type: 'start' | 'standard' | 'draft' | 'grant';
@@ -199,6 +203,10 @@ export interface PlacedRoom {
     glassworksActive?: boolean;
   };
   furniture: PlacedFurniture[];
+  /** What the player actually paid when placing this room (refund bounds; GDD 15.4). */
+  spent?: { mana: number; timber?: number; stone?: number; glass?: number; cloth?: number };
+  /** Renown granted by renovations of this room (taken back on demolish so loops gain nothing). */
+  renownGranted?: number;
   hazard?: {
     type: 'spill_of_night' | 'hex_fog' | 'echo_loop' | 'cold_snap' | 'breach';
     name: string;
@@ -514,4 +522,6 @@ export interface FullGameState {
   }>;
   lastProcessedReviewId?: string;
   processedReviewIds?: string[];
+  /** Furniture returned by demolition (GDD 15.4 / 17.1); re-installing a stored item is free. */
+  furnitureInventory?: Record<string, number>;
 }

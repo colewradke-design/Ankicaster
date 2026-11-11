@@ -28,6 +28,20 @@ import {
 } from '../data/content';
 import { createInitialGameState } from '../data/initialState';
 import {
+  validatePlacement,
+  findAutoPlacement,
+  roomLimitStatus,
+  countRoomsOfType,
+  newlyCutOffRooms,
+  newlyUnsupportedRooms,
+  placementCharge,
+  defaultSpent,
+  demolishRefund,
+  REFUND_MATERIALS,
+  PlacementCheck
+} from './placement';
+import { normalizeAppearance } from './appearance';
+import {
   calculateReviewMana,
   calculateDailyVeilCost,
   calculateStudentSkill,
@@ -1483,71 +1497,65 @@ export class AnkicasterEngine {
   }
 
   /**
-   * Place a new room site or instant room (GDD Section 15, 16)
+   * Place a room (GDD 15.3 P1-P7, 15.4). With targetX/targetY the spot is validated exactly;
+   * without them auto-placement finds the first free valid spot (or reports there is no space).
+   * The engine is authoritative: overlap, bounds, support, sky, floor rules and per-room limits
+   * are enforced here for both manual and auto placement.
    */
   static placeRoom(
     state: FullGameState,
     defId: string,
-    area: 'castle' | 'grounds',
+    area?: 'castle' | 'grounds',
     targetX?: number,
     targetY?: number
-  ): { state: FullGameState; success: boolean; error?: string } {
-    const next = structuredClone(state);
+  ): { state: FullGameState; success: boolean; error?: string; roomId?: number; warnings?: string[] } {
     const def = ROOM_DEFINITIONS[defId];
     if (!def) return { state, success: false, error: 'Unknown room definition.' };
+    const placeArea = area ?? def.area;
+
+    // Per-room limits (content maxCount; sites count)
+    const limit = roomLimitStatus(state.rooms, defId);
+    if (limit.capped) return { state, success: false, error: `${limit.reason}.` };
 
     // Check cost
-    if (next.mana < (def.cost.mana || 0)) {
+    if (state.mana < (def.cost.mana || 0)) {
       return { state, success: false, error: `Need ${def.cost.mana} Mana.` };
     }
-    if ((def.cost.timber || 0) > next.resources.timber) {
-      return { state, success: false, error: `Need ${def.cost.timber} Timber (have ${next.resources.timber}).` };
+    for (const k of REFUND_MATERIALS) {
+      const need = def.cost[k] || 0;
+      if (need > state.resources[k]) {
+        return { state, success: false, error: `Need ${need} ${k[0].toUpperCase()}${k.slice(1)} (have ${state.resources[k]}).` };
+      }
     }
-    if ((def.cost.stone || 0) > next.resources.stone) {
-      return { state, success: false, error: `Need ${def.cost.stone} Stone (have ${next.resources.stone}).` };
-    }
-    if ((def.cost.glass || 0) > next.resources.glass) {
-      return { state, success: false, error: `Need ${def.cost.glass} Glass (have ${next.resources.glass}).` };
-    }
-    if ((def.cost.cloth || 0) > next.resources.cloth) {
-      return { state, success: false, error: `Need ${def.cost.cloth} Cloth (have ${next.resources.cloth}).` };
-    }
-
-    // Deduct cost
-    next.mana -= def.cost.mana || 0;
-    if (def.cost.timber) next.resources.timber -= def.cost.timber;
-    if (def.cost.stone) next.resources.stone -= def.cost.stone;
-    if (def.cost.glass) next.resources.glass -= def.cost.glass;
-    if (def.cost.cloth) next.resources.cloth -= def.cost.cloth;
 
     // Determine grid placement
-    let x = targetX ?? 0;
-    let y = targetY ?? 0;
-    const existing = next.rooms.filter(r => r.area === area);
-
-    if (area === 'castle') {
-      if (targetX === undefined || targetY === undefined) {
-        // Find open slot
-        const f0Count = existing.filter(r => r.y === 0).length;
-        const f1Count = existing.filter(r => r.y === 1).length;
-        if (f0Count < 7) {
-          x = f0Count;
-          y = 0;
-        } else if (f1Count < 6) {
-          x = f1Count;
-          y = 1;
-        } else {
-          x = existing.filter(r => r.y === 2).length;
-          y = 2;
-        }
+    let x: number;
+    let y: number;
+    let warnings: string[] = [];
+    if (targetX === undefined || (placeArea === 'castle' && targetY === undefined)) {
+      const spot = findAutoPlacement(state, defId);
+      if (!spot || spot.area !== placeArea) {
+        return { state, success: false, error: `No free valid space for ${def.name}. Move or demolish something, or build support first.` };
       }
+      x = spot.x;
+      y = spot.y;
+      warnings = spot.warnings;
     } else {
-      // Grounds plot
-      x = targetX ?? existing.length;
-      y = 0;
+      x = targetX;
+      y = placeArea === 'grounds' ? 0 : (targetY as number);
+      const check = validatePlacement(state, defId, placeArea, x, y);
+      if (!check.valid) return { state, success: false, error: `Can't place ${def.name} there: ${check.errors[0]}.` };
+      warnings = check.warnings;
     }
 
-    const roomId = Date.now();
+    const next = structuredClone(state);
+    const charge = placementCharge(defId);
+
+    // Deduct cost
+    next.mana -= charge.mana;
+    for (const k of REFUND_MATERIALS) next.resources[k] -= charge[k];
+
+    const roomId = Math.max(Date.now(), ...next.rooms.map(r => r.id + 1));
     const buildReq = def.buildReviews;
     const isInstant = buildReq === 0;
 
@@ -1558,7 +1566,7 @@ export class AnkicasterEngine {
       y,
       w: def.size[0],
       h: def.size[1],
-      area,
+      area: placeArea,
       level: 1,
       state: isInstant ? 'built' : 'site',
       buildRequired: buildReq,
@@ -1566,7 +1574,8 @@ export class AnkicasterEngine {
       buildPaused: false,
       cleanliness: 100,
       settings: {},
-      furniture: []
+      furniture: [],
+      spent: charge
     };
 
     // Auto-place required starter furniture if built instantly
@@ -1587,11 +1596,171 @@ export class AnkicasterEngine {
       time: Date.now(),
       type: 'construction',
       text: isInstant
-        ? `Built ${def.name} on ${area === 'castle' ? `Floor ${y}` : 'Sacred Grounds'}!`
+        ? `Built ${def.name} on ${placeArea === 'castle' ? `Floor ${y}` : 'Sacred Grounds'}!`
         : `Construction site placed for ${def.name} (${buildReq} reviews to complete).`
     });
 
-    return { state: next, success: true };
+    return { state: next, success: true, roomId, warnings };
+  }
+
+  /** Why a room can't be moved or demolished right now (undefined = allowed). */
+  static roomActionBlock(state: FullGameState, roomId: number, action: 'move' | 'demolish'): string | undefined {
+    const room = state.rooms.find(r => r.id === roomId);
+    if (!room) return 'Room not found.';
+    const def = ROOM_DEFINITIONS[room.defId];
+    if (room.hazard) return `Dispel the ${room.hazard.name || 'hazard'} first`;
+    if (action === 'demolish' && def?.noDemolish && countRoomsOfType(state.rooms, room.defId, room.id) === 0) {
+      return `The ${def.name} can't be demolished`;
+    }
+    if (action === 'demolish') {
+      const after = state.rooms.filter(r => r.id !== roomId);
+      const unsupported = newlyUnsupportedRooms(state.rooms, after);
+      if (unsupported.length) return `${ROOM_DEFINITIONS[unsupported[0].defId]?.name || 'A room'} above needs it for support`;
+      const cut = newlyCutOffRooms(state.rooms, after);
+      if (cut.length) return `It would cut ${ROOM_DEFINITIONS[cut[0].defId]?.name || 'a room'} off from the Entrance Hall`;
+    }
+    return undefined;
+  }
+
+  /** Validate moving a room to (x, y): same rules as placement, plus nothing else may lose support or connection. */
+  static validateMove(state: FullGameState, roomId: number, x: number, y: number): PlacementCheck {
+    const room = state.rooms.find(r => r.id === roomId);
+    if (!room) return { valid: false, errors: ['Room not found.'], warnings: [] };
+    const block = AnkicasterEngine.roomActionBlock(state, roomId, 'move');
+    if (block) return { valid: false, errors: [block], warnings: [] };
+    const ny = room.area === 'grounds' ? 0 : y;
+    if (room.x === x && room.y === ny) return { valid: false, errors: ['Already here'], warnings: [] };
+    const check = validatePlacement(state, room.defId, room.area, x, ny, roomId);
+    if (!check.valid) return check;
+    const after = state.rooms.map(r => (r.id === roomId ? { ...r, x, y: ny } : r));
+    const unsupported = newlyUnsupportedRooms(state.rooms, after);
+    if (unsupported.length) {
+      return { valid: false, errors: [`${ROOM_DEFINITIONS[unsupported[0].defId]?.name || 'A room'} above needs it for support`], warnings: [] };
+    }
+    const cut = newlyCutOffRooms(state.rooms, after).filter(r => r.id !== roomId);
+    if (cut.length) {
+      return { valid: false, errors: [`It would cut ${ROOM_DEFINITIONS[cut[0].defId]?.name || 'a room'} off from the Entrance Hall`], warnings: [] };
+    }
+    return check;
+  }
+
+  /**
+   * Move a built room or construction site. Keeps id, level, furniture, progress, cleanliness,
+   * occupants and everything else; only the position changes. Free (GDD has no move cost).
+   */
+  static moveRoom(
+    state: FullGameState,
+    roomId: number,
+    x: number,
+    y: number
+  ): { state: FullGameState; success: boolean; error?: string; warnings?: string[] } {
+    const check = AnkicasterEngine.validateMove(state, roomId, x, y);
+    if (!check.valid) return { state, success: false, error: check.errors[0] };
+    const next = structuredClone(state);
+    const room = next.rooms.find(r => r.id === roomId)!;
+    room.x = x;
+    room.y = room.area === 'grounds' ? 0 : y;
+    const def = ROOM_DEFINITIONS[room.defId];
+    next.notices.push({
+      id: `move-${roomId}-${Date.now()}`,
+      time: Date.now(),
+      type: 'construction',
+      text: `Moved ${def?.name || 'room'} to ${room.area === 'castle' ? `Floor ${room.y}, column ${room.x}` : `plot ${room.x}`}.`
+    });
+    return { state: next, success: true, warnings: check.warnings };
+  }
+
+  /** Preview of what demolishing returns (for the confirm dialog). */
+  static demolishPreview(state: FullGameState, roomId: number) {
+    const room = state.rooms.find(r => r.id === roomId);
+    if (!room) return undefined;
+    const refund = demolishRefund(room);
+    const occupants = state.characters.filter(c => c.bedRoomId === roomId || c.seatRoomId === roomId || c.workplaceRoomId === roomId).length
+      + state.creatures.filter(c => c.roomId === roomId).length;
+    const furniture = room.furniture.filter(f => FURNITURE_DEFINITIONS[f.defId]).length;
+    const renownLoss = Math.min(state.renown, room.renownGranted || 0);
+    return { refund, occupants, furniture, renownLoss, blocked: AnkicasterEngine.roomActionBlock(state, roomId, 'demolish') };
+  }
+
+  /**
+   * Demolish a room or cancel a construction site (GDD 15.4).
+   * - Site with no progress (Cancel): 100% of the mana and materials paid.
+   * - Otherwise: 50% of the materials paid (rounded down), 0% mana. Never more than was spent.
+   * - Furniture goes to the furniture inventory; occupants are reassigned to a valid room of the
+   *   same kind, or become "between rooms" (GDD 12.5).
+   * - Renown granted by renovating this room is taken back, so build/renovate/demolish loops gain nothing.
+   * - Blocked during a hazard in the room, for the last Entrance Hall / Wizard's Study, and when it
+   *   would leave a room above unsupported or cut a room off from the Entrance Hall.
+   */
+  static demolishRoom(
+    state: FullGameState,
+    roomId: number
+  ): { state: FullGameState; success: boolean; error?: string; refund?: ReturnType<typeof demolishRefund> } {
+    const block = AnkicasterEngine.roomActionBlock(state, roomId, 'demolish');
+    if (block) return { state, success: false, error: block };
+    const next = structuredClone(state);
+    const room = next.rooms.find(r => r.id === roomId)!;
+    const def = ROOM_DEFINITIONS[room.defId];
+    const refund = demolishRefund(room);
+
+    next.mana += refund.mana;
+    for (const k of REFUND_MATERIALS) next.resources[k] += refund[k];
+
+    // Furniture -> inventory
+    next.furnitureInventory = { ...(next.furnitureInventory || {}) };
+    for (const f of room.furniture) {
+      if (!FURNITURE_DEFINITIONS[f.defId]) continue;
+      next.furnitureInventory[f.defId] = (next.furnitureInventory[f.defId] || 0) + 1;
+    }
+
+    // Undo renovation renown
+    next.renown = Math.max(0, next.renown - (room.renownGranted || 0));
+
+    next.rooms = next.rooms.filter(r => r.id !== roomId);
+
+    // Occupants: same-kind room if one exists, otherwise between rooms
+    const bedKinds = ['dormitory', 'grand_dormitory', 'faculty_quarters'];
+    const sameKind = (ids: string[]) => next.rooms.find(r => r.state === 'built' && ids.includes(r.defId));
+    let moved = 0;
+    for (const c of next.characters) {
+      if (c.bedRoomId === roomId) {
+        const kinds = c.status === 'student' ? ['dormitory', 'grand_dormitory'] : bedKinds.includes(room.defId) ? [room.defId, ...bedKinds] : bedKinds;
+        c.bedRoomId = sameKind(kinds)?.id;
+        moved++;
+      }
+      if (c.seatRoomId === roomId) { c.seatRoomId = sameKind([room.defId])?.id; moved++; }
+      if (c.workplaceRoomId === roomId) { c.workplaceRoomId = sameKind([room.defId])?.id; moved++; }
+    }
+    for (const cr of next.creatures) {
+      if (cr.roomId === roomId) { cr.roomId = sameKind([room.defId])?.id; moved++; }
+    }
+
+    const parts = REFUND_MATERIALS.filter(k => refund[k] > 0).map(k => `${refund[k]} ${k}`);
+    if (refund.mana > 0) parts.unshift(`${refund.mana} mana`);
+    next.notices.push({
+      id: `demolish-${roomId}-${Date.now()}`,
+      time: Date.now(),
+      type: 'construction',
+      text: `${refund.cancel ? 'Cancelled' : 'Demolished'} ${def?.name || 'room'}${parts.length ? ` (returned ${parts.join(', ')})` : ''}${moved ? '; occupants reassigned' : ''}.`
+    });
+    return { state: next, success: true, refund };
+  }
+
+  /**
+   * Fill fields that older saves do not have (appearance sub-fields, room spend records,
+   * furniture inventory). Never changes progress, mana or layout.
+   */
+  static normalizeLoadedState<T extends Partial<FullGameState>>(saved: T): T {
+    if (!saved || typeof saved !== 'object') return saved;
+    const out: any = { ...saved };
+    if (out.wizard && out.wizard.appearance) {
+      out.wizard = { ...out.wizard, appearance: normalizeAppearance(out.wizard.appearance) };
+    }
+    if (Array.isArray(out.rooms)) {
+      out.rooms = out.rooms.map((r: PlacedRoom) => (r && !r.spent ? { ...r, spent: defaultSpent(r) } : r));
+    }
+    if (out.furnitureInventory === undefined && out.rooms) out.furnitureInventory = {};
+    return out;
   }
 
   /**
@@ -1615,6 +1784,7 @@ export class AnkicasterEngine {
     next.mana -= upgradeCost;
     room.level = (room.level + 1) as 2 | 3;
     next.renown += 5;
+    room.renownGranted = (room.renownGranted || 0) + 5;
 
     next.notices.push({
       id: `upg-${roomId}-${room.level}`,
@@ -1652,6 +1822,11 @@ export class AnkicasterEngine {
       return { state, success: false, error: `No available slots in this room (${currentSlots}/${maxSlots} used).` };
     }
 
+    // A stored item (returned by demolition) is re-installed for free
+    const stored = next.furnitureInventory?.[furnitureDefId] || 0;
+    if (stored > 0) {
+      next.furnitureInventory = { ...next.furnitureInventory, [furnitureDefId]: stored - 1 };
+    } else {
     if (next.mana < fDef.cost.mana) {
       return { state, success: false, error: `Need ${fDef.cost.mana} Mana.` };
     }
@@ -1669,6 +1844,7 @@ export class AnkicasterEngine {
     if (fDef.cost.timber) next.resources.timber -= fDef.cost.timber;
     if (fDef.cost.stone) next.resources.stone -= fDef.cost.stone;
     if (fDef.cost.cloth) next.resources.cloth -= fDef.cost.cloth;
+    }
 
     room.furniture.push({
       id: Date.now(),

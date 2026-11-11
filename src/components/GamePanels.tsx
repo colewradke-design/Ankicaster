@@ -13,6 +13,8 @@
  * 8. RiftPanel: 5 Destinations, 3-Master Seal, Party Skill, Companions, Expedition Launch
  */
 
+import { roomLimitStatus } from '../utils/placement';
+import { WizardPortrait } from './WizardPortrait';
 import React, { useState } from 'react';
 import {
   FullGameState,
@@ -80,8 +82,8 @@ export const WizardStudyPanel: React.FC<{
     <div className="space-y-6">
       <div className="flex items-center justify-between bg-slate-900/80 p-5 rounded-2xl border border-amber-900/30 shadow-lg">
         <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-full bg-gradient-to-tr from-purple-800 to-amber-500 flex items-center justify-center text-2xl shadow-inner border-2 border-amber-300/50">
-            🧙‍♀️
+          <div className="w-14 h-14 rounded-full bg-gradient-to-tr from-purple-800 to-amber-500 flex items-center justify-center shadow-inner border-2 border-amber-300/50 overflow-hidden">
+            <WizardPortrait appearance={wizard.appearance} size={52} />
           </div>
           <div>
             <h3 className="text-base md:text-lg font-bold text-amber-200">
@@ -690,7 +692,8 @@ export const RecruitmentPanel: React.FC<{
 export const BuildMenuPanel: React.FC<{
   state: FullGameState;
   onPlaceRoom: (defId: string, area: 'castle' | 'grounds') => void;
-}> = ({ state, onPlaceRoom }) => {
+  onAutoPlace?: (defId: string) => void;
+}> = ({ state, onPlaceRoom, onAutoPlace }) => {
   const [category, setCategory] = useState<string>('all');
   const roomList = Object.values(ROOM_DEFINITIONS);
 
@@ -719,8 +722,16 @@ export const BuildMenuPanel: React.FC<{
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[520px] overflow-y-auto pr-1">
         {filtered.map(room => {
           const canAfford = state.mana >= room.cost.mana;
+          // Per-room limits come from the engine rules (content maxCount), sites included
+          const limit = roomLimitStatus(state.rooms, room.id);
+          const disabled = !canAfford || limit.capped;
           return (
-            <div key={room.id} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow">
+            <div
+              key={room.id}
+              data-build-card={room.id}
+              data-capped={limit.capped ? 'true' : undefined}
+              className={`bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow ${limit.capped ? 'opacity-50 grayscale' : ''}`}
+            >
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <span className="font-bold text-sm text-slate-100">{room.name}</span>
@@ -735,15 +746,31 @@ export const BuildMenuPanel: React.FC<{
                   {room.cost.cloth && ` · ${room.cost.cloth}C`}
                   {' · '}Build: {room.buildReviews} revs
                 </div>
+                {limit.capped && (
+                  <div className="text-xs text-amber-300/90 mb-2" data-testid="build-cap-reason">🔒 {limit.reason} ({limit.count}/{limit.max})</div>
+                )}
               </div>
 
-              <button
-                onClick={() => onPlaceRoom(room.id, room.area)}
-                disabled={!canAfford}
-                className="w-full py-2 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-200 border border-indigo-500/30 rounded-xl text-xs font-bold disabled:opacity-40 transition shadow"
-              >
-                Construct Plan
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => onPlaceRoom(room.id, room.area)}
+                  disabled={disabled}
+                  title={limit.capped ? limit.reason : !canAfford ? `Need ${room.cost.mana} Mana` : 'Choose where to build it on the map'}
+                  className="flex-1 py-2 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-200 border border-indigo-500/30 rounded-xl text-xs font-bold disabled:opacity-40 transition shadow"
+                >
+                  {limit.capped ? 'Limit reached' : 'Place…'}
+                </button>
+                {onAutoPlace && (
+                  <button
+                    onClick={() => onAutoPlace(room.id)}
+                    disabled={disabled}
+                    title="Place it in the first free valid spot"
+                    className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold disabled:opacity-40 transition"
+                  >
+                    Auto
+                  </button>
+                )}
+              </div>
             </div>
           );
         })}

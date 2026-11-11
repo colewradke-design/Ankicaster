@@ -22,6 +22,7 @@
 import { FullGameState, PlacedRoom, SchoolType } from '../../types/ankicaster';
 import { generateInitialCollection } from '../../data/mockCollection';
 import { POTION_RECIPES } from '../../data/content';
+import { normalizeAppearance, SKIN_TONES } from '../../utils/appearance';
 
 export interface HeadmasterChoices {
   name: string;
@@ -45,9 +46,9 @@ export const DEFAULT_HEADMASTER_CHOICES: HeadmasterChoices = {
   title: 'Wizard',
   pronouns: 'they/them',
   bodyShape: 1,
-  skin: 'tone1',
+  skin: SKIN_TONES[0],
   hair: 'short_messy',
-  hairColor: 'brown',
+  hairColor: '#4A2E1E',
   robeColor: '#4E8B3A', // Nature default
   hat: 'pointed',
   staff: 'oak',
@@ -202,7 +203,8 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
       knownSpells: [],
       spellCooldowns: {},
       queuedSessions: [],
-      appearance: choices.skin || choices.hair || choices.robeColor || choices.hat || choices.staff ? {
+      // The chosen look lives on the player's character and is drawn by the forge renderer
+      appearance: choices.skin || choices.hair || choices.hairColor || choices.robeColor || choices.hat || choices.staff ? normalizeAppearance({
         bodyShape: c.bodyShape,
         skin: c.skin,
         hair: c.hair,
@@ -210,7 +212,7 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
         robeColor: c.robeColor,
         hat: c.hat,
         staff: c.staff
-      } : undefined,
+      }) : undefined,
       foundingSchool: c.foundingSchool,
       foundedAt: new Date(now).toISOString()
     },

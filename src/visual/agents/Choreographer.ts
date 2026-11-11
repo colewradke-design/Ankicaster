@@ -21,6 +21,7 @@ import { FullGameState, Character } from '../../types/ankicaster';
 import { NavGraph, NavNode } from '../layout/navGraph';
 import { roomToWorldBox } from '../layout/gridToWorld';
 import { ReachabilityInfo } from '../../utils/reachability';
+import { normalizeAppearance } from '../../utils/appearance';
 
 export type AgentAnimation =
   | 'idle'
@@ -58,6 +59,7 @@ export interface VisualAgent {
   hair: string;
   hairColor: string;
   skin: string;
+  staff?: string;
   name: string;
   unreachableWarning?: boolean;
 }
@@ -84,6 +86,37 @@ export class Choreographer {
   updateNavGraph(navGraph: NavGraph, groundY: number) {
     this.navGraph = navGraph;
     this.groundY = groundY;
+  }
+
+  /** Last seen position of each room, to detect Move / Demolish. */
+  private roomSignatures = new Map<number, string>();
+
+  private resettleAgentsForLayoutChange(state: FullGameState) {
+    const sigs = new Map<number, string>();
+    for (const r of state.rooms) sigs.set(r.id, `${r.area}:${r.x}:${r.y}`);
+    const changed = new Set<number>();
+    for (const [id, sig] of this.roomSignatures) {
+      if (sigs.get(id) !== sig) changed.add(id);
+    }
+    this.roomSignatures = sigs;
+    if (changed.size === 0) return;
+    const fallback = state.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || state.rooms[0];
+    for (const agent of this.agents.values()) {
+      const hit = (agent.currentRoomId !== undefined && changed.has(agent.currentRoomId)) ||
+        (agent.targetRoomId !== undefined && changed.has(agent.targetRoomId));
+      if (!hit) continue;
+      const room = state.rooms.find(r => r.id === agent.currentRoomId) || fallback;
+      agent.path = [];
+      agent.pathIndex = 0;
+      agent.freeTimeTargetRoomId = undefined;
+      if (!room) continue;
+      const box = roomToWorldBox(room, this.groundY);
+      agent.x = agent.targetX = this.getRoomSlotX(room.id, agent.id, state);
+      agent.y = agent.targetY = box.floorLineY;
+      agent.currentFloor = agent.targetFloor = room.area === 'castle' ? room.y : 0;
+      agent.currentRoomId = agent.targetRoomId = room.id;
+      this.setArrivedAnim(agent);
+    }
   }
 
   getRoomSlotX(roomId: number, agentId: string, state: FullGameState): number {
@@ -132,8 +165,7 @@ export class Choreographer {
         floor = studyRoom.y;
       }
 
-      const wizRobe = state.wizard.appearance?.robeColor || '#6B4FBB';
-      const wizHat = state.wizard.appearance?.hat || 'pointed';
+      const look = normalizeAppearance(state.wizard.appearance);
 
       this.agents.set('wizard', {
         id: 'wizard',
@@ -153,14 +185,31 @@ export class Choreographer {
         targetRoomId: studyRoom?.id,
         path: [],
         pathIndex: 0,
-        robeColor: wizRobe,
-        hat: wizHat,
-        hair: state.wizard.appearance?.hair || 'short_messy',
-        hairColor: state.wizard.appearance?.hairColor || 'brown',
-        skin: state.wizard.appearance?.skin || 'tone1',
+        robeColor: look.robeColor,
+        hat: look.hat,
+        hair: look.hair,
+        hairColor: look.hairColor,
+        skin: look.skin,
+        staff: look.staff,
         name: `${state.wizard.title} ${state.wizard.name}`
       });
     }
+
+    // Keep the wizard's look in sync with the saved appearance (creation / "Choose your look")
+    {
+      const wiz = this.agents.get('wizard')!;
+      const look = normalizeAppearance(state.wizard.appearance);
+      wiz.robeColor = look.robeColor;
+      wiz.hat = look.hat;
+      wiz.hair = look.hair;
+      wiz.hairColor = look.hairColor;
+      wiz.skin = look.skin;
+      wiz.staff = look.staff;
+      wiz.name = `${state.wizard.title} ${state.wizard.name}`;
+    }
+
+    // Rooms that moved or were demolished: put their agents back on a valid floor
+    this.resettleAgentsForLayoutChange(state);
 
     // 2. Sync Characters
     const activeCharIds = new Set<string>();

@@ -9,7 +9,7 @@
     "build:addon": "NODE_ENV=production vite build --mode production && rm -rf addon/web && mkdir -p addon/web && cp -r dist/* addon/web/ && rm -rf addon/web/assets/aistudio",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "test": "tsx --test tests/engine.test.ts tests/ui-reachability.test.tsx",
+    "test": "tsx --test tests/engine.test.ts tests/ui-reachability.test.tsx tests/building.test.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

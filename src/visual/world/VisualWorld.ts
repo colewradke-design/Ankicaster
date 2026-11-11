@@ -28,8 +28,23 @@ import {
   getTotalWorldWidth,
   castleCellToWorldX,
   CELL_W,
-  CELL_H
+  CELL_H,
+  GROUNDS_PLOTS_PER_SIDE
 } from '../layout/gridToWorld';
+import { unlockedPlotIndices } from '../../utils/groundsLayout';
+
+export interface GhostFootprint {
+  area: 'castle' | 'grounds';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  valid: boolean;
+  plotCount: number;
+  castleFloors: number;
+  /** Room being moved (its own cells count as free). */
+  ignoreRoomId?: number;
+}
 
 export class VisualWorld {
   rootContainer = new Container();
@@ -42,6 +57,9 @@ export class VisualWorld {
   roofsGraphics = new Graphics();
   overlayGraphics = new Graphics();
   overlayContainer = new Container();
+  /** Build / Move placement ghost (world space, above rooms). */
+  ghostGraphics = new Graphics();
+  ghost: GhostFootprint | null = null;
 
   camera: Camera;
   navGraph: NavGraph;
@@ -75,6 +93,7 @@ export class VisualWorld {
     this.worldContainer.addChild(this.castleGraphics);
     this.worldContainer.addChild(this.agentsGraphics);
     this.worldContainer.addChild(this.roofsGraphics);
+    this.worldContainer.addChild(this.ghostGraphics);
     // Labels sit above the world but are NOT inside the zoomed worldContainer
     this.rootContainer.addChildAt(this.roomLabelsContainer, 1);
     this.overlayContainer.addChild(this.overlayGraphics);
@@ -138,12 +157,24 @@ export class VisualWorld {
     this.totalWorldWidth = getTotalWorldWidth(8);
 
     // Compute reachability
-    this.reachability = computeReachability(state.rooms);
+    const engineReach = computeReachability(state.rooms);
+    this.reachability = engineReach;
+    // Construction sites are not walkable yet, so they are never "reachable" in the engine graph.
+    // For the map badge, judge a site by whether it will be connected once built.
+    const sites = state.rooms.filter(r => r.state === 'site');
+    if (sites.length) {
+      const asBuilt = computeReachability(state.rooms.map(r => (r.state === 'site' ? { ...r, state: 'built' as const } : r)));
+      this.reachability = new Map(this.reachability);
+      for (const site of sites) {
+        const info = asBuilt.get(site.id);
+        if (info) this.reachability.set(site.id, info);
+      }
+    }
 
     // Update nav graph & choreographer
     this.navGraph.build(state.rooms, this.groundY);
     this.choreographer.updateNavGraph(this.navGraph, this.groundY);
-    this.choreographer.syncState(state, this.reachability);
+    this.choreographer.syncState(state, engineReach);
 
     // Draw static world layers
     this.renderWorldLayers();
@@ -227,7 +258,8 @@ export class VisualWorld {
 
     // 3. Roofs on top of each castle column
     this.roofsGraphics.clear();
-    const castleRooms = rooms.filter(r => r.area === 'castle' && r.state === 'built');
+    // Sites count too, so a roof never cuts through scaffolding placed above a room
+    const castleRooms = rooms.filter(r => r.area === 'castle');
     for (let col = 0; col < 8; col++) {
       const colRooms = castleRooms.filter(r => r.x <= col && r.x + r.w > col);
       if (colRooms.length > 0) {
@@ -244,6 +276,67 @@ export class VisualWorld {
 
     // 4. Overlays & Unreachable Badges
     this.renderOverlays();
+    this.renderGhost();
+  }
+
+  /** Show (or clear) the placement ghost. */
+  setGhost(ghost: GhostFootprint | null) {
+    const same = ghost && this.ghost && ghost.area === this.ghost.area && ghost.x === this.ghost.x &&
+      ghost.y === this.ghost.y && ghost.w === this.ghost.w && ghost.h === this.ghost.h &&
+      ghost.valid === this.ghost.valid && ghost.plotCount === this.ghost.plotCount;
+    if (same || (!ghost && !this.ghost)) return;
+    this.ghost = ghost;
+    this.renderGhost();
+  }
+
+  renderGhost() {
+    this.ghostGraphics.clear();
+    const ghost = this.ghost;
+    if (!ghost || !this.state) return;
+    // Faint blueprint outline of free cells for the area being placed
+    const cells: Array<{ left: number; top: number; width: number; height: number }> = [];
+    if (ghost.area === 'castle') {
+      for (let fy = 0; fy < ghost.castleFloors; fy++) {
+        for (let cx = 0; cx < 8; cx++) {
+          const taken = this.state.rooms.some(r => r.area === 'castle' && r.id !== ghost.ignoreRoomId && cx >= r.x && cx < r.x + r.w && fy >= r.y && fy < r.y + r.h);
+          if (!taken) cells.push(roomToWorldBox({ x: cx, y: fy, w: 1, h: 1, area: 'castle' }, this.groundY));
+        }
+      }
+    } else {
+      for (const p of unlockedPlotIndices(ghost.plotCount)) {
+        const taken = this.state.rooms.some(r => r.area === 'grounds' && r.id !== ghost.ignoreRoomId && p >= r.x && p < r.x + r.w);
+        if (!taken) cells.push(roomToWorldBox({ x: p, y: 0, w: 1, h: 1, area: 'grounds' }, this.groundY));
+      }
+    }
+    ForgeRenderer.drawBuildGrid(this.ghostGraphics, cells);
+    ForgeRenderer.drawGhost(this.ghostGraphics, roomToWorldBox(ghost, this.groundY), ghost.valid);
+  }
+
+  /** Screen point -> world point. */
+  screenToWorld(screenX: number, screenY: number) {
+    return {
+      x: (screenX - this.worldContainer.x) / this.camera.zoom,
+      y: (screenY - this.worldContainer.y) / this.camera.zoom
+    };
+  }
+
+  /**
+   * Grid anchor (x, y) for a w x h footprint centred under the cursor, snapped to cells
+   * (castle: column/floor; grounds: plot index, y = 0).
+   */
+  gridAnchorAt(screenX: number, screenY: number, area: 'castle' | 'grounds', w: number, h: number) {
+    const p = this.screenToWorld(screenX, screenY);
+    if (area === 'castle') {
+      const col = (p.x - castleCellToWorldX(0)) / CELL_W;
+      const floor = (this.groundY - p.y) / CELL_H;
+      return { x: Math.round(col - w / 2), y: Math.max(0, Math.round(floor - h / 2)) };
+    }
+    const leftEnd = GROUNDS_PLOTS_PER_SIDE * CELL_W;
+    const rightStart = castleCellToWorldX(8);
+    let plot: number;
+    if (p.x < leftEnd + (rightStart - leftEnd) / 2) plot = Math.min(p.x, leftEnd - 1) / CELL_W;
+    else plot = 9 + Math.max(0, p.x - rightStart) / CELL_W;
+    return { x: Math.round(plot - w / 2), y: 0 };
   }
 
   renderOverlays() {

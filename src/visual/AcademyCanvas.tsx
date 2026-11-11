@@ -15,20 +15,53 @@ import { Application } from 'pixi.js';
 import { FullGameState, PlacedRoom } from '../types/ankicaster';
 import { VisualWorld } from './world/VisualWorld';
 import { castleCellToWorldX } from './layout/gridToWorld';
-import { ZoomIn, ZoomOut, Maximize2, Home, Compass } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize2, Home, Move, Hammer, X as XIcon, Wand2 } from 'lucide-react';
+import { ROOM_DEFINITIONS } from '../data/content';
+import { AnkicasterEngine } from '../utils/engine';
+import { validatePlacement, roomLimitStatus, getGridSize, findAutoPlacement, PlacementCheck } from '../utils/placement';
+
+/** Build a new room, or move an existing one, with the ghost placement tool. */
+export type PlacementMode = { kind: 'build'; defId: string } | { kind: 'move'; roomId: number };
 
 interface AcademyCanvasProps {
   state: FullGameState;
   onSelectRoom: (room: PlacedRoom) => void;
   selectedRoomId?: number;
   onResolveHazard?: (roomId: number, method: 'warder' | 'spell') => void;
+  placement?: PlacementMode | null;
+  onPlacementConfirm?: (x: number, y: number) => void;
+  onPlacementCancel?: () => void;
+  onPlacementAuto?: () => void;
+}
+
+/** Validate a placement candidate exactly as the engine will (the engine re-checks on confirm). */
+export function checkPlacementCandidate(state: FullGameState, mode: PlacementMode, x: number, y: number): PlacementCheck {
+  if (mode.kind === 'move') return AnkicasterEngine.validateMove(state, mode.roomId, x, y);
+  const def = ROOM_DEFINITIONS[mode.defId];
+  if (!def) return { valid: false, errors: ['Unknown room'], warnings: [] };
+  const limit = roomLimitStatus(state.rooms, mode.defId);
+  if (limit.capped) return { valid: false, errors: [limit.reason || 'Limit reached'], warnings: [] };
+  return validatePlacement(state, mode.defId, def.area, x, y);
+}
+
+function placementFootprint(state: FullGameState, mode: PlacementMode) {
+  if (mode.kind === 'move') {
+    const r = state.rooms.find(rr => rr.id === mode.roomId);
+    return r ? { area: r.area, w: r.w, h: r.h, defId: r.defId } : null;
+  }
+  const def = ROOM_DEFINITIONS[mode.defId];
+  return def ? { area: def.area, w: def.size[0], h: def.size[1], defId: def.id } : null;
 }
 
 export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   state,
   onSelectRoom,
   selectedRoomId,
-  onResolveHazard
+  onResolveHazard,
+  placement,
+  onPlacementConfirm,
+  onPlacementCancel,
+  onPlacementAuto
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<Application | null>(null);
@@ -39,6 +72,10 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   const totalDragDistRef = useRef(0);
 
   const [currentZoom, setCurrentZoom] = useState(2);
+  /** Current ghost candidate and its rule check (drives the banner text). */
+  const [candidate, setCandidate] = useState<{ x: number; y: number; check: PlacementCheck } | null>(null);
+  const placementRef = useRef<PlacementMode | null | undefined>(placement);
+  placementRef.current = placement;
 
   // Latest props for the async Pixi init (the add-on hydrates the save while Pixi is starting)
   const latestRef = useRef({ state, selectedRoomId });
@@ -145,6 +182,64 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     }
   }, [state, selectedRoomId]);
 
+  // Placement mode: seed the ghost (auto spot for Build), clear it when the mode ends
+  const placementKey = placement ? (placement.kind === 'build' ? `b:${placement.defId}` : `m:${placement.roomId}`) : '';
+  useEffect(() => {
+    const world = worldRef.current;
+    if (!placement) {
+      setCandidate(null);
+      world?.setGhost(null);
+      return;
+    }
+    if (placement.kind === 'build') {
+      const spot = findAutoPlacement(state, placement.defId);
+      if (spot) showCandidate(spot.x, spot.y);
+      else setCandidate(null);
+    } else {
+      setCandidate(null);
+      world?.setGhost(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placementKey]);
+
+  // Esc cancels placement
+  useEffect(() => {
+    if (!placement) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); onPlacementCancel?.(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [placementKey, onPlacementCancel]);
+
+  function showCandidate(x: number, y: number) {
+    const mode = placementRef.current;
+    const world = worldRef.current;
+    const st = latestRef.current.state;
+    if (!mode) return;
+    const fp = placementFootprint(st, mode);
+    if (!fp) return;
+    const check = checkPlacementCandidate(st, mode, x, y);
+    const grid = getGridSize(st);
+    setCandidate(prev => (prev && prev.x === x && prev.y === y && prev.check.valid === check.valid && prev.check.errors[0] === check.errors[0] && prev.check.warnings[0] === check.warnings[0] ? prev : { x, y, check }));
+    world?.setGhost({
+      area: fp.area, x, y: fp.area === 'grounds' ? 0 : y, w: fp.w, h: fp.h, valid: check.valid,
+      plotCount: grid.plotCount, castleFloors: grid.castleFloors,
+      ignoreRoomId: mode.kind === 'move' ? mode.roomId : undefined
+    });
+  }
+
+  function candidateAtPointer(clientX: number, clientY: number) {
+    const container = containerRef.current;
+    const world = worldRef.current;
+    const mode = placementRef.current;
+    if (!container || !world || !mode) return null;
+    const fp = placementFootprint(latestRef.current.state, mode);
+    if (!fp) return null;
+    const rect = container.getBoundingClientRect();
+    return world.gridAnchorAt(clientX - rect.left, clientY - rect.top, fp.area, fp.w, fp.h);
+  }
+
   // Window resize observer
   useEffect(() => {
     const container = containerRef.current;
@@ -168,6 +263,10 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
+    if (placementRef.current && !(isDraggingRef.current && totalDragDistRef.current > 6)) {
+      const c = candidateAtPointer(e.clientX, e.clientY);
+      if (c) showCandidate(c.x, c.y);
+    }
     if (!isDraggingRef.current || !worldRef.current) return;
     const dx = e.clientX - lastMousePosRef.current.x;
     const dy = e.clientY - lastMousePosRef.current.y;
@@ -190,6 +289,16 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     const container = containerRef.current;
     const world = worldRef.current;
     if (!container || !world) return;
+
+    // Placement mode: a click confirms a valid ghost (an invalid one just explains why)
+    if (placementRef.current) {
+      const c = candidateAtPointer(e.clientX, e.clientY);
+      if (!c) return;
+      showCandidate(c.x, c.y);
+      const check = checkPlacementCandidate(latestRef.current.state, placementRef.current, c.x, c.y);
+      if (check.valid) onPlacementConfirm?.(c.x, c.y);
+      return;
+    }
 
     const rect = container.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
@@ -253,8 +362,52 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onClick={handleClick}
+        onContextMenu={e => {
+          if (placementRef.current) { e.preventDefault(); onPlacementCancel?.(); }
+        }}
         onWheel={handleWheel}
+        data-placing={placement ? placement.kind : undefined}
+        style={placement ? { cursor: 'crosshair' } : undefined}
       />
+
+      {/* Placement banner: what is being placed, whether the spot is valid, how to confirm/cancel */}
+      {placement && (() => {
+        const fp = placementFootprint(state, placement);
+        const def = fp ? ROOM_DEFINITIONS[fp.defId] : undefined;
+        const ok = !!candidate?.check.valid;
+        const msg = !candidate
+          ? (placement.kind === 'move' ? 'Point at a new spot' : 'No free valid space: move or demolish something first')
+          : ok
+            ? (candidate.check.warnings[0] || 'Valid spot')
+            : candidate.check.errors[0];
+        return (
+          <div
+            data-testid="placement-banner"
+            data-valid={ok ? 'true' : 'false'}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-slate-900/95 border border-amber-500/40 rounded-xl px-4 py-2.5 shadow-2xl text-[13px] max-w-[92%]"
+          >
+            {placement.kind === 'move' ? <Move className="w-4 h-4 text-amber-300 shrink-0" /> : <Hammer className="w-4 h-4 text-amber-300 shrink-0" />}
+            <div className="min-w-0">
+              <div className="font-bold text-amber-200">
+                {placement.kind === 'move' ? 'Moving' : 'Placing'} {def?.name}
+                {placement.kind === 'build' && def ? <span className="text-slate-400 font-normal"> · {def.cost.mana}m · {def.size.join('×')}</span> : null}
+              </div>
+              <div className={ok ? (candidate?.check.warnings.length ? 'text-amber-300' : 'text-emerald-300') : 'text-rose-300'} data-testid="placement-status">
+                {ok ? '✓ ' : '✕ '}{msg}
+              </div>
+              <div className="text-slate-500 text-[11px]">Click to confirm · Esc or right-click to cancel · drag to pan</div>
+            </div>
+            {placement.kind === 'build' && onPlacementAuto && (
+              <button onClick={onPlacementAuto} className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-700 text-slate-200 hover:bg-slate-800" title="Let the engine pick the first free valid spot">
+                <Wand2 className="w-3.5 h-3.5" /> Auto
+              </button>
+            )}
+            <button onClick={() => onPlacementCancel?.()} className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800" aria-label="Cancel placement">
+              <XIcon className="w-3.5 h-3.5" /> Cancel
+            </button>
+          </div>
+        );
+      })()}
 
       {/* Floating Canvas Navigation Toolbar */}
       <div className="absolute top-4 right-4 z-20 flex items-center gap-1.5 bg-slate-900/90 backdrop-blur-md p-1.5 rounded-xl border border-amber-500/30 shadow-lg text-slate-200">

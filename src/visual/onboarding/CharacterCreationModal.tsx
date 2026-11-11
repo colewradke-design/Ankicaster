@@ -12,6 +12,8 @@ import React, { useState } from 'react';
 import { SchoolType } from '../../types/ankicaster';
 import { HeadmasterChoices, DEFAULT_HEADMASTER_CHOICES } from './freshStart';
 import { PALETTE } from '../sprites/forge/palettes';
+import { HATS, STAFFS, SKIN_TONES, HAIR_COLOURS, normalizeAppearance } from '../../utils/appearance';
+import { WizardPortrait } from '../../components/WizardPortrait';
 import { Sparkles, Check, Wand2, BookOpen, ShieldCheck } from 'lucide-react';
 
 interface CharacterCreationModalProps {
@@ -32,10 +34,14 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
   // Step 0 welcome page for fresh saves; existing saves go straight to creation/look customization
   const [step, setStep] = useState<'welcome' | 'create'>(isExistingSave ? 'create' : 'welcome');
 
-  const [choices, setChoices] = useState<HeadmasterChoices>({
-    ...DEFAULT_HEADMASTER_CHOICES,
-    ...initialValues
+  const [choices, setChoices] = useState<HeadmasterChoices>(() => {
+    const merged = { ...DEFAULT_HEADMASTER_CHOICES, ...initialValues } as HeadmasterChoices;
+    // Older saves may hold tokens ('tone1', 'brown') or miss fields: show valid values
+    const look = normalizeAppearance({ ...merged, robeColor: merged.robeColor || DEFAULT_HEADMASTER_CHOICES.robeColor });
+    return { ...merged, ...look };
   });
+  // Picking a founding school suggests its robe colour only until the player picks a robe
+  const [robeTouched, setRobeTouched] = useState(false);
 
   if (!isOpen) return null;
 
@@ -49,7 +55,6 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
 
   const titles = ['Wizard', 'Witch', 'Mage', 'Sorcerer', 'Sorceress', 'Warlock', 'Magus'];
   const pronounList = ['they/them', 'she/her', 'he/him'];
-  const hats = ['pointed', 'wide', 'circlet', 'none'];
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -120,6 +125,20 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-6">
+              {/* Live preview: the same forge paper doll drawn on the castle */}
+              <div className="flex items-center gap-4 bg-slate-950/70 border border-slate-800 rounded-2xl p-3" data-testid="look-preview">
+                <div className="rounded-xl bg-gradient-to-b from-sky-300/30 to-slate-800 border border-slate-700 p-1">
+                  <WizardPortrait appearance={choices} size={112} title="Preview" />
+                </div>
+                <div className="text-sm">
+                  <div className="font-bold text-amber-200">{choices.title} {choices.name || '…'}</div>
+                  <div className="text-slate-400 text-xs mt-1">
+                    {HATS.find(h => h.id === choices.hat)?.name} · {PALETTE.robes.find(r => r.color.toUpperCase() === (choices.robeColor || '').toUpperCase())?.name || 'Custom'} robe · {STAFFS.find(st => st.id === choices.staff)?.name} staff
+                  </div>
+                  <div className="text-slate-500 text-[11px] mt-1">This is how you appear in the castle.</div>
+                </div>
+              </div>
+
               {/* Name & Title */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -186,37 +205,101 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
                     <button
                       type="button"
                       key={r.color}
-                      onClick={() => setChoices(prev => ({ ...prev, robeColor: r.color }))}
+                      onClick={() => { setRobeTouched(true); setChoices(prev => ({ ...prev, robeColor: r.color })); }}
                       style={{ backgroundColor: r.color }}
                       title={r.name}
                       className={`h-9 rounded-xl flex items-center justify-center border-2 transition ${
-                        choices.robeColor === r.color ? 'border-white scale-105 shadow-md' : 'border-transparent opacity-80 hover:opacity-100'
+                        (choices.robeColor || '').toUpperCase() === r.color.toUpperCase() ? 'border-white scale-105 shadow-md' : 'border-transparent opacity-80 hover:opacity-100'
                       }`}
                     >
-                      {choices.robeColor === r.color && <Check className="w-4 h-4 text-white drop-shadow" />}
+                      {(choices.robeColor || '').toUpperCase() === r.color.toUpperCase() && <Check className="w-4 h-4 text-white drop-shadow" />}
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* Hat Choice */}
+              {/* Hat Choice (8, including no hat) */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
                   Headwear
                 </label>
                 <div className="grid grid-cols-4 gap-2">
-                  {hats.map(h => (
+                  {HATS.map(h => (
                     <button
                       type="button"
-                      key={h}
-                      onClick={() => setChoices(prev => ({ ...prev, hat: h }))}
-                      className={`py-2 rounded-xl text-xs font-semibold capitalize border transition ${
-                        choices.hat === h
+                      key={h.id}
+                      data-hat={h.id}
+                      aria-pressed={choices.hat === h.id}
+                      onClick={() => setChoices(prev => ({ ...prev, hat: h.id }))}
+                      className={`py-2 rounded-xl text-xs font-semibold border transition ${
+                        choices.hat === h.id
                           ? 'bg-amber-500/20 border-amber-400 text-amber-300'
                           : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
                       }`}
                     >
-                      {h}
+                      {h.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Skin tone (8) and hair colour (10) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Skin Tone</label>
+                  <div className="grid grid-cols-8 gap-1.5">
+                    {SKIN_TONES.map((t, i) => (
+                      <button
+                        type="button"
+                        key={t}
+                        title={`Tone ${i + 1}`}
+                        aria-label={`Skin tone ${i + 1}`}
+                        aria-pressed={choices.skin === t}
+                        onClick={() => setChoices(prev => ({ ...prev, skin: t }))}
+                        style={{ backgroundColor: t }}
+                        className={`h-7 rounded-lg border-2 transition ${choices.skin === t ? 'border-white scale-105' : 'border-transparent opacity-80 hover:opacity-100'}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Hair Colour</label>
+                  <div className="grid grid-cols-10 gap-1.5">
+                    {HAIR_COLOURS.map(h => (
+                      <button
+                        type="button"
+                        key={h.id}
+                        title={h.name}
+                        aria-label={`Hair ${h.name}`}
+                        aria-pressed={choices.hairColor === h.color}
+                        onClick={() => setChoices(prev => ({ ...prev, hairColor: h.color }))}
+                        style={{ backgroundColor: h.color }}
+                        className={`h-7 rounded-lg border-2 transition ${choices.hairColor === h.color ? 'border-white scale-105' : 'border-transparent opacity-80 hover:opacity-100'}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Staff (6) */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Staff</label>
+                <div className="grid grid-cols-6 gap-2">
+                  {STAFFS.map(st => (
+                    <button
+                      type="button"
+                      key={st.id}
+                      data-staff={st.id}
+                      aria-pressed={choices.staff === st.id}
+                      onClick={() => setChoices(prev => ({ ...prev, staff: st.id }))}
+                      className={`py-2 rounded-xl text-xs font-semibold border transition flex items-center justify-center gap-1 ${
+                        choices.staff === st.id
+                          ? 'bg-amber-500/20 border-amber-400 text-amber-300'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                      }`}
+                    >
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: st.tip }} />
+                      {st.name}
                     </button>
                   ))}
                 </div>
@@ -233,7 +316,7 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
                       <button
                         type="button"
                         key={s.id}
-                        onClick={() => setChoices(prev => ({ ...prev, foundingSchool: s.id, robeColor: s.color }))}
+                        onClick={() => setChoices(prev => ({ ...prev, foundingSchool: s.id, robeColor: robeTouched ? prev.robeColor : s.color }))}
                         className={`p-3 text-left rounded-xl border transition flex flex-col justify-between ${
                           choices.foundingSchool === s.id
                             ? 'bg-slate-800 border-amber-400 shadow-md ring-1 ring-amber-400/40'

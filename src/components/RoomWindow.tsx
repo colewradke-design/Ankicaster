@@ -14,8 +14,10 @@
 
 import React from 'react';
 import {
-  X, AlertTriangle, Sparkles, Droplets, Shield, Gauge, ChevronRight, Info, Hammer, Users, Briefcase, Award
+  X, AlertTriangle, Sparkles, Droplets, Shield, Gauge, ChevronRight, Info, Hammer, Users, Briefcase, Award, Move, Trash2
 } from 'lucide-react';
+import { AnkicasterEngine } from '../utils/engine';
+import { WizardPortrait } from './WizardPortrait';
 import { FullGameState, PlacedRoom } from '../types/ankicaster';
 import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS, SPELL_DEFINITIONS } from '../data/content';
 import { calculateRoomQuality, calculateRoomEfficiency, calculateFacultyLimit } from '../utils/formulas';
@@ -49,7 +51,7 @@ export function facultyLimitFor(state: FullGameState) {
 }
 
 /** Small room-specific summary line (status only, no actions). */
-const RoomSummary: React.FC<{ state: FullGameState; room: PlacedRoom }> = ({ state, room }) => {
+const RoomSummary: React.FC<{ state: FullGameState; room: PlacedRoom; onChangeLook?: () => void }> = ({ state, room, onChangeLook }) => {
   const id = room.defId;
   if (id === 'wizard_study') {
     const s = state.wizard.activeSession;
@@ -57,6 +59,20 @@ const RoomSummary: React.FC<{ state: FullGameState; room: PlacedRoom }> = ({ sta
     const total = Object.values(state.wizard.levels).reduce((a, b) => a + b, 0);
     return (
       <div className="bg-purple-950/40 border border-purple-500/30 rounded-xl p-3 space-y-2" data-testid="study-summary">
+        <div className="flex items-center gap-3">
+          <div className="rounded-lg bg-gradient-to-b from-sky-300/25 to-slate-800 border border-purple-500/30">
+            <WizardPortrait appearance={state.wizard.appearance} size={48} title={`${state.wizard.title} ${state.wizard.name}`} />
+          </div>
+          <div className="flex-1 min-w-0 text-[13px]">
+            <div className="font-bold text-amber-200 truncate">{state.wizard.title} {state.wizard.name}</div>
+            <div className="text-slate-400 text-[12px]">Headmaster of {state.wizard.academyName}</div>
+          </div>
+          {onChangeLook && (
+            <button onClick={onChangeLook} className="shrink-0 px-2.5 py-1 min-h-[28px] rounded-lg border border-purple-500/40 text-purple-200 hover:bg-purple-900/40 text-[12px] font-bold" data-testid="change-look">
+              Change look
+            </button>
+          )}
+        </div>
         <div className="flex items-center justify-between text-[13px]">
           <span className="font-bold text-purple-200 capitalize flex items-center gap-1.5">
             <Sparkles className="w-4 h-4 text-purple-400" />
@@ -111,13 +127,22 @@ export interface RoomWindowProps {
   onUpgrade: (roomId: number) => void;
   onAddFurniture: (roomId: number, furnitureDefId: string) => void;
   onRemoveFurniture: (roomId: number, furnitureId: number) => void;
+  /** Enter Move mode (ghost placement) for this room. */
+  onMove?: (roomId: number) => void;
+  /** Ask to demolish (opens the confirm dialog). */
+  onDemolish?: (roomId: number) => void;
+  /** Wizard's Study: reopen "Choose your look". */
+  onChangeLook?: () => void;
   /** For tests/screenshots: render the details section expanded. */
   detailsOpen?: boolean;
 }
 
 export const RoomWindow: React.FC<RoomWindowProps> = ({
-  state, room, onClose, onOpenScreen, onResolveHazard, onUpgrade, onAddFurniture, onRemoveFurniture, detailsOpen = false
+  state, room, onClose, onOpenScreen, onResolveHazard, onUpgrade, onAddFurniture, onRemoveFurniture, onMove, onDemolish, onChangeLook, detailsOpen = false
 }) => {
+  const moveBlock = AnkicasterEngine.roomActionBlock(state, room.id, 'move');
+  const demolishBlock = AnkicasterEngine.roomActionBlock(state, room.id, 'demolish');
+  const stored = state.furnitureInventory || {};
   const def = ROOM_DEFINITIONS[room.defId];
   const { q, tier } = calculateRoomQuality(room);
   const eff = calculateRoomEfficiency(room, true, true);
@@ -156,9 +181,35 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
               <span title={def.description} className="text-slate-500 hover:text-slate-300 cursor-help"><Info className="w-3.5 h-3.5" /></span>
             )}
           </div>
-          <button onClick={onClose} aria-label="Close" className="p-1.5 min-w-[32px] min-h-[32px] text-slate-400 hover:text-slate-100 rounded-lg hover:bg-slate-800">
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {onMove && (
+              <button
+                onClick={() => !moveBlock && onMove(room.id)}
+                disabled={!!moveBlock}
+                aria-label="Move room"
+                data-action="move"
+                title={moveBlock ? `Can't move: ${moveBlock}` : 'Move this room (keeps level, furniture and progress)'}
+                className="p-1.5 min-w-[32px] min-h-[32px] text-slate-300 hover:text-amber-200 rounded-lg hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent"
+              >
+                <Move className="w-4 h-4" />
+              </button>
+            )}
+            {onDemolish && (
+              <button
+                onClick={() => !demolishBlock && onDemolish(room.id)}
+                disabled={!!demolishBlock}
+                aria-label={isSite ? 'Cancel construction' : 'Demolish room'}
+                data-action="demolish"
+                title={demolishBlock ? `Can't demolish: ${demolishBlock}` : isSite ? 'Cancel or demolish this construction site' : 'Demolish this room'}
+                className="p-1.5 min-w-[32px] min-h-[32px] text-slate-300 hover:text-rose-300 rounded-lg hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
+            <button onClick={onClose} aria-label="Close" className="p-1.5 min-w-[32px] min-h-[32px] text-slate-400 hover:text-slate-100 rounded-lg hover:bg-slate-800">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         <div className="p-5 space-y-4">
@@ -205,7 +256,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
             </div>
           )}
 
-          <RoomSummary state={state} room={room} />
+          <RoomSummary state={state} room={room} onChangeLook={onChangeLook} />
 
           {/* 4. Primary actions */}
           {primary.length > 0 && (
@@ -248,6 +299,39 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                       <ScreenIcon id={id} /> {SCREEN_DEFS[id].label}
                     </button>
                   ))}
+                </div>
+              )}
+
+              {(onMove || onDemolish) && (
+                <div className="flex items-center justify-between gap-2" data-testid="room-layout-actions">
+                  <span className="text-slate-300">Layout</span>
+                  <div className="flex gap-2">
+                    {onMove && (
+                      <button
+                        onClick={() => !moveBlock && onMove(room.id)}
+                        disabled={!!moveBlock}
+                        title={moveBlock ? `Can't move: ${moveBlock}` : 'Pick a new spot on the map'}
+                        className="flex items-center gap-1 px-3 py-1.5 min-h-[32px] rounded-lg border border-slate-700 text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+                      >
+                        <Move className="w-3.5 h-3.5" /> Move
+                      </button>
+                    )}
+                    {onDemolish && (
+                      <button
+                        onClick={() => !demolishBlock && onDemolish(room.id)}
+                        disabled={!!demolishBlock}
+                        title={demolishBlock ? `Can't demolish: ${demolishBlock}` : 'Returns 50% of materials, no mana (cancelling a site with no progress refunds everything)'}
+                        className="flex items-center gap-1 px-3 py-1.5 min-h-[32px] rounded-lg border border-rose-800/60 text-rose-300 hover:bg-rose-950/40 disabled:opacity-40"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" /> {isSite ? 'Cancel site' : 'Demolish'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+              {(moveBlock || demolishBlock) && (onMove || onDemolish) && (
+                <div className="text-[12px] text-slate-500 -mt-1" data-testid="room-layout-block">
+                  {demolishBlock && moveBlock && demolishBlock === moveBlock ? demolishBlock : [moveBlock && `Move: ${moveBlock}`, demolishBlock && `Demolish: ${demolishBlock}`].filter(Boolean).join(' · ')}
                 </div>
               )}
 
@@ -300,7 +384,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                         className="shrink-0 px-2 py-1 min-h-[28px] bg-amber-500/15 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-md text-[12px] font-bold"
                         title={`Install ${fDef.name}`}
                       >
-                        {fDef.cost.mana}m{fDef.cost.timber ? ` · ${fDef.cost.timber}T` : ''}
+                        {(stored[fDef.id] || 0) > 0 ? `Stored ×${stored[fDef.id]}` : <>{fDef.cost.mana}m{fDef.cost.timber ? ` · ${fDef.cost.timber}T` : ''}</>}
                       </button>
                     </div>
                   ))}

@@ -20,7 +20,7 @@ import { createInitialGameState } from './data/initialState';
 import { createNewAcademy } from './visual/onboarding/freshStart';
 import { CharacterCreationModal } from './visual/onboarding/CharacterCreationModal';
 import { AnkicasterEngine } from './utils/engine';
-import { FURNITURE_DEFINITIONS } from './data/content';
+import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS } from './data/content';
 
 // Components
 import { TopBar } from './components/TopBar';
@@ -30,6 +30,9 @@ import { PonderOrbPicker, GrimoireBook } from './components/StudyModals';
 import { StoresPanel, JournalPanel, VisitorsPanel } from './components/AcademyPanels';
 import { ScreenId } from './ui/screens';
 import { CastleGrid } from './components/CastleGrid';
+import { DemolishConfirm } from './components/DemolishConfirm';
+import type { PlacementMode } from './visual/AcademyCanvas';
+import { normalizeAppearance } from './utils/appearance';
 import { FlashcardReviewer } from './components/FlashcardReviewer';
 import {
   RosterPanel,
@@ -52,7 +55,8 @@ export default function App() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        return JSON.parse(saved);
+        // Older saves: fill appearance / room spend / inventory defaults
+        return AnkicasterEngine.normalizeLoadedState(JSON.parse(saved));
       }
     } catch (e) {
       console.warn('Failed to load saved state:', e);
@@ -77,6 +81,8 @@ export default function App() {
   // Character Creation / "Choose Your Look" modal
   // Decided in an effect that runs after add-on hydration (after ankicasterLoadSavedGame)
   const [isCreationModalOpen, setIsCreationModalOpen] = useState<boolean>(false);
+  // Opened from "Change look": edit the look only, never re-found the Academy
+  const [lookOnly, setLookOnly] = useState(false);
 
   // Transient feedback toasts
   const [toasts, setToasts] = useState<Array<{ id: string; text: string; type: string }>>([]);
@@ -333,6 +339,7 @@ export default function App() {
     // 2. Load Saved Game State from Python (user_files/save.json)
     (window as any).ankicasterLoadSavedGame = (savedState: any) => {
       if (savedState && typeof savedState === 'object') {
+        savedState = AnkicasterEngine.normalizeLoadedState(savedState);
         setState(current => {
           // Merge saved state, preserving any existing allCards until snapshot arrives
           return {
@@ -565,17 +572,68 @@ export default function App() {
     }
   };
 
-  // Handler: Place Room
-  const handlePlaceRoom = (defId: string, area: 'castle' | 'grounds') => {
-    const res = AnkicasterEngine.placeRoom(state, defId, area);
+  // Build / Move placement mode (ghost on the map; the engine validates again on confirm)
+  const [placement, setPlacement] = useState<PlacementMode | null>(null);
+  const [demolishRoomId, setDemolishRoomId] = useState<number | null>(null);
+
+  const reportPlacement = (res: { success: boolean; error?: string; warnings?: string[] }, okText: string) => {
     if (!res.success) {
-      addToast(res.error || 'Cannot build room.', 'warning');
-    } else {
+      addToast(res.error || 'Cannot place room there.', 'warning');
+      return false;
+    }
+    addToast(res.warnings?.length ? `${okText} ${res.warnings[0]}` : okText, res.warnings?.length ? 'warning' : 'success');
+    return true;
+  };
+
+  // Handler: choose a room in Build -> enter placement mode
+  const handlePlaceRoom = (defId: string, _area?: 'castle' | 'grounds') => {
+    setOpenScreen(null);
+    setSelectedRoom(null);
+    setPlacement({ kind: 'build', defId });
+  };
+
+  // Handler: Build menu "Auto" -> engine finds a free valid spot (or reports no space)
+  const handleAutoPlaceRoom = (defId: string) => {
+    const res = AnkicasterEngine.placeRoom(state, defId);
+    if (reportPlacement(res, 'New room commissioned!')) {
       setState(res.state);
-      addToast(`New room commissioned!`, 'success');
       playChime('review');
       setOpenScreen(null);
+      setPlacement(null);
     }
+  };
+
+  const handlePlacementConfirm = (x: number, y: number) => {
+    if (!placement) return;
+    if (placement.kind === 'build') {
+      const def = ROOM_DEFINITIONS[placement.defId];
+      const res = AnkicasterEngine.placeRoom(state, placement.defId, def?.area, x, y);
+      if (reportPlacement(res, 'New room commissioned!')) {
+        setState(res.state);
+        playChime('review');
+        setPlacement(null);
+      }
+    } else {
+      const res = AnkicasterEngine.moveRoom(state, placement.roomId, x, y);
+      if (reportPlacement(res, 'Room moved.')) {
+        setState(res.state);
+        playChime('review');
+        setPlacement(null);
+      }
+    }
+  };
+
+  const handleDemolishConfirm = () => {
+    if (demolishRoomId === null) return;
+    const res = AnkicasterEngine.demolishRoom(state, demolishRoomId);
+    setDemolishRoomId(null);
+    if (!res.success) {
+      addToast(res.error || 'Cannot demolish.', 'warning');
+      return;
+    }
+    setState(res.state);
+    setSelectedRoom(null);
+    addToast(res.refund?.cancel ? 'Construction cancelled (full refund).' : 'Room demolished.', 'success');
   };
 
   // Handler: Draw Draft Deck
@@ -723,7 +781,7 @@ export default function App() {
       case 'admissions':
         return <RecruitmentPanel state={state} onEnroll={handleEnrollStudent} />;
       case 'build':
-        return <BuildMenuPanel state={state} onPlaceRoom={handlePlaceRoom} />;
+        return <BuildMenuPanel state={state} onPlaceRoom={handlePlaceRoom} onAutoPlace={handleAutoPlaceRoom} />;
       case 'draft':
         return <CardDraftPanel state={state} onDrawDeck={handleDrawDeck} />;
       case 'bestiary':
@@ -787,6 +845,10 @@ export default function App() {
           onSelectRoom={room => setSelectedRoom(room)}
           selectedRoomId={selectedRoom?.id}
           onResolveHazard={handleResolveHazard}
+          placement={placement}
+          onPlacementConfirm={handlePlacementConfirm}
+          onPlacementCancel={() => setPlacement(null)}
+          onPlacementAuto={placement?.kind === 'build' ? () => handleAutoPlaceRoom(placement.defId) : undefined}
         />
         {state.rooms.length === 0 && (
           <div className="mt-3 text-center text-[13px] text-slate-400">No rooms yet. Use <strong className="text-amber-300">Build</strong> to plan one.</div>
@@ -854,6 +916,12 @@ export default function App() {
               playChime('review');
             }
           }}
+          onMove={roomId => {
+            setSelectedRoom(null);
+            setPlacement({ kind: 'move', roomId });
+          }}
+          onDemolish={roomId => setDemolishRoomId(roomId)}
+          onChangeLook={() => { setSelectedRoom(null); setLookOnly(true); setIsCreationModalOpen(true); }}
           onRemoveFurniture={(roomId, fId) => {
             const res = AnkicasterEngine.removeFurniture(state, roomId, fId);
             if (res.success) setState(res.state);
@@ -1295,21 +1363,29 @@ export default function App() {
       )}
 
       {/* MODAL 8: CHARACTER CREATION / CHOOSE YOUR LOOK */}
-      <CharacterCreationModal
+      {demolishRoomId !== null && (
+        <DemolishConfirm
+          state={state}
+          roomId={demolishRoomId}
+          onCancel={() => setDemolishRoomId(null)}
+          onConfirm={handleDemolishConfirm}
+        />
+      )}
+
+      {isCreationModalOpen && <CharacterCreationModal
         isOpen={isCreationModalOpen}
-        isExistingSave={state.reviewIndex > 0 || state.characters.length > 0 || state.mana > 0 || state.renown > 0}
+        isExistingSave={lookOnly || state.reviewIndex > 0 || state.characters.length > 0 || state.mana > 0 || state.renown > 0}
         initialValues={{
           name: state.wizard.name,
           title: state.wizard.title,
           pronouns: state.wizard.pronouns,
-          robeColor: state.wizard.appearance?.robeColor,
-          hat: state.wizard.appearance?.hat,
+          ...(state.wizard.appearance ? normalizeAppearance(state.wizard.appearance) : {}),
           foundingSchool: state.wizard.foundingSchool
         }}
         onComplete={choices => {
           setState(prev => {
             // If already has progress, update wizard look only
-            const hasProgress = prev.reviewIndex > 0 || prev.characters.length > 0 || prev.mana > 0 || prev.renown > 0;
+            const hasProgress = lookOnly || prev.reviewIndex > 0 || prev.characters.length > 0 || prev.mana > 0 || prev.renown > 0;
             if (hasProgress) {
               return {
                 ...prev,
@@ -1318,7 +1394,7 @@ export default function App() {
                   name: choices.name,
                   title: choices.title,
                   pronouns: choices.pronouns,
-                  appearance: {
+                  appearance: normalizeAppearance({
                     bodyShape: choices.bodyShape,
                     skin: choices.skin,
                     hair: choices.hair,
@@ -1326,7 +1402,7 @@ export default function App() {
                     robeColor: choices.robeColor,
                     hat: choices.hat,
                     staff: choices.staff
-                  }
+                  })
                 }
               };
             } else {
@@ -1335,10 +1411,11 @@ export default function App() {
             }
           });
           setIsCreationModalOpen(false);
+          setLookOnly(false);
           addToast('Headmaster profile established!', 'success');
         }}
-        onClose={() => setIsCreationModalOpen(false)}
-      />
+        onClose={() => { setIsCreationModalOpen(false); setLookOnly(false); }}
+      />}
     </div>
   );
 }
