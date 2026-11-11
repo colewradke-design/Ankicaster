@@ -211,6 +211,7 @@ export function createInitialGameState(): FullGameState {
       sound: false,
       textScale: 1.0,
       mode: 'endless',
+      termLengthDays: 120,
       devMode: false
     },
     rooms: initialRooms,
@@ -267,6 +268,7 @@ export function createInitialGameState(): FullGameState {
     ],
     achievements: ['doors_open'],
     spellbooks: [],
-    alumniGallery: []
+    alumniGallery: [],
+    processedReviewIds: []
   };
 }

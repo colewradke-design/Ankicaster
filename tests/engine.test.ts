@@ -542,22 +542,66 @@ test('7. Timed Terms reset: students, faculty and creatures reset; card links fr
     arrivedDay: 1
   });
 
-  const res = AnkicasterEngine.startNextTerm(state, 30);
+  state.renown = 45;
 
-  // Assert reset details (BR-30, BR-34, F36)
+  const res = AnkicasterEngine.startNextTerm(state, 120);
+
+  // Assert reset details (GDD Item 41 / BR-30, BR-34, F36)
   assert.equal(res.state.characters.length, 0, 'Characters must be cleared on term reset');
   assert.equal(res.state.cardSets.length, 0, 'Card sets must be cleared on term reset');
-  assert.equal(res.state.creatures.length, 1, 'Creatures reset to initial starting wary creature');
-  assert.equal(res.state.creatures[0].defId, 'mossback_tortoise');
+  assert.equal(res.state.creatures.length, 0, 'All creatures must be removed on term reset (Item 41)');
   assert.equal(res.state.mana, 0, 'Unspent mana must reset to 0 (Rule BR-34)');
+  assert.equal(res.state.renown, 0, 'Renown must reset to 0 (Item 41)');
+  assert.deepEqual(res.state.knownPlans, ['vegetable_patch', 'woodlot', 'quarry', 'dormitory', 'refectory', 'common_room'], 'Known plans reset to starting set');
+  assert.deepEqual(res.state.knownPatterns, ['simple_cot', 'long_table', 'hearth', 'couch', 'potted_fern', 'bookshelf'], 'Known patterns reset to starting set');
+  assert.deepEqual(res.state.draftHistory, {}, 'Draft history reset');
+  assert.equal(res.state.settings.termLengthDays, 120, 'Default term length is 120 days');
 
   // Assert kept meta data
   assert.equal(res.state.wizard.levels.arcane, 7, 'Wizard levels carry over');
   assert.equal(res.state.wizard.levels.nature, 6, 'Wizard levels carry over');
   assert.deepEqual(res.state.wizard.knownSpells, ['foresight'], 'Spellbooks carry over');
-  assert.ok(res.state.knownPlans.includes('scriptorium'), 'Blueprints carry over');
-  assert.ok(res.state.knownPatterns.includes('canopy_bed'), 'Patterns carry over');
   assert.ok(res.state.alumniGallery.some(a => a.name === 'Graduating Student'), 'Master should be preserved in alumni gallery');
+});
+
+test('9. Bridged Real Reviews: card age sets honestIvl directly without running fake scheduler', () => {
+  const state = createInitialGameState();
+  const cardId = 555;
+  state.allCards[cardId] = {
+    id: cardId,
+    nid: cardId,
+    deckName: 'Spanish Core',
+    front: 'Hola',
+    back: 'Hello',
+    ivl: 12,
+    lastAnswerIvl: 12,
+    honestIvl: 12,
+    type: 2,
+    queue: 2,
+    due: 5,
+    lastStudiedMs: Date.now() - 100000
+  };
+
+  // Bridged real review with cardAge = 18 and ease = 4 (Normally fake scheduler with ease 4 would do 12 * 2.8 = 34)
+  const res = AnkicasterEngine.applyHonestReview(state, cardId, 4, 2500, 18, 'rev-bridge-1');
+  const updatedCard = res.state.allCards[cardId];
+
+  assert.equal(updatedCard.honestIvl, 18, 'Bridged review must set honestIvl to exact cardAge');
+  assert.equal(updatedCard.ivl, 18, 'ivl must match real cardAge');
+  assert.equal(updatedCard.lastAnswerIvl, 18, 'lastAnswerIvl must match real cardAge');
+
+  // Deduplication: replaying the same review ID must be ignored
+  const initialMana = res.state.mana;
+  const replayRes = AnkicasterEngine.applyHonestReview(res.state, cardId, 4, 2500, 18, 'rev-bridge-1');
+  assert.equal(replayRes.state.mana, initialMana, 'Replaying duplicate review ID must not grant extra mana');
+
+  // Snapshot loading test
+  const snapState = AnkicasterEngine.loadCardSnapshot(state, [
+    { id: 9001, deckName: 'Biology', card_age: 42 },
+    { id: 9002, deckName: 'Chemistry', card_age: 15 }
+  ]);
+  assert.equal(snapState.allCards[9001]?.honestIvl, 42);
+  assert.equal(snapState.allCards[9002]?.deckName, 'Chemistry');
 });
 
 test('8. Safe rest: while player is away and bank has hit 10% floor, skip hazard rolls', () => {

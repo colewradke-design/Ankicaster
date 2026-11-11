@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
+    "build:addon": "vite build && rm -rf addon/web && mkdir -p addon/web && cp -r dist/* addon/web/ && rm -rf addon/web/assets/aistudio",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "test": "tsx --test tests/engine.test.ts",

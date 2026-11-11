@@ -70,6 +70,7 @@ export interface AnkiCardSnapshot {
   queue: number; // -1=suspended, 0=new, 1=learn, 2=review
   due: number;
   lastStudiedMs: number;
+  installBaselineMs?: number;
 }
 
 export interface CardSet {
@@ -500,4 +501,6 @@ export interface FullGameState {
     bonusType: string;
     bonusValue: number;
   }>;
+  lastProcessedReviewId?: string;
+  processedReviewIds?: string[];
 }

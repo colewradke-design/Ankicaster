@@ -15,7 +15,8 @@ import {
   CardSet,
   DraftCard,
   ActiveExpedition,
-  InjuryType
+  InjuryType,
+  AnkiCardSnapshot
 } from '../types/ankicaster';
 import {
   ROOM_DEFINITIONS,
@@ -56,10 +57,25 @@ export class AnkicasterEngine {
     state: FullGameState,
     cardId: number,
     ease: 1 | 2 | 3 | 4,
-    elapsedMs: number = 2400
+    elapsedMs: number = 2400,
+    cardAge?: number,
+    reviewId?: string
   ): { state: FullGameState; toast?: string; notifications: string[] } {
     const next = structuredClone(state);
     const notifications: string[] = [];
+
+    // Deduplication check: ignore if this review has already been processed
+    if (reviewId) {
+      if (next.processedReviewIds && next.processedReviewIds.includes(reviewId)) {
+        return { state: next, notifications };
+      }
+      if (!next.processedReviewIds) next.processedReviewIds = [];
+      next.processedReviewIds.push(reviewId);
+      if (next.processedReviewIds.length > 2000) {
+        next.processedReviewIds.shift();
+      }
+      next.lastProcessedReviewId = reviewId;
+    }
 
     // H5 check: Anti-mash guard (answers < 800ms grant 0)
     if (elapsedMs < 800) {
@@ -80,31 +96,52 @@ export class AnkicasterEngine {
     next.reviewIndex += 1;
     next.bankAtLastReview = next.mana;
 
-    // 2. Update Card Interval in mock Anki database
+    // 2. Update Card Interval (Real Bridged Review vs Mock Scheduler)
     const card = next.allCards[cardId];
     if (card) {
       card.lastStudiedMs = Date.now();
-      if (ease === 1) {
-        // Lapse: Interval resets or falls
-        card.ivl = 1;
-        card.lastAnswerIvl = 1;
-        card.honestIvl = 1;
-      } else if (ease === 2) {
-        // Hard
-        card.ivl = Math.max(1, Math.round(card.ivl * 1.2));
-        card.lastAnswerIvl = card.ivl;
-        card.honestIvl = card.ivl;
-      } else if (ease === 3) {
-        // Good
-        card.ivl = Math.max(2, Math.round(card.ivl * 2.2));
-        card.lastAnswerIvl = card.ivl;
-        card.honestIvl = card.ivl;
+      if (cardAge !== undefined) {
+        // Bridged real review from Anki: NEVER run fake scheduler!
+        card.honestIvl = cardAge;
+        card.ivl = cardAge;
+        card.lastAnswerIvl = cardAge;
       } else {
-        // Easy
-        card.ivl = Math.max(4, Math.round(card.ivl * 2.8));
-        card.lastAnswerIvl = card.ivl;
-        card.honestIvl = card.ivl;
+        // Standalone simulated review: update mock intervals
+        if (ease === 1) {
+          card.ivl = 1;
+          card.lastAnswerIvl = 1;
+          card.honestIvl = 1;
+        } else if (ease === 2) {
+          card.ivl = Math.max(1, Math.round(card.ivl * 1.2));
+          card.lastAnswerIvl = card.ivl;
+          card.honestIvl = card.ivl;
+        } else if (ease === 3) {
+          card.ivl = Math.max(2, Math.round(card.ivl * 2.2));
+          card.lastAnswerIvl = card.ivl;
+          card.honestIvl = card.ivl;
+        } else {
+          card.ivl = Math.max(4, Math.round(card.ivl * 2.8));
+          card.lastAnswerIvl = card.ivl;
+          card.honestIvl = card.ivl;
+        }
       }
+    } else if (cardAge !== undefined) {
+      // Dynamic registration for non-suspended real Anki cards
+      next.allCards[cardId] = {
+        id: cardId,
+        nid: cardId,
+        deckName: 'Anki Collection',
+        front: `Anki Card #${cardId}`,
+        back: 'Answer',
+        ivl: cardAge,
+        lastAnswerIvl: cardAge,
+        honestIvl: cardAge,
+        type: 2,
+        queue: 2,
+        due: 0,
+        lastStudiedMs: Date.now(),
+        installBaselineMs: next.installBaselineMs
+      };
     }
 
     // Recalculate skill for students/faculty linked to this card
@@ -796,6 +833,41 @@ export class AnkicasterEngine {
   }
 
   /**
+   * Load snapshot of non-suspended real cards from Anki collection
+   * Updates state.allCards with real cards, maintaining existing links
+   */
+  static loadCardSnapshot(
+    state: FullGameState,
+    snapshot: Array<{ id: number; deckName: string; card_age: number }>
+  ): FullGameState {
+    const next = structuredClone(state);
+    const existing = next.allCards || {};
+    const updatedCards: Record<number, AnkiCardSnapshot> = {};
+
+    for (const item of snapshot) {
+      const prior = existing[item.id];
+      updatedCards[item.id] = {
+        id: item.id,
+        nid: prior?.nid ?? item.id,
+        deckName: item.deckName || 'Anki Collection',
+        front: prior?.front ?? `Anki Card #${item.id}`,
+        back: prior?.back ?? 'Answer',
+        ivl: item.card_age,
+        lastAnswerIvl: item.card_age,
+        honestIvl: item.card_age,
+        type: 2,
+        queue: 2,
+        due: 0,
+        lastStudiedMs: prior?.lastStudiedMs ?? Date.now(),
+        installBaselineMs: prior?.installBaselineMs ?? next.installBaselineMs
+      };
+    }
+
+    next.allCards = updatedCards;
+    return next;
+  }
+
+  /**
    * Evaluate Timed Term / examTimer status
    */
   static checkTimedTermStatus(
@@ -809,7 +881,7 @@ export class AnkicasterEngine {
 
     const termEndMs = next.termEndDateMs || (next.settings.termEndDate ? new Date(next.settings.termEndDate).getTime() : 0);
     const hasEndedByDate = termEndMs > 0 && currentTimeMs >= termEndMs;
-    const termLength = next.settings.termLengthDays || 30;
+    const termLength = next.settings.termLengthDays || 120;
     const termStartDate = next.termStartDateMs || next.installBaselineMs || currentTimeMs;
     const daysSinceTermStart = Math.floor((currentTimeMs - termStartDate) / (24 * 3600 * 1000));
     const hasEndedByDays = daysSinceTermStart >= termLength;
@@ -839,14 +911,17 @@ export class AnkicasterEngine {
   }
 
   /**
-   * Commence Next Term (BR-30, BR-34, F36)
-   * Resets students, faculty, and creatures, frees their card sets, resets buildings and materials
-   * back to starting stock, sets unspent mana to 0.
-   * Carries over wizard levels, known blueprints/patterns, alumni gallery, and spellbooks.
+   * Commence Next Term (GDD Item 41 / BR-30, BR-34, F36)
+   * Resets students, faculty, and ALL creatures (next.creatures = []).
+   * Frees card sets so real cards become unlinked.
+   * Resets Renown, Known Plans, patterns, draft history and research ranks.
+   * Resets buildings and materials back to starting stock, sets unspent mana to 0.
+   * Preserved across terms: wizard levels, spellbooks, alumni gallery, and achievements.
+   * Default term length: 120 days.
    */
   static startNextTerm(
     state: FullGameState,
-    termLengthDays: number = 30
+    termLengthDays: number = 120
   ): { state: FullGameState } {
     const next = structuredClone(state);
     const now = Date.now();
@@ -877,31 +952,24 @@ export class AnkicasterEngine {
     // 3. Reset characters (students & faculty)
     next.characters = [];
 
-    // 4. Reset creatures back to initial wary tortoise
-    next.creatures = [
-      {
-        id: 1,
-        defId: 'mossback_tortoise',
-        nickname: 'Old Barnaby',
-        status: 'wary',
-        hungry: false,
-        hatchProgress: 0,
-        tamingProgress: 18,
-        bondLevel: 1,
-        bondProgress: 0,
-        arrivedDay: next.day
-      }
-    ];
+    // 4. Remove ALL creatures (GDD Item 41)
+    next.creatures = [];
 
     // 5. Reset rooms and materials back to starting layout & stock (BR-34 / F36)
     const fresh = createInitialGameState();
     next.rooms = fresh.rooms;
     next.resources = fresh.resources;
 
-    // 6. Reset unspent mana to 0 (Rule BR-34 / F36)
+    // 6. Reset unspent mana, renown, plans, patterns, and draft history (GDD Item 41)
     next.mana = 0;
     next.bankAtLastReview = 0;
     next.manaDebt = 0;
+    next.renown = 0;
+    next.knownPlans = ['vegetable_patch', 'woodlot', 'quarry', 'dormitory', 'refectory', 'common_room'];
+    next.knownPatterns = ['simple_cot', 'long_table', 'hearth', 'couch', 'potted_fern', 'bookshelf'];
+    next.draftHistory = {};
+    next.draftPity = {};
+    next.hand = fresh.hand;
 
     // 7. Clear expeditions & active events
     next.expeditions = [];
@@ -910,24 +978,24 @@ export class AnkicasterEngine {
     // Preserved:
     // next.wizard.levels
     // next.wizard.knownSpells
-    // next.knownPlans
-    // next.knownPatterns
     // next.spellbooks
     // next.alumniGallery
+    // next.achievements
     // next.allCards
 
+    next.settings.termLengthDays = termLengthDays;
     next.termStartDateMs = now;
     next.termEndDateMs = now + (termLengthDays * 24 * 3600 * 1000);
     next.termInitialReviewIndex = next.reviewIndex;
     next.termInitialMasters = next.alumniGallery.length;
-    next.termInitialRenown = next.renown;
+    next.termInitialRenown = 0;
     next.termFinishedReport = undefined;
 
     next.notices.push({
       id: `term-start-${now}`,
       time: now,
       type: 'term_start',
-      text: `📜 New Academic Term commenced (${termLengthDays} days). Students, faculty, and creatures reset; card links freed; wizard masteries and alumni honored!`
+      text: `📜 New Academic Term commenced (${termLengthDays} days). Students, faculty, and creatures reset; card links freed; wizard masteries, spellbooks, and alumni honored!`
     });
     return { state: next };
   }

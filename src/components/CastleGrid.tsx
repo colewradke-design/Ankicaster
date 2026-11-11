@@ -131,19 +131,22 @@ export const CastleGrid: React.FC<CastleGridProps> = ({
                     isSelected ? 'ring-2 ring-amber-400 ring-offset-2 ring-offset-slate-950' : ''
                   }`}
                 >
-                  {/* Top Room Header */}
-                  <div className="flex items-center justify-between text-xs font-semibold gap-1">
-                    <span className="font-bold text-slate-100 flex items-center gap-1.5 truncate">
-                      {def?.name || room.defId}
+                  {/* Top Room Header: Name on its own line to prevent truncation */}
+                  <div className="flex flex-col gap-1 pb-1 border-b border-slate-800/60">
+                    <div className="flex items-center justify-between text-xs text-amber-300 font-mono">
+                      <span className="flex items-center gap-1.5">
+                        <span className="font-bold text-amber-400">Q{Math.round(q)}</span>
+                        <span className="text-slate-400">({tier})</span>
+                      </span>
                       {room.level > 1 && (
-                        <span className="text-xs bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded font-bold border border-amber-500/30">
-                          L{room.level}
+                        <span className="bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded font-bold border border-amber-500/30 text-xs">
+                          Level {room.level}
                         </span>
                       )}
-                    </span>
-                    <span className="text-xs text-amber-300 font-mono whitespace-nowrap" title={`Quality Score Q: ${Math.round(q)}`}>
-                      Q{Math.round(q)} ({tier})
-                    </span>
+                    </div>
+                    <div className="font-bold text-slate-100 text-sm leading-snug break-words">
+                      {def?.name || room.defId}
+                    </div>
                   </div>
 
                   {/* Active Hazard Banner */}

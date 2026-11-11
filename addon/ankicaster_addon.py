@@ -221,6 +221,56 @@ def export_collection_snapshot() -> None:
 
     showInfo(f"Successfully exported {len(cards_out)} cards to:\n{out_file}\n\nStrictly read-only; Anki scheduling untouched.")
 
+def get_non_suspended_cards_snapshot() -> list:
+    """
+    Get snapshot of {id, deckName, card_age} for all non-suspended cards in Anki collection.
+    Strictly read-only query.
+    """
+    if not mw or not mw.col:
+        return []
+
+    snapshot = []
+    try:
+        col = mw.col
+        card_ids = col.find_cards("-is:suspended")
+        for cid in card_ids:
+            c = col.get_card(cid)
+            deck_name = col.decks.name(c.did) if col.decks else "Anki Collection"
+            card_age = calculate_card_age(c)
+            snapshot.append({
+                "id": c.id,
+                "deckName": deck_name,
+                "card_age": card_age
+            })
+    except Exception as e:
+        print(f"[Ankicaster] Snapshot collection error: {e}")
+
+    return snapshot
+
+def get_and_clear_pending_reviews() -> list:
+    """
+    Replay pending reviews from ankicaster_pending_reviews.jsonl and empty the file.
+    """
+    user_dir = mw.pm.profileFolder() if mw and mw.pm else "."
+    log_path = os.path.join(user_dir, "ankicaster_pending_reviews.jsonl")
+    if not os.path.exists(log_path):
+        return []
+
+    records = []
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    records.append(json.loads(line))
+        # Empty the file after reading
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.truncate(0)
+    except Exception as e:
+        print(f"[Ankicaster] Error replaying pending reviews: {e}")
+
+    return records
+
 class AnkicasterDialog(QDialog):
     """Dedicated window inside Anki running the production Ankicaster web application."""
     def __init__(self, parent=None, local_url: str = ""):
@@ -234,10 +284,36 @@ class AnkicasterDialog(QDialog):
 
         if QWebEngineView is not None:
             self.web_view = QWebEngineView(self)
+            self.web_view.loadFinished.connect(self._on_load_finished)
             self.web_view.setUrl(QUrl(local_url))
             layout.addWidget(self.web_view)
         else:
             showInfo("QtWebEngine is required to display Ankicaster within Anki.")
+
+    def _on_load_finished(self, ok: bool) -> None:
+        """On window webview load, push card snapshot and replay any pending reviews."""
+        if not ok or not self.web_view:
+            return
+        self.sync_real_cards_and_pending()
+
+    def sync_real_cards_and_pending(self) -> None:
+        """Push non-suspended real cards snapshot and replay pending reviews."""
+        if not self.web_view:
+            return
+
+        # 1. Non-suspended card snapshot
+        snapshot = get_non_suspended_cards_snapshot()
+        if snapshot:
+            snap_json = json.dumps(snapshot)
+            js_snap = f"if (window.ankicasterLoadSnapshot) {{ window.ankicasterLoadSnapshot({snap_json}); }}"
+            self.web_view.page().runJavaScript(js_snap)
+
+        # 2. Replay pending reviews
+        pending = get_and_clear_pending_reviews()
+        if pending:
+            pending_json = json.dumps(pending)
+            js_replay = f"if (window.ankicasterReplayPendingReviews) {{ window.ankicasterReplayPendingReviews({pending_json}); }}"
+            self.web_view.page().runJavaScript(js_replay)
 
 def get_addon_local_url() -> str:
     """
@@ -255,6 +331,9 @@ def open_ankicaster_window() -> None:
 
     if _ankicaster_dialog is None:
         _ankicaster_dialog = AnkicasterDialog(mw, local_url)
+    else:
+        # Re-sync cards and pending reviews whenever the window is brought back
+        _ankicaster_dialog.sync_real_cards_and_pending()
 
     _ankicaster_dialog.show()
     _ankicaster_dialog.raise_()
@@ -268,10 +347,10 @@ def init_addon() -> None:
     # 1. Initialize baseline once on load
     get_or_create_install_baseline()
 
-    # 2. Register web exports for static files bundled inside addon
+    # 2. Register web exports for static files bundled inside addon under web/
     pkg = get_package_name()
     try:
-        mw.addonManager.setWebExports(pkg, r"(.*)")
+        mw.addonManager.setWebExports(pkg, r"web/.*")
     except Exception as e:
         print(f"[Ankicaster] setWebExports notice: {e}")
 

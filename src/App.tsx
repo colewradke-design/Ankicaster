@@ -248,19 +248,83 @@ export default function App() {
       ease: 1 | 2 | 3 | 4;
       elapsed_ms?: number;
       elapsedMs?: number;
+      card_age?: number;
+      cardAge?: number;
+      review_id?: string;
+      reviewId?: string;
     }) => {
       const cid = payload.cardId ?? payload.card_id ?? 1;
       const ms = payload.elapsedMs ?? payload.elapsed_ms ?? 2400;
-      handleAnswerCard(cid, payload.ease, ms);
+      const age = payload.cardAge ?? payload.card_age;
+      const rid = payload.reviewId ?? payload.review_id ?? `rev-${cid}-${Date.now()}`;
+
+      setState(current => {
+        const result = AnkicasterEngine.applyHonestReview(current, cid, payload.ease, ms, age, rid);
+        if (result.toast) {
+          addToast(result.toast, payload.ease === 1 ? 'warning' : 'success');
+        }
+        result.notifications.forEach(n => addToast(n, 'notice'));
+        if (result.state.bellIndex > current.bellIndex) {
+          playChime('bell');
+        } else {
+          playChime('review');
+        }
+        return result.state;
+      });
+    };
+
+    // Load non-suspended card snapshot from Anki
+    (window as any).ankicasterLoadSnapshot = (snapshot: Array<{ id: number; deckName: string; card_age: number }>) => {
+      if (!Array.isArray(snapshot) || snapshot.length === 0) return;
+      setState(current => AnkicasterEngine.loadCardSnapshot(current, snapshot));
+      addToast(`Synchronized ${snapshot.length} cards from Anki collection!`, 'info');
+    };
+
+    // Replay pending reviews recorded offline / between sessions
+    (window as any).ankicasterReplayPendingReviews = (records: Array<any>) => {
+      if (!Array.isArray(records) || records.length === 0) return;
+      setState(current => {
+        let cur = current;
+        let count = 0;
+        for (const r of records) {
+          const cid = r.card_id ?? r.cardId;
+          if (!cid) continue;
+          const rid = r.review_id ?? r.reviewId ?? `${cid}-${r.answered_at_ms || Date.now()}`;
+          const ease = (r.ease || 3) as 1 | 2 | 3 | 4;
+          const elapsed = r.elapsed_ms ?? r.elapsedMs ?? 2400;
+          const age = r.card_age ?? r.cardAge ?? r.honest_ivl;
+          const res = AnkicasterEngine.applyHonestReview(cur, cid, ease, elapsed, age, rid);
+          cur = res.state;
+          count++;
+        }
+        if (count > 0) {
+          addToast(`Processed ${count} offline study reviews from Anki!`, 'success');
+        }
+        return cur;
+      });
     };
 
     const handleMessage = (event: MessageEvent) => {
+      // Ignore postMessage events that don't come from the same window
+      if (event.source !== window) return;
+
       if (event.data && event.data.type === 'ankicaster_review') {
         const payload = event.data.payload;
         if (payload) {
           const cid = payload.cardId ?? payload.card_id ?? 1;
           const ms = payload.elapsedMs ?? payload.elapsed_ms ?? 2400;
-          handleAnswerCard(cid, payload.ease, ms);
+          const age = payload.cardAge ?? payload.card_age;
+          const rid = payload.reviewId ?? payload.review_id;
+          setState(current => {
+            const result = AnkicasterEngine.applyHonestReview(current, cid, payload.ease, ms, age, rid);
+            if (result.toast) addToast(result.toast, payload.ease === 1 ? 'warning' : 'success');
+            result.notifications.forEach(n => addToast(n, 'notice'));
+            return result.state;
+          });
+        }
+      } else if (event.data && event.data.type === 'ankicaster_snapshot') {
+        if (Array.isArray(event.data.snapshot)) {
+          setState(current => AnkicasterEngine.loadCardSnapshot(current, event.data.snapshot));
         }
       }
     };
@@ -268,9 +332,11 @@ export default function App() {
     window.addEventListener('message', handleMessage);
     return () => {
       delete (window as any).ankicasterOnReview;
+      delete (window as any).ankicasterLoadSnapshot;
+      delete (window as any).ankicasterReplayPendingReviews;
       window.removeEventListener('message', handleMessage);
     };
-  }, [handleAnswerCard]);
+  }, [playChime]);
 
   // Handler: Batch Simulation of Honest Reviews (gated behind devMode)
   const handleSimulateBatch = (count: number) => {
@@ -505,7 +571,7 @@ export default function App() {
         />
 
         {/* Unified Tab Navigation Bar */}
-        <nav className="bg-slate-900/90 border-t border-slate-800/80 px-4 py-2 flex items-center gap-1.5 overflow-x-auto scrollbar-none">
+        <nav className="bg-slate-900/90 border-t border-slate-800/80 px-4 py-2 flex flex-wrap items-center gap-1.5">
           <button
             onClick={() => setActiveTab('castle')}
             className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
