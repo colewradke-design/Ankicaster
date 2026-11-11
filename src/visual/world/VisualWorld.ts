@@ -33,6 +33,18 @@ import {
 } from '../layout/gridToWorld';
 import { unlockedPlotIndices } from '../../utils/groundsLayout';
 import { drawRoomInterior, drawEmitter, drawAnimatedItem, Emitter, AnimatedItem } from '../rooms/roomArt';
+import { drawSite } from '../rooms/siteArt';
+import { drawDirt, dirtLevel, drawLockHazard, drawPadlock, drawWrench, drawDirtyBadge, drawRing } from '../rooms/statusArt';
+import { drawEffect, VisualEffect, EFFECT_MS } from '../rooms/effects';
+import { reviewsToGo, siteFraction } from '../../utils/construction';
+import { hexToNum } from '../../utils/appearance';
+
+/** Fixed ambient rate (Addendum 5.5: 2-8 fps, never tied to reviews). 5 fps -> 0.8 s per 4-frame loop. */
+export const AMBIENT_FRAME_MS = 200;
+
+/** A screen-space overlay label anchored to a world point (kept crisp: never scaled by the camera). */
+interface OverlayLabel { key: string; text: string; wx: number; wy: number; color: number; size: number; align: 'center' | 'left' | 'right' }
+interface AmbientGroup { animate: boolean; emitters: Emitter[]; items: AnimatedItem[] }
 
 export interface GhostFootprint {
   area: 'castle' | 'grounds';
@@ -57,9 +69,16 @@ export class VisualWorld {
   ambientGraphics = new Graphics();
   /** Per-room status art above furniture: unreachable dim, selection outline. */
   statusGraphics = new Graphics();
-  ambientEmitters: Emitter[] = [];
-  ambientItems: AnimatedItem[] = [];
+  /** One-shot cosmetic effects (reveal dust, demolish dust, level-up trace). */
+  fxGraphics = new Graphics();
+  ambientGroups: AmbientGroup[] = [];
   ambientFrame = -1;
+  /** Real-time clock for fixed-rate ambience (ms); never advanced by reviews. */
+  clockMs = 0;
+  effects: VisualEffect[] = [];
+  private prevRooms: Map<number, PlacedRoom> | null = null;
+  overlayLabels: OverlayLabel[] = [];
+  overlayTexts = new Map<string, Text>();
   roomLabelsContainer = new Container();
   agentsGraphics = new Graphics();
   roofsGraphics = new Graphics();
@@ -101,6 +120,7 @@ export class VisualWorld {
     this.worldContainer.addChild(this.castleGraphics);
     this.worldContainer.addChild(this.ambientGraphics);
     this.worldContainer.addChild(this.statusGraphics);
+    this.worldContainer.addChild(this.fxGraphics);
     this.worldContainer.addChild(this.agentsGraphics);
     this.worldContainer.addChild(this.roofsGraphics);
     this.worldContainer.addChild(this.ghostGraphics);
@@ -140,6 +160,7 @@ export class VisualWorld {
       text.style.wordWrapWidth = Math.max(28 * zoom, ((a?.width ?? 64) - 6) * zoom);
     }
     for (const text of this.unreachableBadgeTexts.values()) text.resolution = this.pixelRatio;
+    for (const text of this.overlayTexts.values()) text.resolution = this.pixelRatio;
   }
 
   /** Position labels from the camera transform, snapped to device pixels. */
@@ -186,8 +207,31 @@ export class VisualWorld {
     this.choreographer.updateNavGraph(this.navGraph, this.groundY);
     this.choreographer.syncState(state, engineReach);
 
+    // One-shot effects from state changes (never from review count or speed)
+    this.detectEffects(state);
+
     // Draw static world layers
     this.renderWorldLayers();
+  }
+
+  /** Compare with the previous snapshot: site -> built (reveal), removed (demolish/cancel dust), level up. */
+  private detectEffects(state: FullGameState) {
+    const next = new Map(state.rooms.map(r => [r.id, r] as const));
+    const prev = this.prevRooms;
+    this.prevRooms = next;
+    if (!prev || state.settings.reduceMotion) return;
+    const now = this.clockMs;
+    for (const [id, before] of prev) {
+      const after = next.get(id);
+      if (!after) {
+        this.effects.push({ kind: 'dust', box: roomToWorldBox(before, this.groundY), start: now, ms: EFFECT_MS.dust });
+      } else if (before.state === 'site' && after.state === 'built') {
+        this.effects.push({ kind: 'reveal', box: roomToWorldBox(after, this.groundY), start: now, ms: EFFECT_MS.reveal });
+      } else if (after.state === 'built' && after.level > before.level) {
+        const def = ROOM_DEFINITIONS[after.defId];
+        this.effects.push({ kind: 'level', box: roomToWorldBox(after, this.groundY), start: now, ms: after.level >= 3 ? EFFECT_MS.level3 : EFFECT_MS.level, level: after.level, name: def?.name, roomId: id });
+      }
+    }
   }
 
   renderWorldLayers() {
@@ -199,9 +243,11 @@ export class VisualWorld {
     // 2. Castle & Grounds Rooms
     this.castleGraphics.clear();
     this.statusGraphics.clear();
-    this.ambientEmitters = [];
-    this.ambientItems = [];
+    this.ambientGroups = [];
+    this.overlayLabels = [];
     const robeColor = this.state.wizard?.appearance?.robeColor;
+    // Crop growth: no harvest timing in the engine yet, so bell index modulo 4 (Addendum 5.5)
+    const cropStage = Math.abs(this.state.bellIndex ?? 0) % 4;
     const rooms = this.state.rooms;
     const currentRoomIds = new Set<number>();
     let labelsCreated = false;
@@ -227,12 +273,35 @@ export class VisualWorld {
       }
 
       if (room.state === 'built') {
-        const art = drawRoomInterior(this.castleGraphics, room, box, { robeColor, hasLeftDoor, hasRightDoor });
-        this.ambientEmitters.push(...art.emitters);
-        this.ambientItems.push(...art.animated);
+        const art = drawRoomInterior(this.castleGraphics, room, box, { robeColor, hasLeftDoor, hasRightDoor, cropStage });
+        const locked = (room.lockedUntilReviewIndex ?? -1) > (this.state.reviewIndex ?? 0);
+        // Ambient loops run only in built, reachable, unlocked, finished rooms (Addendum 5.5)
+        this.ambientGroups.push({ animate: isReachable && !locked && art.missing.length === 0, emitters: art.emitters, items: art.animated });
+        const dirt = drawDirt(this.statusGraphics, room, box);
+        if (locked) drawLockHazard(this.statusGraphics, room, box);
         ForgeRenderer.drawRoomStatus(this.statusGraphics, box, isReachable, isSelected);
+        for (const d of art.damaged) drawWrench(this.statusGraphics, d.x, d.y);
+        let bx = box.left + 9;
+        if (locked) {
+          drawPadlock(this.statusGraphics, bx, box.top + 10);
+          const n = (room.lockedUntilReviewIndex ?? 0) - (this.state.reviewIndex ?? 0);
+          this.overlayLabels.push({ key: `lock:${room.id}`, text: `Locked for ${n} more review${n === 1 ? '' : 's'}`, wx: box.left + 3, wy: box.top + 19, color: 0xf6e08c, size: 10, align: 'left' });
+          bx += 16;
+        }
+        if (dirt >= 3) {
+          drawDirtyBadge(this.statusGraphics, bx, box.top + 10);
+          this.overlayLabels.push({ key: `dirty:${room.id}`, text: 'Dirty', wx: bx, wy: box.top + (locked ? 27 : 19), color: 0xe0c48a, size: 10, align: 'center' });
+        }
       } else {
-        ForgeRenderer.drawRoom(this.castleGraphics, room, box, isReachable, isSelected, hasLeftDoor, hasRightDoor);
+        const site = drawSite(this.castleGraphics, room, box, { robeColor });
+        this.ambientGroups.push({ animate: !site.paused, emitters: site.emitters, items: [] });
+        ForgeRenderer.drawRoomStatus(this.statusGraphics, box, isReachable, isSelected);
+        // Progress ring at the top-right + the same countdown the Build panel shows
+        const rx = box.left + box.width - 10, ry = box.top + 11;
+        drawRing(this.statusGraphics, rx, ry, 6, siteFraction(room), site.paused ? 0xb9b8c2 : 0x7dd87a);
+        const n = reviewsToGo(room);
+        this.overlayLabels.push({ key: `site:${room.id}`, text: `${n} to go`, wx: rx, wy: ry + 9, color: 0xffffff, size: 10, align: 'center' });
+        if (site.ribbon) this.overlayLabels.push({ key: `paused:${room.id}`, text: 'Paused', wx: site.ribbon.x, wy: site.ribbon.y - 4, color: 0xf6e08c, size: 10, align: 'center' });
       }
 
       // Render room name on the canvas (readable at 2x and never cut off)
@@ -304,15 +373,38 @@ export class VisualWorld {
     this.renderGhost();
   }
 
-  /** Redraw the cosmetic ambient layer for an animation frame (0..3). */
+  /** Redraw the cosmetic ambient layer for an animation frame (0..3); still groups stay on frame 0. */
   renderAmbient(frame: number) {
     if (frame === this.ambientFrame) return;
     this.ambientFrame = frame;
     const g = this.ambientGraphics;
     g.clear();
-    for (const it of this.ambientItems) drawAnimatedItem(g, it, frame);
-    for (const e of this.ambientEmitters) drawEmitter(g, e, frame, 0);
+    for (const grp of this.ambientGroups) {
+      const f = grp.animate ? frame : 0;
+      for (const it of grp.items) drawAnimatedItem(g, it, f);
+      for (const e of grp.emitters) drawEmitter(g, e, f, 0);
+    }
   }
+
+  /** Current ambient frame: fixed real-time rate; always 0 under reduce motion. */
+  ambientFrameFor(reduceMotion: boolean): number {
+    return reduceMotion ? 0 : Math.floor(this.clockMs / AMBIENT_FRAME_MS) % 4;
+  }
+
+  private renderEffects(reduceMotion: boolean) {
+    const g = this.fxGraphics;
+    if (reduceMotion) this.effects = [];
+    if (!this.effects.length && !this.fxDirty) return;
+    g.clear();
+    this.fxDirty = false;
+    const now = this.clockMs;
+    this.effects = this.effects.filter(e => now - e.start < e.ms);
+    for (const e of this.effects) {
+      drawEffect(g, e, Math.max(0, Math.min(1, (now - e.start) / e.ms)));
+      this.fxDirty = true;
+    }
+  }
+  private fxDirty = false;
 
   /** Show (or clear) the placement ghost. */
   setGhost(ghost: GhostFootprint | null) {
@@ -386,7 +478,9 @@ export class VisualWorld {
       if (!isReachable) {
         currentUnreachableRoomIds.add(room.id);
         const box = roomToWorldBox(room, this.groundY);
-        const screenX = (box.left + box.width - 20) * this.camera.zoom - (this.camera.x * this.camera.zoom - this.camera.viewportWidth / 2);
+        // Sites carry the progress ring at the top-right, so their badge sits at the left
+        const badgeWX = room.state === 'site' ? box.left + 34 : box.left + box.width - 20;
+        const screenX = badgeWX * this.camera.zoom - (this.camera.x * this.camera.zoom - this.camera.viewportWidth / 2);
         const screenY = (box.top + 16) * this.camera.zoom - (this.camera.y * this.camera.zoom - this.camera.viewportHeight / 2);
 
         // Circle with diagonal bar (Unreachable badge)
@@ -421,6 +515,43 @@ export class VisualWorld {
       }
     }
 
+    // Status / construction labels (screen space, fixed size, device-pixel snapped)
+    const labels = [...this.overlayLabels];
+    for (const e of this.effects) {
+      if (e.kind === 'level' && (e.level ?? 0) >= 3 && e.name && this.clockMs - e.start < 2000) {
+        labels.push({ key: `fx:${e.roomId}`, text: `${e.name} · Level 3`, wx: e.box.left + e.box.width / 2, wy: e.box.top - 12, color: 0xf7e39a, size: 12, align: 'center' });
+      }
+    }
+    const live = new Set<string>();
+    const z = this.camera.zoom, ox = this.worldContainer.x, oy = this.worldContainer.y;
+    for (const l of labels) {
+      live.add(l.key);
+      let t = this.overlayTexts.get(l.key);
+      if (!t) {
+        t = new Text({ text: l.text, resolution: this.pixelRatio, style: new TextStyle({ fontFamily: 'sans-serif', fontSize: l.size, fill: l.color, fontWeight: 'bold', stroke: { color: 0x000000, width: 3 } }) });
+        this.overlayContainer.addChild(t);
+        this.overlayTexts.set(l.key, t);
+      } else if (t.text !== l.text) {
+        t.text = l.text;
+      }
+      t.resolution = this.pixelRatio;
+      // Grow a little with zoom but always re-rastered at the target size (never bitmap-scaled)
+      const fs = Math.round(l.size * (0.5 + 0.25 * z));
+      if (t.style.fontSize !== fs) t.style.fontSize = fs;
+      let w = 0;
+      try { w = t.width; } catch { w = 0; }
+      const sx = ox + l.wx * z, sy = oy + l.wy * z;
+      t.x = this.snap(l.align === 'center' ? sx - w / 2 : l.align === 'right' ? sx - w : sx);
+      t.y = this.snap(sy);
+    }
+    for (const [k, t] of this.overlayTexts) {
+      if (!live.has(k)) {
+        this.overlayContainer.removeChild(t);
+        t.destroy();
+        this.overlayTexts.delete(k);
+      }
+    }
+
     // Destroy badge texts when no longer needed (e.g. room became reachable or was removed)
     for (const [roomId, badgeText] of this.unreachableBadgeTexts.entries()) {
       if (!currentUnreachableRoomIds.has(roomId)) {
@@ -435,8 +566,14 @@ export class VisualWorld {
     if (!this.state) return;
     const reduceMotion = !!this.state.settings.reduceMotion;
 
+    this.clockMs += Math.max(0, Math.min(deltaMs, 250));
+
     // Tick Choreographer
     this.choreographer.tick(deltaMs, this.state, reduceMotion);
+
+    // Fixed-rate ambience + one-shot effects (cosmetic only)
+    this.renderAmbient(this.ambientFrameFor(reduceMotion));
+    this.renderEffects(reduceMotion);
 
     // Draw agents
     this.agentsGraphics.clear();

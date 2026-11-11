@@ -14,8 +14,9 @@
 
 import React from 'react';
 import {
-  X, AlertTriangle, Sparkles, Droplets, Shield, Gauge, ChevronRight, Info, Hammer, Users, Briefcase, Award, Move, Trash2
+  X, AlertTriangle, Sparkles, Droplets, Shield, Gauge, ChevronRight, Info, Hammer, Users, Briefcase, Award, Move, Trash2, Pause, Play
 } from 'lucide-react';
+import { reviewsToGo, reviewsToGoText } from '../utils/construction';
 import { AnkicasterEngine } from '../utils/engine';
 import { WizardPortrait } from './WizardPortrait';
 import { FullGameState, PlacedRoom } from '../types/ankicaster';
@@ -133,12 +134,14 @@ export interface RoomWindowProps {
   onDemolish?: (roomId: number) => void;
   /** Wizard's Study: reopen "Choose your look". */
   onChangeLook?: () => void;
+  /** Construction site: pause / resume (GDD 15.4). */
+  onTogglePause?: (roomId: number, paused: boolean) => void;
   /** For tests/screenshots: render the details section expanded. */
   detailsOpen?: boolean;
 }
 
 export const RoomWindow: React.FC<RoomWindowProps> = ({
-  state, room, onClose, onOpenScreen, onResolveHazard, onUpgrade, onAddFurniture, onRemoveFurniture, onMove, onDemolish, onChangeLook, detailsOpen = false
+  state, room, onClose, onOpenScreen, onResolveHazard, onUpgrade, onAddFurniture, onRemoveFurniture, onMove, onDemolish, onChangeLook, onTogglePause, detailsOpen = false
 }) => {
   const moveBlock = AnkicasterEngine.roomActionBlock(state, room.id, 'move');
   const demolishBlock = AnkicasterEngine.roomActionBlock(state, room.id, 'demolish');
@@ -216,7 +219,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
           {/* 2. Key stats */}
           <div className="flex flex-wrap gap-2" data-testid="room-stats">
             {isSite ? (
-              <Chip icon={<Hammer className="w-3.5 h-3.5 text-amber-400" />} label="Building" value={`${room.buildProgress}/${room.buildRequired}`} title="Honest reviews toward construction" />
+              <Chip icon={<Hammer className="w-3.5 h-3.5 text-amber-400" />} label="Building" value={`${room.buildProgress}/${room.buildRequired}`} title={reviewsToGoText(room)} />
             ) : (
               <Chip icon={<Gauge className="w-3.5 h-3.5 text-emerald-400" />} label="Eff" value={`${(eff * 100).toFixed(0)}%`} title="Efficiency" tone="text-emerald-300" />
             )}
@@ -224,6 +227,24 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
             <Chip icon={<Shield className="w-3.5 h-3.5 text-indigo-300" />} label="Veil" value={`${def?.veil ?? 4}/day`} title="Daily Veil upkeep (mana)" tone="text-indigo-300" />
             <Chip label="Q" value={Math.round(q)} title="Quality score" tone="text-amber-300" />
           </div>
+
+          {isSite && (
+            <div className="flex items-center justify-between gap-2 bg-slate-950/60 border border-slate-800 rounded-xl px-3 py-2 text-[13px]" data-testid="site-countdown">
+              <span className={room.buildPaused ? 'text-slate-400' : 'text-emerald-300'}>
+                {room.buildPaused ? `Paused · ${reviewsToGo(room)} honest reviews left (progress is kept)` : reviewsToGoText(room)}
+              </span>
+              {onTogglePause && (
+                <button
+                  data-action="toggle-pause"
+                  onClick={() => onTogglePause(room.id, !room.buildPaused)}
+                  className="flex items-center gap-1 px-2.5 py-1 min-h-[30px] rounded-lg border border-slate-700 text-slate-200 hover:bg-slate-800"
+                  title={room.buildPaused ? 'Resume construction' : 'Pause construction: progress is kept forever'}
+                >
+                  {room.buildPaused ? <><Play className="w-3.5 h-3.5" /> Resume</> : <><Pause className="w-3.5 h-3.5" /> Pause</>}
+                </button>
+              )}
+            </div>
+          )}
 
           {/* 3. Hazard */}
           {room.hazard && (

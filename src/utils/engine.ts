@@ -1683,6 +1683,27 @@ export class AnkicasterEngine {
   }
 
   /**
+   * Pause or resume a construction site (GDD 15.4: "pause any time"; progress is kept forever).
+   * The engine already skips paused sites when it advances construction; this only sets the flag.
+   */
+  static setConstructionPaused(
+    state: FullGameState,
+    roomId: number,
+    paused: boolean
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const room = state.rooms.find(r => r.id === roomId);
+    if (!room) return { state, success: false, error: 'Room not found.' };
+    if (room.state !== 'site') return { state, success: false, error: 'Only construction sites can be paused.' };
+    if (!!room.buildPaused === paused) return { state, success: true };
+    const next = structuredClone(state);
+    const r = next.rooms.find(x => x.id === roomId)!;
+    r.buildPaused = paused;
+    const name = ROOM_DEFINITIONS[r.defId]?.name || 'site';
+    next.notices.push({ id: `pause-${Date.now()}-${r.id}`, time: Date.now(), type: 'build', text: paused ? `Paused construction of ${name}. Progress is kept.` : `Resumed construction of ${name}.` });
+    return { state: next, success: true };
+  }
+
+  /**
    * Demolish a room or cancel a construction site (GDD 15.4).
    * - Site with no progress (Cancel): 100% of the mana and materials paid.
    * - Otherwise: 50% of the materials paid (rounded down), 0% mana. Never more than was spent.

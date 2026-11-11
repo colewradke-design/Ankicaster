@@ -19,6 +19,7 @@ import { ZoomIn, ZoomOut, Maximize2, Home, Move, Hammer, X as XIcon, Wand2 } fro
 import { ROOM_DEFINITIONS } from '../data/content';
 import { AnkicasterEngine } from '../utils/engine';
 import { validatePlacement, roomLimitStatus, getGridSize, findAutoPlacement, PlacementCheck } from '../utils/placement';
+import { reviewsToGoText } from '../utils/construction';
 
 /** Build a new room, or move an existing one, with the ghost placement tool. */
 export type PlacementMode = { kind: 'build'; defId: string } | { kind: 'move'; roomId: number };
@@ -74,6 +75,7 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   const [currentZoom, setCurrentZoom] = useState(2);
   /** Current ghost candidate and its rule check (drives the banner text). */
   const [candidate, setCandidate] = useState<{ x: number; y: number; check: PlacementCheck } | null>(null);
+  const [hoverTip, setHoverTip] = useState<{ x: number; y: number; text: string } | null>(null);
   const placementRef = useRef<PlacementMode | null | undefined>(placement);
   placementRef.current = placement;
 
@@ -263,6 +265,15 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
+    // Hover on a construction site: "About N honest reviews to go" (Addendum 5.6)
+    if (!placementRef.current && !isDraggingRef.current && containerRef.current && worldRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      const hit = worldRef.current.hitTestRoom(e.clientX - rect.left, e.clientY - rect.top);
+      const text = hit && hit.state === 'site' ? (hit.buildPaused ? `Paused · ${reviewsToGoText(hit)}` : reviewsToGoText(hit)) : null;
+      setHoverTip(prev => (text ? { x: e.clientX - rect.left, y: e.clientY - rect.top, text } : prev ? null : prev));
+    } else if (hoverTip) {
+      setHoverTip(null);
+    }
     if (placementRef.current && !(isDraggingRef.current && totalDragDistRef.current > 6)) {
       const c = candidateAtPointer(e.clientX, e.clientY);
       if (c) showCandidate(c.x, c.y);
@@ -361,7 +372,8 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onClick={handleClick}
+        onClick={e => { setHoverTip(null); handleClick(e); }}
+        onPointerLeave={() => setHoverTip(null)}
         onContextMenu={e => {
           if (placementRef.current) { e.preventDefault(); onPlacementCancel?.(); }
         }}
@@ -408,6 +420,16 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
           </div>
         );
       })()}
+
+      {hoverTip && (
+        <div
+          data-testid="site-hover"
+          className="absolute z-30 pointer-events-none bg-slate-900/95 border border-emerald-500/40 text-emerald-200 text-[12px] font-semibold rounded-lg px-2.5 py-1 shadow-lg"
+          style={{ left: hoverTip.x + 14, top: hoverTip.y + 14 }}
+        >
+          {hoverTip.text}
+        </div>
+      )}
 
       {/* Floating Canvas Navigation Toolbar */}
       <div className="absolute top-4 right-4 z-20 flex items-center gap-1.5 bg-slate-900/90 backdrop-blur-md p-1.5 rounded-xl border border-amber-500/30 shadow-lg text-slate-200">

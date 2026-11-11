@@ -921,6 +921,11 @@ export default function App() {
             setPlacement({ kind: 'move', roomId });
           }}
           onDemolish={roomId => setDemolishRoomId(roomId)}
+          onTogglePause={(roomId, paused) => {
+            const res = AnkicasterEngine.setConstructionPaused(state, roomId, paused);
+            if (!res.success) addToast(res.error || 'Cannot change this site', 'warning');
+            else setState(res.state);
+          }}
           onChangeLook={() => { setSelectedRoom(null); setLookOnly(true); setIsCreationModalOpen(true); }}
           onRemoveFurniture={(roomId, fId) => {
             const res = AnkicasterEngine.removeFurniture(state, roomId, fId);

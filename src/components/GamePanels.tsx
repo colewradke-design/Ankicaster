@@ -66,6 +66,7 @@ import {
   ChevronRight,
   UserCheck
 } from 'lucide-react';
+import { reviewsToGoText } from '../utils/construction';
 
 // ==========================================
 // 1. WIZARD STUDY PANEL
@@ -701,8 +702,23 @@ export const BuildMenuPanel: React.FC<{
     r => category === 'all' || r.category === category || (category === 'grounds' && r.area === 'grounds')
   );
 
+  const sites = state.rooms.filter(r => r.state === 'site');
+
   return (
     <div className="space-y-4">
+      {sites.length > 0 && (
+        <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-1.5" data-testid="build-sites">
+          <div className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">Under construction</div>
+          {sites.map(site => (
+            <div key={site.id} className="flex items-center justify-between gap-3 text-[13px]" data-site={site.defId}>
+              <span className="text-slate-200">{ROOM_DEFINITIONS[site.defId]?.name || site.defId} <span className="text-slate-500 font-mono">{site.buildProgress}/{site.buildRequired}</span></span>
+              <span className={site.buildPaused ? 'text-slate-400' : 'text-emerald-300'} data-testid="site-to-go">
+                {site.buildPaused ? 'Paused · ' : ''}{reviewsToGoText(site)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="flex items-center gap-2 flex-wrap border-b border-slate-800 pb-2 text-xs">
         {['all', 'core', 'living', 'arcane', 'nature', 'light', 'shadow', 'alchemy', 'craft', 'rift', 'grounds'].map(cat => (
           <button

@@ -26,7 +26,7 @@ export const TIERS: Tier[] = ['bare', 'plain', 'cozy', 'fine', 'splendid'];
 
 export interface Box { left: number; top: number; width: number; height: number; floorLineY: number }
 
-export type EmitterKind = 'flame' | 'glow' | 'steam' | 'bubble' | 'twinkle' | 'mote' | 'ember' | 'leaf' | 'ripple' | 'portal' | 'sway' | 'candle';
+export type EmitterKind = 'flame' | 'glow' | 'steam' | 'bubble' | 'twinkle' | 'mote' | 'ember' | 'leaf' | 'ripple' | 'portal' | 'sway' | 'candle' | 'hammer';
 export interface Emitter { kind: EmitterKind; x: number; y: number; size?: number; color?: number; seed?: number }
 
 export interface AnimatedItem { id: string; x: number; y: number; damaged: boolean; tint: number; glyphKind: string }
@@ -49,6 +49,8 @@ export interface RoomArtOpts {
   hasRightDoor?: boolean;
   /** Force a tier (catalog test / screenshots); default = calculateRoomQuality(room). */
   tier?: Tier;
+  /** Crop growth stage 0..3 (bell index modulo 4 until the engine has harvest timing). */
+  cropStage?: number;
 }
 
 const STONE = PALETTE.stone.map(hex);
@@ -90,7 +92,7 @@ export function drawRoomInterior(g: Painter, room: PlacedRoom, box: Box, opts: R
   const gk = roomGlyph(def);
   const res: RoomArtResult = { tier, emitters: [], animated: [], damaged: [], missing: [], bespoke: false };
   if (room.area === 'grounds') {
-    res.bespoke = drawGroundsPlot(g, room, box, res.emitters);
+    res.bespoke = drawGroundsPlot(g, room, box, res.emitters, opts.cropStage ?? 3);
   } else {
     drawTierSkin(g, box, tier, tint, gk, room.id, res.emitters);
     res.bespoke = drawDressing(g, room, box, tint, gk, res.emitters);
@@ -692,7 +694,8 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
 // Grounds plots (A.1: 64 x 96 per plot, ground line 48 px from the top, up to 48 px sky overhang)
 // ---------------------------------------------------------------------------------------------
 
-export function drawGroundsPlot(g: Painter, room: PlacedRoom, box: Box, em: Emitter[]): boolean {
+export function drawGroundsPlot(g: Painter, room: PlacedRoom, box: Box, em: Emitter[], cropStage = 3): boolean {
+  const cs = Math.max(0, Math.min(3, cropStage));
   const L = box.left, W = box.width, B = box.floorLineY, R = L + W, cx = L + W / 2, top = box.top;
   const s = room.id;
   // grass bed + earth band
@@ -715,7 +718,7 @@ export function drawGroundsPlot(g: Painter, room: PlacedRoom, box: Box, em: Emit
     case 'vegetable_patch':
       for (let i = 0; i < 3; i++) {
         g.rect(L + 6, B - 4 - i * 5, W - 12, 3).fill({ color: 0x5a4030 });
-        for (let x = L + 10; x < R - 8; x += 9) g.circle(x + (i % 2) * 4, B - 5.5 - i * 5, 2).fill({ color: 0x7db861 });
+        for (let x = L + 10; x < R - 8; x += 9) g.circle(x + (i % 2) * 4, B - 5 - i * 5 - cs * 0.3, 0.8 + cs * 0.5).fill({ color: cs === 0 ? 0x9ccb72 : 0x7db861 });
       }
       fence(L + 2, R - 2);
       em.push({ kind: 'sway', x: cx, y: B - 10, size: 2, color: 0x7db861 });
@@ -723,7 +726,7 @@ export function drawGroundsPlot(g: Painter, room: PlacedRoom, box: Box, em: Emit
     case 'herb_garden':
       for (const x of [L + 6, cx + 2]) {
         g.rect(x, B - 7, W / 2 - 8, 7).fill({ color: WOOD[1] });
-        for (let i = 0; i < 4; i++) g.ellipse(x + 3 + i * 6, B - 9, 1.5, 3).fill({ color: [0x6ba34f, 0x9ccb72, 0x9c86e0, 0x7db861][i] });
+        for (let i = 0; i < 4; i++) g.ellipse(x + 3 + i * 6, B - 8 - cs * 0.5, 1 + cs * 0.2, 1.2 + cs * 0.6).fill({ color: [0x6ba34f, 0x9ccb72, 0x9c86e0, 0x7db861][i] });
         g.rect(x + 2, B - 12, 3, 2).fill({ color: 0xf6f1e8 });
       }
       em.push({ kind: 'sway', x: cx, y: B - 10, size: 2, color: 0x6ba34f });
@@ -755,7 +758,8 @@ export function drawGroundsPlot(g: Painter, room: PlacedRoom, box: Box, em: Emit
       em.push({ kind: 'ripple', x: cx, y: B - 4, size: W / 2 - 14 });
       break;
     case 'orchard':
-      for (let x = L + 18; x < R - 8; x += 32) tree(x, 18, 10, 0xd9472b);
+      for (let x = L + 18; x < R - 8; x += 32) tree(x, 18, 10, cs >= 2 ? (cs === 3 ? 0xd9472b : 0xe8c547) : undefined);
+      if (cs === 1) for (let x = L + 18; x < R - 8; x += 32) for (let i = 0; i < 4; i++) g.circle(x - 6 + i * 4, B - 26 + (i % 2) * 4, 1).fill({ color: 0xf6f1e8 });
       line(g, R - 14, B, R - 8, B - 22, WOOD[3], 1);
       line(g, R - 10, B, R - 4, B - 22, WOOD[3], 1);
       em.push({ kind: 'sway', x: L + 18, y: B - 26, size: 3, color: 0x4e8b3a });
@@ -886,6 +890,31 @@ export function drawEmitter(g: Painter, e: Emitter, frame: number, t: number) {
         g.circle(e.x + Math.cos(t) * r * 0.55, e.y + 2 + Math.sin(t) * r * 0.6, 1.6).fill({ color: 0x9bd4ff, alpha: 0.85 });
       }
       g.circle(e.x, e.y + 2, r * 0.3).fill({ color: 0xb9a6ff, alpha: 0.8 });
+      break;
+    }
+    case 'hammer': {
+      // Spectral hammer (one swing per 4 frames = 0.8 s at 5 fps) and a floating trowel, wizard colour
+      const c = e.color ?? 0xc9b7ff;
+      const px = e.x, py = e.y + 7; // pivot (hand)
+      const ang = [-1.0, -0.45, 0.25, -0.45][f]; // radians from vertical, swinging right
+      const tx = px + Math.sin(ang) * 10, ty = py - Math.cos(ang) * 10;
+      g.circle(px, py - 5, 10).fill({ color: c, alpha: 0.1 });
+      line(g, px, py, tx, ty, 0x6e4529, 1.6);
+      // head perpendicular to the handle
+      const nx = Math.cos(ang), ny = Math.sin(ang);
+      const hw = 4, hh = 1.8;
+      g.poly([
+        tx - nx * hw - Math.sin(ang) * hh, ty - ny * hw + Math.cos(ang) * hh,
+        tx + nx * hw - Math.sin(ang) * hh, ty + ny * hw + Math.cos(ang) * hh,
+        tx + nx * hw + Math.sin(ang) * hh, ty + ny * hw - Math.cos(ang) * hh,
+        tx - nx * hw + Math.sin(ang) * hh, ty - ny * hw - Math.cos(ang) * hh
+      ]).fill({ color: c, alpha: 0.95 });
+      if (f === 2) { g.rect(tx + 4, ty + 1, 1, 1).fill({ color: 0xf7e39a }); g.rect(tx + 5, ty - 2, 1, 1).fill({ color: 0xf7e39a }); }
+      // floating trowel
+      const bx = px - 14, by = py - 9 + [0, -1, -1.5, -1][f];
+      g.poly([bx, by - 4, bx + 3, by, bx, by + 4, bx - 3, by]).fill({ color: c, alpha: 0.9 });
+      line(g, bx, by + 4, bx, by + 8, 0x6e4529, 1.2);
+      g.circle(bx, by, 5).fill({ color: c, alpha: 0.1 });
       break;
     }
     case 'sway': {
