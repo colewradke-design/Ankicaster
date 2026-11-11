@@ -12,6 +12,10 @@ import { PlacedRoom, PlacedFurniture } from '../../types/ankicaster';
 import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS } from '../../data/content';
 import { CELL_W, CELL_H } from './gridToWorld';
 import { getFurnitureArt, FurnitureAnchor } from '../rooms/furnitureArt';
+import { fillsRole, requiredSlots, requiredSlotStatus } from '../../utils/requiredFurniture';
+
+// One shared notion of 'filled' (engine, room window and this layout agree)
+export { fillsRole };
 
 export interface LayoutAnchor {
   x: number; // art px from the room's left edge (centre of the sprite)
@@ -44,8 +48,7 @@ export function getRoomLayout(defId: string, w?: number, h?: number): RoomLayout
   if (hit) return hit;
   const W = cw * CELL_W;
   const required: LayoutAnchor[] = [];
-  const roles: string[] = [];
-  for (const r of def?.requiredFurniture || []) for (let i = 0; i < r.count; i++) roles.push(r.role);
+  const roles: string[] = requiredSlots(defId).map(r => r.role);
   const n = roles.length;
   roles.forEach((role, i) => {
     const art = getFurnitureArt(role);
@@ -93,16 +96,6 @@ function spreadKey(x: number, W: number): number {
   return best * 1000 + x;
 }
 
-/** Does a placed furniture item fill this required role? (slot tag, exact id, def role, or "a_or_b" roles). */
-export function fillsRole(f: PlacedFurniture, role: string): boolean {
-  if (f.slotKind === `required:${role}`) return true;
-  if (f.defId === role) return true;
-  const def = FURNITURE_DEFINITIONS[f.defId];
-  if (def && def.role === role) return true;
-  if (role.includes('_or_')) return role.split('_or_').includes(f.defId);
-  return false;
-}
-
 export interface PlacedFurnitureView {
   furniture: PlacedFurniture;
   x: number; // art px from room left
@@ -124,8 +117,9 @@ export function layoutRoomFurniture(room: PlacedRoom): RoomFurnitureView {
   const used = new Set<number>();
   if (NO_FURNITURE_ROOMS.has(room.defId)) return { items, missing };
   // 1. Required anchors
-  for (const anchor of layout.required) {
-    const idx = room.furniture.findIndex((f, i) => !used.has(i) && fillsRole(f, anchor.role!));
+  const status = requiredSlotStatus(room);
+  layout.required.forEach((anchor, k) => {
+    const idx = status[k]?.furnitureIndex ?? -1;
     if (idx >= 0) {
       used.add(idx);
       const art = getFurnitureArt(room.furniture[idx].defId);
@@ -133,7 +127,7 @@ export function layoutRoomFurniture(room: PlacedRoom): RoomFurnitureView {
     } else {
       missing.push(anchor);
     }
-  }
+  });
   // 2. Everything else, by the sprite's own anchor kind
   const next: Record<FurnitureAnchor, number> = { floor: 0, wall: 0, ceiling: 0 };
   const lists: Record<FurnitureAnchor, LayoutAnchor[]> = { floor: layout.floor, wall: layout.wall, ceiling: layout.ceiling };

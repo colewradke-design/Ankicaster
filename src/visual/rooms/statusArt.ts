@@ -86,6 +86,14 @@ export function drawDirtyBadge(g: Painter, x: number, y: number) {
   g.circle(x + 2.5, y - 2, 1.2).fill({ color: 0x7a5a40 });
 }
 
+/** "Unfinished" badge (GDD 15.4 step 6): amber ring with a "+" for missing required fixtures. */
+export function drawUnfinishedBadge(g: Painter, x: number, y: number) {
+  g.circle(x, y, 7).fill({ color: 0x1b1822, alpha: 0.9 });
+  g.circle(x, y, 7).stroke({ color: 0xf0b44a, width: 1.25 });
+  g.rect(x - 3.5, y - 0.75, 7, 1.5).fill({ color: 0xf0b44a });
+  g.rect(x - 0.75, y - 3.5, 1.5, 7).fill({ color: 0xf0b44a });
+}
+
 /** Progress ring: dark disc, track, filled arc for fraction p (clockwise from 12 o'clock). */
 export function drawRing(g: Painter, x: number, y: number, r: number, p: number, color: number) {
   g.circle(x, y, r + 2).fill({ color: 0x1b1822, alpha: 0.9 });

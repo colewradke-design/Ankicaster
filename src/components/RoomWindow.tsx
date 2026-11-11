@@ -17,6 +17,7 @@ import {
   X, AlertTriangle, Sparkles, Droplets, Shield, Gauge, ChevronRight, Info, Hammer, Users, Briefcase, Award, Move, Trash2, Pause, Play
 } from 'lucide-react';
 import { reviewsToGo, reviewsToGoText } from '../utils/construction';
+import { requiredSlotStatus, requiredInstallOption, costText, unaffordable } from '../utils/requiredFurniture';
 import { AnkicasterEngine } from '../utils/engine';
 import { WizardPortrait } from './WizardPortrait';
 import { FullGameState, PlacedRoom } from '../types/ankicaster';
@@ -136,12 +137,14 @@ export interface RoomWindowProps {
   onChangeLook?: () => void;
   /** Construction site: pause / resume (GDD 15.4). */
   onTogglePause?: (roomId: number, paused: boolean) => void;
+  /** Install one empty required slot (by its index in the room's required slots). */
+  onInstallRequired?: (roomId: number, slotIndex: number) => void;
   /** For tests/screenshots: render the details section expanded. */
   detailsOpen?: boolean;
 }
 
 export const RoomWindow: React.FC<RoomWindowProps> = ({
-  state, room, onClose, onOpenScreen, onResolveHazard, onUpgrade, onAddFurniture, onRemoveFurniture, onMove, onDemolish, onChangeLook, onTogglePause, detailsOpen = false
+  state, room, onClose, onOpenScreen, onResolveHazard, onUpgrade, onAddFurniture, onRemoveFurniture, onMove, onDemolish, onChangeLook, onTogglePause, onInstallRequired, detailsOpen = false
 }) => {
   const moveBlock = AnkicasterEngine.roomActionBlock(state, room.id, 'move');
   const demolishBlock = AnkicasterEngine.roomActionBlock(state, room.id, 'demolish');
@@ -154,6 +157,9 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
   const primary = screens.slice(0, 3);
   const extra = screens.slice(3);
   const isSite = room.state === 'site';
+  const reqStatus = requiredSlotStatus(room);
+  const reqMissing = reqStatus.filter(s => !s.filled).length;
+  const unfinished = !isSite && reqMissing > 0;
 
   const compatible = Object.values(FURNITURE_DEFINITIONS)
     .filter(fDef => {
@@ -221,7 +227,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
             {isSite ? (
               <Chip icon={<Hammer className="w-3.5 h-3.5 text-amber-400" />} label="Building" value={`${room.buildProgress}/${room.buildRequired}`} title={reviewsToGoText(room)} />
             ) : (
-              <Chip icon={<Gauge className="w-3.5 h-3.5 text-emerald-400" />} label="Eff" value={`${(eff * 100).toFixed(0)}%`} title="Efficiency" tone="text-emerald-300" />
+              <Chip icon={<Gauge className={`w-3.5 h-3.5 ${unfinished ? 'text-amber-400' : 'text-emerald-400'}`} />} label="Eff" value={`${(eff * 100).toFixed(0)}%`} title={unfinished ? 'Unfinished: runs at 0% until every required fixture is installed' : 'Efficiency'} tone={unfinished ? 'text-amber-300' : 'text-emerald-300'} />
             )}
             <Chip icon={<Droplets className="w-3.5 h-3.5 text-sky-400" />} label="Clean" value={`${Math.round(room.cleanliness)}%`} title="Cleanliness" />
             <Chip icon={<Shield className="w-3.5 h-3.5 text-indigo-300" />} label="Veil" value={`${def?.veil ?? 4}/day`} title="Daily Veil upkeep (mana)" tone="text-indigo-300" />
@@ -243,6 +249,55 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                   {room.buildPaused ? <><Play className="w-3.5 h-3.5" /> Resume</> : <><Pause className="w-3.5 h-3.5" /> Pause</>}
                 </button>
               )}
+            </div>
+          )}
+
+          {!isSite && reqStatus.length > 0 && (
+            <div
+              className={`rounded-xl px-3 py-2 text-[13px] border ${unfinished ? 'bg-amber-950/30 border-amber-600/50' : 'bg-slate-950/60 border-slate-800'}`}
+              data-testid="required-fixtures"
+            >
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <span className={`font-bold ${unfinished ? 'text-amber-200' : 'text-slate-300'}`}>Required fixtures</span>
+                {unfinished ? (
+                  <span className="text-[12px] bg-amber-500/20 border border-amber-500/50 text-amber-200 px-2 py-0.5 rounded-md font-bold" data-testid="unfinished-badge" title="A room missing required furniture runs at 0% (GDD 15.4)">
+                    Unfinished · 0%
+                  </span>
+                ) : (
+                  <span className="text-[12px] text-emerald-300">All installed</span>
+                )}
+              </div>
+              <ul className="space-y-1">
+                {reqStatus.map(slot => {
+                  const opt = requiredInstallOption(slot.role);
+                  const storedN = !opt.free ? stored[opt.defId] || 0 : 0;
+                  const why = opt.free || storedN > 0 ? undefined : unaffordable(state, opt.cost);
+                  const installed = slot.filled ? room.furniture[slot.furnitureIndex] : undefined;
+                  const installedName = installed ? FURNITURE_DEFINITIONS[installed.defId]?.name || slot.name : '';
+                  return (
+                    <li key={slot.index} className="flex items-center justify-between gap-2" data-required-slot={slot.role} data-filled={slot.filled ? 'yes' : 'no'}>
+                      <span className={slot.filled ? 'text-slate-200' : 'text-amber-100'}>
+                        {slot.filled ? '✓' : '○'} {slot.name}
+                        {slot.filled && installedName && installedName !== slot.name && <span className="text-slate-500"> ({installedName})</span>}
+                      </span>
+                      {slot.filled ? (
+                        <span className="text-[12px] text-emerald-400">Installed</span>
+                      ) : onInstallRequired && (
+                        <button
+                          data-action="install-required"
+                          onClick={() => !why && onInstallRequired(room.id, slot.index)}
+                          disabled={!!why}
+                          title={why || (opt.free ? `Install ${slot.name} (no catalog cost: free)` : storedN > 0 ? `Install a stored ${opt.name}` : `Install ${opt.name} for ${costText(opt.cost)}`)}
+                          className="shrink-0 px-2.5 py-1 min-h-[28px] bg-amber-500/20 hover:bg-amber-500/35 text-amber-200 border border-amber-500/50 rounded-md text-[12px] font-bold disabled:opacity-40"
+                        >
+                          Install · {opt.free ? 'Free' : storedN > 0 ? `Stored ×${storedN}` : costText(opt.cost)}
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              {unfinished && <div className="text-[12px] text-amber-300/80 mt-1.5">Unfinished rooms run at 0% until every required fixture is in place.</div>}
             </div>
           )}
 

@@ -916,6 +916,15 @@ export default function App() {
               playChime('review');
             }
           }}
+          onInstallRequired={(roomId, slotIndex) => {
+            const res = AnkicasterEngine.installRequiredFixture(state, roomId, slotIndex);
+            if (!res.success) addToast(res.error || 'Cannot install', 'warning');
+            else {
+              setState(res.state);
+              addToast(res.state.notices[res.state.notices.length - 1]?.text || 'Installed!', 'success');
+              playChime('review');
+            }
+          }}
           onMove={roomId => {
             setSelectedRoom(null);
             setPlacement({ kind: 'move', roomId });

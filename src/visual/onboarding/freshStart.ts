@@ -182,6 +182,7 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
     bellIndex: 0,
     mana: 0, // BR-01: 0 mana at fresh start
     manaDebt: 0,
+    requiredFixturesVersion: 1, // new saves never need the old-save fixture back-fill
     bankAtLastReview: 0,
     renown: 0, // GDD 32: 0 Renown at fresh start
     lastSessionTimeMs: now,

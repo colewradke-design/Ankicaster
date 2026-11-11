@@ -13,6 +13,7 @@ import {
   SchoolType
 } from '../types/ankicaster';
 import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS } from '../data/content';
+import { isRoomUnfinished } from './requiredFurniture';
 
 /**
  * F1: Mana per honest review
@@ -183,6 +184,7 @@ export function calculateRoomEfficiency(
   adjacencyFactor: number = 1.0
 ): number {
   if (!isReachable || room.state !== 'built') return 0;
+  if (isRoomUnfinished(room)) return 0; // GDD 15.7 override: missing required furniture
 
   const { q } = calculateRoomQuality(room);
   const levelFactor = room.level === 3 ? 1.2 : room.level === 2 ? 1.1 : 1.0;

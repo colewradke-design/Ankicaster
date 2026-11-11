@@ -524,4 +524,10 @@ export interface FullGameState {
   processedReviewIds?: string[];
   /** Furniture returned by demolition (GDD 15.4 / 17.1); re-installing a stored item is free. */
   furnitureInventory?: Record<string, number>;
+  /**
+   * Save format marker: 1 once built rooms from before required fixtures were enforced have been
+   * back-filled (a one-time load migration). New saves start at 1, so rooms that later finish
+   * construction keep their required furniture empty until the player installs it.
+   */
+  requiredFixturesVersion?: number;
 }

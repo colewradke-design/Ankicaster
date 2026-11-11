@@ -34,7 +34,8 @@ import {
 import { unlockedPlotIndices } from '../../utils/groundsLayout';
 import { drawRoomInterior, drawEmitter, drawAnimatedItem, Emitter, AnimatedItem } from '../rooms/roomArt';
 import { drawSite } from '../rooms/siteArt';
-import { drawDirt, dirtLevel, drawLockHazard, drawPadlock, drawWrench, drawDirtyBadge, drawRing } from '../rooms/statusArt';
+import { isRoomUnfinished } from '../../utils/requiredFurniture';
+import { drawDirt, dirtLevel, drawLockHazard, drawPadlock, drawWrench, drawDirtyBadge, drawRing, drawUnfinishedBadge } from '../rooms/statusArt';
 import { drawEffect, VisualEffect, EFFECT_MS } from '../rooms/effects';
 import { reviewsToGo, siteFraction } from '../../utils/construction';
 import { hexToNum } from '../../utils/appearance';
@@ -276,7 +277,8 @@ export class VisualWorld {
         const art = drawRoomInterior(this.castleGraphics, room, box, { robeColor, hasLeftDoor, hasRightDoor, cropStage });
         const locked = (room.lockedUntilReviewIndex ?? -1) > (this.state.reviewIndex ?? 0);
         // Ambient loops run only in built, reachable, unlocked, finished rooms (Addendum 5.5)
-        this.ambientGroups.push({ animate: isReachable && !locked && art.missing.length === 0, emitters: art.emitters, items: art.animated });
+        const unfinished = isRoomUnfinished(room);
+        this.ambientGroups.push({ animate: isReachable && !locked && !unfinished, emitters: art.emitters, items: art.animated });
         const dirt = drawDirt(this.statusGraphics, room, box);
         if (locked) drawLockHazard(this.statusGraphics, room, box);
         ForgeRenderer.drawRoomStatus(this.statusGraphics, box, isReachable, isSelected);
@@ -291,6 +293,16 @@ export class VisualWorld {
         if (dirt >= 3) {
           drawDirtyBadge(this.statusGraphics, bx, box.top + 10);
           this.overlayLabels.push({ key: `dirty:${room.id}`, text: 'Dirty', wx: bx, wy: box.top + (locked ? 27 : 19), color: 0xe0c48a, size: 10, align: 'center' });
+          bx += 22;
+        }
+        if (unfinished) {
+          // Unfinished badge: top-right (clear of the centred label); the Unreachable badge owns
+          // that corner, so an unreachable room shows it with the left-hand badges instead.
+          const right = isReachable;
+          const ux = right ? box.left + box.width - 10 : bx;
+          const uy = box.top + 10 + (!right && locked ? 17 : 0);
+          drawUnfinishedBadge(this.statusGraphics, ux, uy);
+          this.overlayLabels.push({ key: `unfinished:${room.id}`, text: 'Unfinished', wx: right ? ux + 6 : ux - 6, wy: uy + 9, color: 0xf0b44a, size: 10, align: right ? 'right' : 'left' });
         }
       } else {
         const site = drawSite(this.castleGraphics, room, box, { robeColor });

@@ -42,6 +42,10 @@ import {
 } from './placement';
 import { normalizeAppearance } from './appearance';
 import {
+  allFurnitureIds, fillRequiredFixtures, isRoomUnfinished, missingRequiredSlots, requiredInstallOption,
+  requiredSlotStatus, costText, unaffordable
+} from './requiredFurniture';
+import {
   calculateReviewMana,
   calculateDailyVeilCost,
   calculateStudentSkill,
@@ -246,17 +250,7 @@ export class AnkicasterEngine {
     for (const room of next.rooms) {
       if (room.state === 'site' && !room.buildPaused) {
         room.buildProgress += 1;
-        if (room.buildProgress >= room.buildRequired) {
-          room.state = 'built';
-          const rDef = ROOM_DEFINITIONS[room.defId];
-          notifications.push(`🏗️ Completed construction of ${rDef ? rDef.name : 'new room'}!`);
-          next.notices.push({
-            id: `build-${Date.now()}-${room.id}`,
-            time: Date.now(),
-            type: 'build_complete',
-            text: `Construction finished for ${rDef?.name || 'room'}. Ready for furnishings.`
-          });
-        }
+        if (room.buildProgress >= room.buildRequired) AnkicasterEngine.completeSite(next, room, notifications);
       }
     }
 
@@ -292,7 +286,7 @@ export class AnkicasterEngine {
     }
 
     // 7. Healing Injuries in Infirmary
-    const hasInfirmary = next.rooms.some(r => r.state === 'built' && r.defId === 'infirmary');
+    const hasInfirmary = next.rooms.some(r => r.state === 'built' && r.defId === 'infirmary' && !isRoomUnfinished(r));
     const activeHealers = next.characters.filter(c => c.career === 'healer' && c.careerState === 'active').length;
     const hasHealingCreature = next.creatures.some(c => c.status === 'tamed' && (c.defId === 'halo_lamb' || c.defId === 'fen_sprite' || c.defId === 'ember_phoenix'));
 
@@ -371,7 +365,7 @@ export class AnkicasterEngine {
     for (const char of state.characters) {
       if (char.status === 'student' && char.seatRoomId && char.currentSchool) {
         const room = state.rooms.find(r => r.id === char.seatRoomId);
-        if (room && room.state === 'built') {
+        if (room && room.state === 'built' && !isRoomUnfinished(room)) {
           // Hazard active effects
           if (room.hazard?.type === 'cold_snap') continue; // room frozen/disabled
           if (room.hazard?.type === 'echo_loop') continue; // suppresses classroom essence
@@ -398,7 +392,7 @@ export class AnkicasterEngine {
     const greenhouseMult = hasTortoise ? 1.05 : 1.0;
 
     for (const room of state.rooms) {
-      if (room.state !== 'built') continue;
+      if (room.state !== 'built' || isRoomUnfinished(room)) continue; // Unfinished rooms run at 0%
       if (room.hazard?.type === 'cold_snap') continue; // room disabled
 
       let harvestMult = 1.0;
@@ -1578,17 +1572,8 @@ export class AnkicasterEngine {
       spent: charge
     };
 
-    // Auto-place required starter furniture if built instantly
-    if (isInstant && def.requiredFurniture) {
-      def.requiredFurniture.forEach((req, idx) => {
-        newRoom.furniture.push({
-          id: roomId * 10 + idx + 1,
-          defId: req.role,
-          slotKind: `required:${req.role}`,
-          damaged: false
-        });
-      });
-    }
+    // Auto-place required starter furniture if built instantly (sites finish with it empty, GDD 15.4)
+    if (isInstant && def.requiredFurniture) fillRequiredFixtures(newRoom, allFurnitureIds(next.rooms));
 
     next.rooms.push(newRoom);
     next.notices.push({
@@ -1677,7 +1662,7 @@ export class AnkicasterEngine {
     const refund = demolishRefund(room);
     const occupants = state.characters.filter(c => c.bedRoomId === roomId || c.seatRoomId === roomId || c.workplaceRoomId === roomId).length
       + state.creatures.filter(c => c.roomId === roomId).length;
-    const furniture = room.furniture.filter(f => FURNITURE_DEFINITIONS[f.defId]).length;
+    const furniture = room.furniture.filter(f => FURNITURE_DEFINITIONS[f.defId] && !f.slotKind.startsWith('required:')).length;
     const renownLoss = Math.min(state.renown, room.renownGranted || 0);
     return { refund, occupants, furniture, renownLoss, blocked: AnkicasterEngine.roomActionBlock(state, roomId, 'demolish') };
   }
@@ -1730,7 +1715,7 @@ export class AnkicasterEngine {
     // Furniture -> inventory
     next.furnitureInventory = { ...(next.furnitureInventory || {}) };
     for (const f of room.furniture) {
-      if (!FURNITURE_DEFINITIONS[f.defId]) continue;
+      if (!FURNITURE_DEFINITIONS[f.defId] || f.slotKind.startsWith('required:')) continue; // required fixtures refund nothing
       next.furnitureInventory[f.defId] = (next.furnitureInventory[f.defId] || 0) + 1;
     }
 
@@ -1781,7 +1766,90 @@ export class AnkicasterEngine {
       out.rooms = out.rooms.map((r: PlacedRoom) => (r && !r.spent ? { ...r, spent: defaultSpent(r) } : r));
     }
     if (out.furnitureInventory === undefined && out.rooms) out.furnitureInventory = {};
+    // One-time migration for saves from before required fixtures were enforced: fill any empty
+    // required slot of a room that is already built, with the instant-build shape, so existing
+    // rooms keep working. Sites are left alone. It runs once per save (the version marker), so a
+    // room that finishes construction later keeps its fixtures empty until the player installs
+    // them, even across reloads. Running it again changes nothing.
+    if (Array.isArray(out.rooms) && (out.requiredFixturesVersion ?? 0) < 1) {
+      const ids = allFurnitureIds(out.rooms);
+      out.rooms = out.rooms.map((r: PlacedRoom) => {
+        if (!r || r.state !== 'built' || missingRequiredSlots({ defId: r.defId, furniture: r.furniture || [] }).length === 0) return r;
+        const copy: PlacedRoom = { ...r, furniture: [...(r.furniture || [])] };
+        fillRequiredFixtures(copy, ids);
+        return copy;
+      });
+      out.requiredFixturesVersion = 1;
+    }
     return out;
+  }
+
+  /**
+   * A construction site reaches its build time (GDD 15.4 step 6): the room appears with its
+   * required furniture empty, and a notice prompts the player to install it. Until then the
+   * room is Unfinished and runs at 0%.
+   */
+  static completeSite(next: FullGameState, room: PlacedRoom, notifications?: string[]) {
+    room.state = 'built';
+    const rDef = ROOM_DEFINITIONS[room.defId];
+    const name = rDef?.name || 'new room';
+    const missing = missingRequiredSlots(room);
+    const list = missing.map(m => m.name).join(', ');
+    notifications?.push(missing.length
+      ? `🏗️ Completed construction of ${name}! Install its required fixtures (${list}) to open it.`
+      : `🏗️ Completed construction of ${name}!`);
+    next.notices.push({
+      id: `build-${Date.now()}-${room.id}`,
+      time: Date.now(),
+      type: 'build_complete',
+      text: missing.length
+        ? `Construction finished for ${name}. It is Unfinished (0%) until you install: ${list}. Open the room to install them.`
+        : `Construction finished for ${name}. Ready for furnishings.`
+    });
+  }
+
+  /**
+   * Install one empty required slot (GDD 17.1). Cost comes from the furniture catalog
+   * (requiredInstallOption); a role with no catalog entry is free. A stored copy of the same
+   * item is used first, for free. Required fixtures are never refunded or returned by demolish.
+   */
+  static installRequiredFixture(
+    state: FullGameState,
+    roomId: number,
+    slotIndex: number
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const room = state.rooms.find(r => r.id === roomId);
+    if (!room) return { state, success: false, error: 'Room not found.' };
+    if (room.state !== 'built') return { state, success: false, error: 'Finish construction first.' };
+    const slot = requiredSlotStatus(room).find(s => s.index === slotIndex);
+    if (!slot) return { state, success: false, error: 'No such required slot.' };
+    if (slot.filled) return { state, success: false, error: `${slot.name} is already installed.` };
+    const opt = requiredInstallOption(slot.role);
+    const next = structuredClone(state);
+    const r = next.rooms.find(x => x.id === roomId)!;
+    const stored = next.furnitureInventory?.[opt.defId] || 0;
+    if (!opt.free && stored > 0) {
+      next.furnitureInventory = { ...next.furnitureInventory, [opt.defId]: stored - 1 };
+    } else if (!opt.free) {
+      const why = unaffordable(next, opt.cost);
+      if (why) return { state, success: false, error: why };
+      next.mana -= opt.cost.mana || 0;
+      const res = next.resources as unknown as Record<string, number>;
+      for (const [k, v] of Object.entries(opt.cost)) if (k !== 'mana' && v) res[k] -= v;
+    }
+    const ids = allFurnitureIds(next.rooms);
+    let id = r.id * 10 + slot.index + 1;
+    if (ids.has(id)) id = Math.max(0, ...ids) + 1;
+    r.furniture.push({ id, defId: opt.defId, slotKind: `required:${slot.role}`, damaged: false });
+    const rDef = ROOM_DEFINITIONS[r.defId];
+    const left = missingRequiredSlots(r).length;
+    next.notices.push({
+      id: `reqfurn-${Date.now()}-${r.id}-${slot.index}`,
+      time: Date.now(),
+      type: 'furniture',
+      text: `Installed ${slot.name} in ${rDef?.name || 'room'} (${opt.free ? 'free' : costText(opt.cost)}).${left ? ` ${left} required fixture${left === 1 ? '' : 's'} still missing.` : ' The room is now open.'}`
+    });
+    return { state: next, success: true };
   }
 
   /**
@@ -2091,7 +2159,7 @@ export class AnkicasterEngine {
         const site = next.rooms.find(r => r.state === 'site');
         if (site) {
           site.buildProgress += 30;
-          if (site.buildProgress >= site.buildRequired) site.state = 'built';
+          if (site.buildProgress >= site.buildRequired) AnkicasterEngine.completeSite(next, site);
           message = `⚡ Quickening Elixir poured over construction site: +30 reviews progress!`;
         } else {
           message = 'Quickening Elixir consumed.';
@@ -2353,7 +2421,7 @@ export class AnkicasterEngine {
         const activeSite = next.rooms.find(r => r.state === 'site');
         if (activeSite) {
           activeSite.buildProgress += 25;
-          if (activeSite.buildProgress >= activeSite.buildRequired) activeSite.state = 'built';
+          if (activeSite.buildProgress >= activeSite.buildRequired) AnkicasterEngine.completeSite(next, activeSite);
           notice = `Quickening cast! +25 progress points granted to ${activeSite.defId}.`;
         }
         break;
