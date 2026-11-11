@@ -236,8 +236,25 @@ export class Choreographer {
         if (this.reachability) {
           const currentReachable = agent.currentRoomId ? (this.reachability.get(agent.currentRoomId)?.reachable ?? true) : true;
           const targetReachable = agent.targetRoomId ? (this.reachability.get(agent.targetRoomId)?.reachable ?? true) : true;
-          if (!currentReachable || !targetReachable) {
-            // Replan right away to a reachable room along the nav graph
+          if (!currentReachable) {
+            // When current room is unreachable there is no legal route out: snap instantly to reachable target
+            agent.path = [];
+            agent.pathIndex = 0;
+            agent.freeTimeTargetRoomId = undefined;
+            this.planAgentNextGoal(agent, state);
+            const targetRoom = state.rooms.find(r => r.id === agent.targetRoomId);
+            if (targetRoom) {
+              const box = roomToWorldBox(targetRoom, this.groundY);
+              agent.x = this.getRoomSlotX(targetRoom.id, agent.id, state);
+              agent.y = box.floorLineY;
+              agent.currentFloor = targetRoom.y;
+              agent.currentRoomId = targetRoom.id;
+              agent.path = [];
+              agent.pathIndex = 0;
+              this.setArrivedAnim(agent);
+            }
+          } else if (!targetReachable) {
+            // Target is unreachable: replan right away to a reachable room along the nav graph
             agent.path = [];
             agent.pathIndex = 0;
             agent.freeTimeTargetRoomId = undefined;
@@ -388,10 +405,22 @@ export class Choreographer {
         }
 
         if (Math.abs(dy) > 2) {
-          agent.anim = 'climb';
+          const currentRoom = state.rooms.find(r => r.id === agent.currentRoomId);
+          const isStairRoom = currentRoom && (currentRoom.defId === 'spiral_stair' || currentRoom.defId === 'wizard_study');
+          const isStairNode = targetNode.kind === 'stair';
+          if (isStairRoom || isStairNode) {
+            agent.anim = 'climb';
+            agent.y += (dy / dist) * Math.min(speed, Math.abs(dy));
+          } else {
+            // Never move vertically outside of a stair or Wizard's Study column
+            agent.y = targetNode.y;
+            agent.currentFloor = targetNode.floor;
+          }
         } else {
+          agent.y = targetNode.y;
           agent.anim = 'walk';
         }
+        agent.x += (dx / dist) * Math.min(speed, Math.abs(dx));
       }
     }
   }

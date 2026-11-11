@@ -19,7 +19,7 @@ import {
 import { createInitialGameState } from './data/initialState';
 import { createNewAcademy } from './visual/onboarding/freshStart';
 import { CharacterCreationModal } from './visual/onboarding/CharacterCreationModal';
-import { AnkicasterEngine } from './utils/engine';
+import { AnkicasterEngine, HAZARD_DISPEL_MANA_COST } from './utils/engine';
 import {
   ROOM_DEFINITIONS,
   FURNITURE_DEFINITIONS,
@@ -1112,9 +1112,9 @@ export default function App() {
                   <button
                     onClick={() => handleResolveHazard(currentSelectedRoom.id, 'spell')}
                     className="px-3.5 py-2 bg-purple-700 hover:bg-purple-600 text-white font-bold text-xs rounded-xl shadow transition"
-                    title="Dispel immediately using 25 Mana"
+                    title={`Dispel immediately using ${HAZARD_DISPEL_MANA_COST} Mana`}
                   >
-                    Dispel (25 Mana)
+                    Dispel ({HAZARD_DISPEL_MANA_COST} Mana)
                   </button>
                 </div>
               </div>

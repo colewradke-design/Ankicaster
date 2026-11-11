@@ -49,6 +49,8 @@ export function getAnkiDayNumber(timeMs: number): number {
   return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / (24 * 3600 * 1000));
 }
 
+export const HAZARD_DISPEL_MANA_COST = 30;
+
 export class AnkicasterEngine {
   /**
    * Process one honest Anki review (BR-01, BR-03, BR-06, BR-07, Section 38.12)
@@ -1935,8 +1937,8 @@ export class AnkicasterEngine {
     }
 
     if (method === 'spell') {
-      if (next.mana < 30) return { state, success: false, error: 'Need 30 Mana for dispel spell.' };
-      next.mana -= 30;
+      if (next.mana < HAZARD_DISPEL_MANA_COST) return { state, success: false, error: `Need ${HAZARD_DISPEL_MANA_COST} Mana for dispel spell.` };
+      next.mana -= HAZARD_DISPEL_MANA_COST;
     } else if (method === 'warder') {
       const hasWarder = next.characters.some(c => c.career === 'warder' && c.careerState === 'active');
       if (!hasWarder) return { state, success: false, error: 'Requires an active Warder on faculty.' };
