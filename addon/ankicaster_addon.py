@@ -111,6 +111,21 @@ def calculate_card_age(card: Any) -> int:
 
     return max(0, min(int(cur_ivl), int(last_ivl)))
 
+def query_newest_revlog_id(card_id: int) -> Optional[int]:
+    """
+    Get newest revlog id for the card:
+    SELECT id FROM revlog WHERE cid = ? ORDER BY id DESC LIMIT 1
+    """
+    if not mw or not mw.col or not mw.col.db:
+        return None
+    try:
+        row = mw.col.db.first("SELECT id FROM revlog WHERE cid = ? ORDER BY id DESC LIMIT 1", card_id)
+        if row and row[0] is not None:
+            return int(row[0])
+    except Exception as e:
+        print(f"[Ankicaster] Revlog id query error: {e}")
+    return None
+
 def on_card_will_show(card: Any) -> None:
     """Record precise timestamp when question is shown to user."""
     global _card_shown_timestamp
@@ -141,6 +156,8 @@ def on_card_answered(reviewer: Any, card: Card, ease: int) -> None:
 
     card_age = calculate_card_age(card)
     last_ivl = query_previous_interval(card.id)
+    revlog_id = query_newest_revlog_id(card.id)
+    review_id = str(revlog_id) if revlog_id is not None else f"{card.id}-{answered_at_ms}"
 
     payload = {
         "card_id": card.id,
@@ -155,18 +172,23 @@ def on_card_answered(reviewer: Any, card: Card, ease: int) -> None:
         "queue": card.queue,
         "type": card.type,
         "answered_at_ms": answered_at_ms,
-        "install_baseline_ms": baseline_ms
+        "install_baseline_ms": baseline_ms,
+        "review_id": review_id
     }
 
-    # 1. Forward to active game window via JavaScript bridge
-    if _ankicaster_dialog is not None and getattr(_ankicaster_dialog, "web_view", None) is not None:
+    # 1. Forward to active game window via JavaScript bridge only if frontend is ready
+    if (
+        _ankicaster_dialog is not None
+        and getattr(_ankicaster_dialog, "web_view", None) is not None
+        and getattr(_ankicaster_dialog, "is_ready", False)
+    ):
         try:
             js = f"if (window.ankicasterOnReview) {{ window.ankicasterOnReview({json.dumps(payload)}); }}"
             _ankicaster_dialog.web_view.page().runJavaScript(js)
         except Exception as e:
             print(f"[Ankicaster] Bridge error: {e}")
 
-    # 2. Persist to pending log for offline / asynchronous sync
+    # 2. Always persist to pending log for replay & ack tracking
     save_review_record(payload)
 
 def save_review_record(payload: Dict[str, Any]) -> None:
@@ -179,78 +201,56 @@ def save_review_record(payload: Dict[str, Any]) -> None:
     except Exception as e:
         print(f"[Ankicaster] Log write error: {e}")
 
-def export_collection_snapshot() -> None:
-    """
-    Export current card collection as clean read-only JSON for Ankicaster import.
-    Never alters cards or scheduling.
-    """
-    if not mw or not mw.col:
-        return
-
-    col = mw.col
-    cards_out = {}
-    baseline_ms = get_or_create_install_baseline()
-
-    card_ids = col.find_cards("")
-    for cid in card_ids:
-        c = col.get_card(cid)
-        note = c.note()
-        deck_name = col.decks.name(c.did)
-        card_age = calculate_card_age(c)
-
-        cards_out[c.id] = {
-            "id": c.id,
-            "nid": c.nid,
-            "deckName": deck_name,
-            "front": note.fields[0] if len(note.fields) > 0 else "Prompt",
-            "back": note.fields[1] if len(note.fields) > 1 else "Answer",
-            "ivl": max(0, c.ivl),
-            "lastAnswerIvl": query_previous_interval(c.id),
-            "honestIvl": card_age,
-            "type": c.type,
-            "queue": c.queue,
-            "due": c.due,
-            "lastStudiedMs": int(time.time() * 1000),
-            "installBaselineMs": baseline_ms
-        }
-
-    user_dir = mw.pm.profileFolder() if mw.pm else "."
-    out_file = os.path.join(user_dir, "ankicaster_cards_export.json")
-    with open(out_file, "w", encoding="utf-8") as f:
-        json.dump(cards_out, f, indent=2)
-
-    showInfo(f"Successfully exported {len(cards_out)} cards to:\n{out_file}\n\nStrictly read-only; Anki scheduling untouched.")
-
 def get_non_suspended_cards_snapshot() -> list:
     """
-    Get snapshot of {id, deckName, card_age} for all non-suspended cards in Anki collection.
-    Strictly read-only query.
+    Build snapshot with one SQL query:
+    SELECT c.id, c.did, c.ivl, c.type, c.queue, (SELECT lastIvl FROM revlog r WHERE r.cid=c.id ORDER BY r.id DESC LIMIT 1)
+    FROM cards c WHERE c.queue != -1
+    with a deck-name map.
     """
-    if not mw or not mw.col:
+    if not mw or not mw.col or not mw.col.db:
         return []
 
     snapshot = []
     try:
         col = mw.col
-        card_ids = col.find_cards("-is:suspended")
-        for cid in card_ids:
-            c = col.get_card(cid)
-            deck_name = col.decks.name(c.did) if col.decks else "Anki Collection"
-            card_age = calculate_card_age(c)
+        # Deck name map
+        deck_map = {}
+        for d in col.decks.all():
+            deck_map[d['id']] = d['name']
+
+        sql = """
+            SELECT c.id, c.did, c.ivl, c.type, c.queue,
+                   (SELECT lastIvl FROM revlog r WHERE r.cid=c.id ORDER BY r.id DESC LIMIT 1)
+            FROM cards c
+            WHERE c.queue != -1
+        """
+        rows = col.db.all(sql)
+        for row in rows:
+            cid = int(row[0])
+            did = int(row[1])
+            cur_ivl = max(0, int(row[2]) if row[2] is not None else 0)
+            ctype = int(row[3]) if row[3] is not None else 2
+            queue = int(row[4]) if row[4] is not None else 2
+            raw_last_ivl = row[5]
+            last_ivl = max(0, int(raw_last_ivl)) if (raw_last_ivl is not None and int(raw_last_ivl) > 0) else cur_ivl
+            card_age = max(0, min(cur_ivl, last_ivl))
+            deck_name = deck_map.get(did, "Anki Collection")
+
             snapshot.append({
-                "id": c.id,
+                "id": cid,
                 "deckName": deck_name,
-                "card_age": card_age
+                "card_age": card_age,
+                "type": ctype,
+                "queue": queue
             })
     except Exception as e:
-        print(f"[Ankicaster] Snapshot collection error: {e}")
+        print(f"[Ankicaster] Single-SQL snapshot error: {e}")
 
     return snapshot
 
-def get_and_clear_pending_reviews() -> list:
-    """
-    Replay pending reviews from ankicaster_pending_reviews.jsonl and empty the file.
-    """
+def get_all_pending_reviews() -> list:
+    """Read all pending reviews from ankicaster_pending_reviews.jsonl."""
     user_dir = mw.pm.profileFolder() if mw and mw.pm else "."
     log_path = os.path.join(user_dir, "ankicaster_pending_reviews.jsonl")
     if not os.path.exists(log_path):
@@ -263,13 +263,75 @@ def get_and_clear_pending_reviews() -> list:
                 line = line.strip()
                 if line:
                     records.append(json.loads(line))
-        # Empty the file after reading
-        with open(log_path, "w", encoding="utf-8") as f:
-            f.truncate(0)
     except Exception as e:
-        print(f"[Ankicaster] Error replaying pending reviews: {e}")
+        print(f"[Ankicaster] Error reading pending reviews: {e}")
 
     return records
+
+def acknowledge_pending_reviews_up_to(ack_review_id: str) -> None:
+    """
+    Remove acknowledged lines from ankicaster_pending_reviews.jsonl up to and including ack_review_id.
+    """
+    user_dir = mw.pm.profileFolder() if mw and mw.pm else "."
+    log_path = os.path.join(user_dir, "ankicaster_pending_reviews.jsonl")
+    if not os.path.exists(log_path):
+        return
+
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
+
+        remaining = []
+        found_ack = False
+        for line in lines:
+            try:
+                rec = json.loads(line)
+                r_id = str(rec.get("review_id", ""))
+                if not found_ack:
+                    if r_id == str(ack_review_id):
+                        found_ack = True
+                    continue
+                remaining.append(line)
+            except Exception:
+                remaining.append(line)
+
+        # If ack_review_id was empty or not found in lines, but ack was sent, check if all were processed
+        with open(log_path, "w", encoding="utf-8") as f:
+            for line in remaining:
+                f.write(line + "\n")
+    except Exception as e:
+        print(f"[Ankicaster] Error acknowledging reviews: {e}")
+
+def get_save_file_path() -> str:
+    """Return path to user_files/save.json in the add-on folder."""
+    pkg = get_package_name()
+    addon_dir = os.path.dirname(os.path.abspath(__file__))
+    user_files_dir = os.path.join(addon_dir, "user_files")
+    if not os.path.exists(user_files_dir):
+        os.makedirs(user_files_dir, exist_ok=True)
+    return os.path.join(user_files_dir, "save.json")
+
+def load_saved_game_state() -> Optional[Dict[str, Any]]:
+    """Load game state from user_files/save.json."""
+    path = get_save_file_path()
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[Ankicaster] Error loading save.json: {e}")
+    return None
+
+def write_saved_game_state(save_data: str) -> bool:
+    """Write game state JSON string to user_files/save.json."""
+    try:
+        path = get_save_file_path()
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(save_data)
+        return True
+    except Exception as e:
+        print(f"[Ankicaster] Error saving save.json: {e}")
+        return False
 
 class AnkicasterDialog(QDialog):
     """Dedicated window inside Anki running the production Ankicaster web application."""
@@ -278,38 +340,51 @@ class AnkicasterDialog(QDialog):
         self.setWindowTitle("Ankicaster — Magic Academy & Spaced-Repetition Simulator")
         self.resize(1340, 880)
         self.setMinimumSize(960, 640)
+        self.is_ready = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
         if QWebEngineView is not None:
             self.web_view = QWebEngineView(self)
-            self.web_view.loadFinished.connect(self._on_load_finished)
             self.web_view.setUrl(QUrl(local_url))
             layout.addWidget(self.web_view)
         else:
             showInfo("QtWebEngine is required to display Ankicaster within Anki.")
 
-    def _on_load_finished(self, ok: bool) -> None:
-        """On window webview load, push card snapshot and replay any pending reviews."""
-        if not ok or not self.web_view:
-            return
-        self.sync_real_cards_and_pending()
+    def handle_pycmd(self, cmd: str) -> None:
+        """Handle pycmd messages from Ankicaster web application."""
+        if cmd == "ankicaster:ready":
+            self.is_ready = True
+            self.on_frontend_ready()
+        elif cmd.startswith("ankicaster:ack:"):
+            ack_id = cmd[len("ankicaster:ack:"):]
+            acknowledge_pending_reviews_up_to(ack_id)
+        elif cmd.startswith("ankicaster:save:"):
+            save_payload = cmd[len("ankicaster:save:"):]
+            write_saved_game_state(save_payload)
 
-    def sync_real_cards_and_pending(self) -> None:
-        """Push non-suspended real cards snapshot and replay pending reviews."""
+    def on_frontend_ready(self) -> None:
+        """Called once the App bridge effect has registered all handlers and emitted ankicaster:ready."""
         if not self.web_view:
             return
 
-        # 1. Non-suspended card snapshot
+        # 1. Send saved game state from user_files/save.json if it exists
+        saved_state = load_saved_game_state()
+        if saved_state is not None:
+            save_json = json.dumps(saved_state)
+            js_load = f"if (window.ankicasterLoadSavedGame) {{ window.ankicasterLoadSavedGame({save_json}); }}"
+            self.web_view.page().runJavaScript(js_load)
+
+        # 2. Send full collection snapshot
         snapshot = get_non_suspended_cards_snapshot()
         if snapshot:
             snap_json = json.dumps(snapshot)
             js_snap = f"if (window.ankicasterLoadSnapshot) {{ window.ankicasterLoadSnapshot({snap_json}); }}"
             self.web_view.page().runJavaScript(js_snap)
 
-        # 2. Replay pending reviews
-        pending = get_and_clear_pending_reviews()
+        # 3. Send all pending reviews
+        pending = get_all_pending_reviews()
         if pending:
             pending_json = json.dumps(pending)
             js_replay = f"if (window.ankicasterReplayPendingReviews) {{ window.ankicasterReplayPendingReviews({pending_json}); }}"
@@ -331,13 +406,22 @@ def open_ankicaster_window() -> None:
 
     if _ankicaster_dialog is None:
         _ankicaster_dialog = AnkicasterDialog(mw, local_url)
-    else:
-        # Re-sync cards and pending reviews whenever the window is brought back
-        _ankicaster_dialog.sync_real_cards_and_pending()
+    elif getattr(_ankicaster_dialog, "is_ready", False):
+        # Refresh snapshot & pending on subsequent foregrounding
+        _ankicaster_dialog.on_frontend_ready()
 
     _ankicaster_dialog.show()
     _ankicaster_dialog.raise_()
     _ankicaster_dialog.activateWindow()
+
+def on_webview_bridge_cmd(handled: Any, cmd: str, context: Any) -> Any:
+    """Intercept pycmd messages from webview."""
+    global _ankicaster_dialog
+    if cmd.startswith("ankicaster:"):
+        if _ankicaster_dialog:
+            _ankicaster_dialog.handle_pycmd(cmd)
+        return (True, None)
+    return handled
 
 def init_addon() -> None:
     """Register hooks, install baseline, web exports, and menu actions."""
@@ -358,7 +442,11 @@ def init_addon() -> None:
     gui_hooks.reviewer_did_show_question.append(on_card_will_show)
     gui_hooks.reviewer_did_answer_card.append(on_card_answered)
 
-    # 4. Menu items under Tools
+    # 4. Pycmd hook for web communication
+    if hasattr(gui_hooks, "webview_did_receive_js_message"):
+        gui_hooks.webview_did_receive_js_message.append(on_webview_bridge_cmd)
+
+    # 5. Menu items under Tools
     action_open = mw.form.menuTools.addAction("Open Ankicaster Magic Academy")
     action_open.triggered.connect(open_ankicaster_window)
 

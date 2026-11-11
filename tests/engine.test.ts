@@ -590,18 +590,76 @@ test('9. Bridged Real Reviews: card age sets honestIvl directly without running 
   assert.equal(updatedCard.ivl, 18, 'ivl must match real cardAge');
   assert.equal(updatedCard.lastAnswerIvl, 18, 'lastAnswerIvl must match real cardAge');
 
-  // Deduplication: replaying the same review ID must be ignored
+  // Deduplication: replaying the same review ID must be ignored (even with different ease/elapsedMs)
   const initialMana = res.state.mana;
   const replayRes = AnkicasterEngine.applyHonestReview(res.state, cardId, 4, 2500, 18, 'rev-bridge-1');
   assert.equal(replayRes.state.mana, initialMana, 'Replaying duplicate review ID must not grant extra mana');
 
-  // Snapshot loading test
+  // Batch replay test
+  const batchRes = AnkicasterEngine.applyBatchHonestReviews(state, [
+    { cardId, ease: 3, elapsedMs: 2500, cardAge: 25, reviewId: 'batch-rev-1' },
+    { cardId, ease: 3, elapsedMs: 2500, cardAge: 25, reviewId: 'batch-rev-1' }, // duplicate, should be skipped
+    { cardId, ease: 4, elapsedMs: 2200, cardAge: 30, reviewId: 'batch-rev-2' }
+  ]);
+  assert.equal(batchRes.count, 2, 'Only distinct reviews processed in batch');
+  assert.equal(batchRes.lastReviewId, 'batch-rev-2', 'Last review ID tracks correctly');
+  assert.equal(batchRes.state.allCards[cardId]?.honestIvl, 30);
+
+  // Snapshot loading test with type and queue
   const snapState = AnkicasterEngine.loadCardSnapshot(state, [
-    { id: 9001, deckName: 'Biology', card_age: 42 },
-    { id: 9002, deckName: 'Chemistry', card_age: 15 }
+    { id: 9001, deckName: 'Biology', card_age: 42, type: 2, queue: 2 },
+    { id: 9002, deckName: 'Chemistry', card_age: 15, type: 0, queue: 0 } // type 0 is new
   ]);
   assert.equal(snapState.allCards[9001]?.honestIvl, 42);
-  assert.equal(snapState.allCards[9002]?.deckName, 'Chemistry');
+  assert.equal(snapState.allCards[9002]?.type, 0);
+
+  // Student linking skips type 0 cards unless linkNewCards is enabled (GDD Section 579)
+  snapState.settings.cardsPerStudent = 1;
+  snapState.settings.linkNewCards = false;
+  snapState.wizard.levels.nature = 5;
+  snapState.mana = 200;
+  // Ensure dorm bed and nature classroom seat exist
+  snapState.rooms.push({
+    id: 9910,
+    defId: 'dormitory',
+    x: 0,
+    y: 0,
+    w: 2,
+    h: 1,
+    area: 'castle',
+    level: 1,
+    state: 'built',
+    buildRequired: 0,
+    buildProgress: 0,
+    cleanliness: 100,
+    settings: {},
+    furniture: [{ id: 9911, defId: 'simple_cot', slotKind: 'bed', damaged: false }]
+  });
+  snapState.rooms.push({
+    id: 9920,
+    defId: 'class_nature',
+    x: 2,
+    y: 0,
+    w: 2,
+    h: 1,
+    area: 'castle',
+    level: 1,
+    state: 'built',
+    buildRequired: 0,
+    buildProgress: 0,
+    cleanliness: 100,
+    settings: {},
+    furniture: []
+  });
+
+  // With linkNewCards = false, type 0 card 9002 should NOT be chosen
+  const enrollRes = AnkicasterEngine.enrollStudent(snapState, 'nature', 'Student One', 'Bold', ['Brave']);
+  assert.equal(enrollRes.success, false, 'Student enrollment blocked when only type 0 (new) cards exist and linkNewCards is off');
+
+  // When linkNewCards is enabled, type 0 card is eligible
+  snapState.settings.linkNewCards = true;
+  const enrollRes2 = AnkicasterEngine.enrollStudent(snapState, 'nature', 'Student One', 'Bold', ['Brave']);
+  assert.equal(enrollRes2.success, true, 'Student enrollment succeeds when linkNewCards is on');
 });
 
 test('8. Safe rest: while player is away and bank has hit 10% floor, skip hazard rolls', () => {

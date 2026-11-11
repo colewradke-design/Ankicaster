@@ -52,6 +52,7 @@ export function getAnkiDayNumber(timeMs: number): number {
 export class AnkicasterEngine {
   /**
    * Process one honest Anki review (BR-01, BR-03, BR-06, BR-07, Section 38.12)
+   * Optimized: Performs localized shallow copying instead of structuredClone on entire state
    */
   static applyHonestReview(
     state: FullGameState,
@@ -61,26 +62,47 @@ export class AnkicasterEngine {
     cardAge?: number,
     reviewId?: string
   ): { state: FullGameState; toast?: string; notifications: string[] } {
-    const next = structuredClone(state);
     const notifications: string[] = [];
 
-    // Deduplication check: ignore if this review has already been processed
+    // Deduplication check: ignore if this review has already been processed (only reviewId is used)
     if (reviewId) {
-      if (next.processedReviewIds && next.processedReviewIds.includes(reviewId)) {
-        return { state: next, notifications };
+      if (state.processedReviewIds && state.processedReviewIds.includes(reviewId)) {
+        return { state, notifications };
       }
-      if (!next.processedReviewIds) next.processedReviewIds = [];
-      next.processedReviewIds.push(reviewId);
-      if (next.processedReviewIds.length > 2000) {
-        next.processedReviewIds.shift();
-      }
-      next.lastProcessedReviewId = reviewId;
     }
 
     // H5 check: Anti-mash guard (answers < 800ms grant 0)
     if (elapsedMs < 800) {
       notifications.push('Review answered too quickly (<0.8s) — honest study pace required for mana.');
-      return { state: next, notifications };
+      return { state, notifications };
+    }
+
+    const next: FullGameState = {
+      ...state,
+      wizard: { ...state.wizard, levels: { ...state.wizard.levels }, spellCooldowns: { ...state.wizard.spellCooldowns } },
+      allCards: { ...state.allCards },
+      characters: state.characters.map(c => ({
+        ...c,
+        needs: { ...c.needs },
+        readyDays: { ...c.readyDays },
+        chronicle: [...c.chronicle],
+        injury: c.injury ? { ...c.injury } : undefined
+      })),
+      cardSets: state.cardSets.map(s => ({ ...s, cardIds: [...s.cardIds] })),
+      rooms: state.rooms.map(r => ({ ...r, settings: { ...r.settings }, furniture: [...r.furniture] })),
+      creatures: state.creatures.map(c => ({ ...c })),
+      expeditions: state.expeditions.map(e => ({ ...e, suppliesTaken: [...e.suppliesTaken] })),
+      resources: { ...state.resources, potions: { ...state.resources.potions } },
+      notices: [...state.notices],
+      processedReviewIds: state.processedReviewIds ? [...state.processedReviewIds] : []
+    };
+
+    if (reviewId) {
+      next.processedReviewIds!.push(reviewId);
+      if (next.processedReviewIds!.length > 2000) {
+        next.processedReviewIds!.shift();
+      }
+      next.lastProcessedReviewId = reviewId;
     }
 
     // 1. Mana gain (F1)
@@ -99,32 +121,33 @@ export class AnkicasterEngine {
     // 2. Update Card Interval (Real Bridged Review vs Mock Scheduler)
     const card = next.allCards[cardId];
     if (card) {
-      card.lastStudiedMs = Date.now();
+      const updatedCard = { ...card, lastStudiedMs: Date.now() };
       if (cardAge !== undefined) {
         // Bridged real review from Anki: NEVER run fake scheduler!
-        card.honestIvl = cardAge;
-        card.ivl = cardAge;
-        card.lastAnswerIvl = cardAge;
+        updatedCard.honestIvl = cardAge;
+        updatedCard.ivl = cardAge;
+        updatedCard.lastAnswerIvl = cardAge;
       } else {
         // Standalone simulated review: update mock intervals
         if (ease === 1) {
-          card.ivl = 1;
-          card.lastAnswerIvl = 1;
-          card.honestIvl = 1;
+          updatedCard.ivl = 1;
+          updatedCard.lastAnswerIvl = 1;
+          updatedCard.honestIvl = 1;
         } else if (ease === 2) {
-          card.ivl = Math.max(1, Math.round(card.ivl * 1.2));
-          card.lastAnswerIvl = card.ivl;
-          card.honestIvl = card.ivl;
+          updatedCard.ivl = Math.max(1, Math.round(card.ivl * 1.2));
+          updatedCard.lastAnswerIvl = updatedCard.ivl;
+          updatedCard.honestIvl = updatedCard.ivl;
         } else if (ease === 3) {
-          card.ivl = Math.max(2, Math.round(card.ivl * 2.2));
-          card.lastAnswerIvl = card.ivl;
-          card.honestIvl = card.ivl;
+          updatedCard.ivl = Math.max(2, Math.round(card.ivl * 2.2));
+          updatedCard.lastAnswerIvl = updatedCard.ivl;
+          updatedCard.honestIvl = updatedCard.ivl;
         } else {
-          card.ivl = Math.max(4, Math.round(card.ivl * 2.8));
-          card.lastAnswerIvl = card.ivl;
-          card.honestIvl = card.ivl;
+          updatedCard.ivl = Math.max(4, Math.round(card.ivl * 2.8));
+          updatedCard.lastAnswerIvl = updatedCard.ivl;
+          updatedCard.honestIvl = updatedCard.ivl;
         }
       }
+      next.allCards[cardId] = updatedCard;
     } else if (cardAge !== undefined) {
       // Dynamic registration for non-suspended real Anki cards
       next.allCards[cardId] = {
@@ -150,11 +173,8 @@ export class AnkicasterEngine {
         const studySet = next.cardSets.find(s => s.id === char.studySetId);
         if (studySet && studySet.cardIds.includes(cardId)) {
           const ivls = studySet.cardIds.map(id => next.allCards[id]?.honestIvl || 0);
-          const oldSkill = calculateStudentSkill(ivls, next.settings.cardsPerStudent);
-          // Check mastery ready
           if (isMasteryReady(ivls, next.settings.cardsPerStudent)) {
             if (!char.masteredSchools.includes(char.currentSchool || 'nature')) {
-              // Mastery countdown increment
               const school = char.currentSchool || 'nature';
               char.readyDays[school] = (char.readyDays[school] || 0);
             }
@@ -167,7 +187,6 @@ export class AnkicasterEngine {
     if (next.wizard.activeSession && next.wizard.activeSession.state === 'active') {
       next.wizard.activeSession.progress += 1;
       if (next.wizard.activeSession.progress >= next.wizard.activeSession.required) {
-        // Complete session
         const sess = next.wizard.activeSession;
         if (sess.kind === 'orb') {
           const sch = sess.school;
@@ -188,7 +207,6 @@ export class AnkicasterEngine {
           }
         }
 
-        // Pop from queue if any
         if (next.wizard.queuedSessions.length > 0) {
           const nextSess = next.wizard.queuedSessions.shift()!;
           next.wizard.activeSession = {
@@ -205,7 +223,6 @@ export class AnkicasterEngine {
     // 4. Advance Active Constructions
     for (const room of next.rooms) {
       if (room.state === 'site' && !room.buildPaused) {
-        // Builder slots advance 1.25x or wizard slot 1.0x
         room.buildProgress += 1;
         if (room.buildProgress >= room.buildRequired) {
           room.state = 'built';
@@ -252,7 +269,7 @@ export class AnkicasterEngine {
       }
     }
 
-    // 7. Healing Injuries in Infirmary (accelerated by Infirmary, Healers, and Healing creatures)
+    // 7. Healing Injuries in Infirmary
     const hasInfirmary = next.rooms.some(r => r.state === 'built' && r.defId === 'infirmary');
     const activeHealers = next.characters.filter(c => c.career === 'healer' && c.careerState === 'active').length;
     const hasHealingCreature = next.creatures.some(c => c.status === 'tamed' && (c.defId === 'halo_lamb' || c.defId === 'fen_sprite' || c.defId === 'ember_phoenix'));
@@ -293,6 +310,35 @@ export class AnkicasterEngine {
     this.checkAutomaticRetirements(next, notifications);
 
     return { state: next, toast: toastMsg, notifications };
+  }
+
+  /**
+   * Process a batch of reviews in a single state update (e.g. replaying pending reviews)
+   */
+  static applyBatchHonestReviews(
+    state: FullGameState,
+    reviews: Array<{
+      cardId: number;
+      ease: 1 | 2 | 3 | 4;
+      elapsedMs?: number;
+      cardAge?: number;
+      reviewId?: string;
+    }>
+  ): { state: FullGameState; count: number; lastReviewId?: string } {
+    let curState = state;
+    let count = 0;
+    let lastReviewId: string | undefined;
+
+    for (const r of reviews) {
+      const res = this.applyHonestReview(curState, r.cardId, r.ease, r.elapsedMs ?? 2400, r.cardAge, r.reviewId);
+      if (res.state !== curState) {
+        curState = res.state;
+        count++;
+        if (r.reviewId) lastReviewId = r.reviewId;
+      }
+    }
+
+    return { state: curState, count, lastReviewId };
   }
 
   /**
@@ -838,10 +884,9 @@ export class AnkicasterEngine {
    */
   static loadCardSnapshot(
     state: FullGameState,
-    snapshot: Array<{ id: number; deckName: string; card_age: number }>
+    snapshot: Array<{ id: number; deckName: string; card_age: number; type?: number; queue?: number }>
   ): FullGameState {
-    const next = structuredClone(state);
-    const existing = next.allCards || {};
+    const existing = state.allCards || {};
     const updatedCards: Record<number, AnkiCardSnapshot> = {};
 
     for (const item of snapshot) {
@@ -854,17 +899,19 @@ export class AnkicasterEngine {
         back: prior?.back ?? 'Answer',
         ivl: item.card_age,
         lastAnswerIvl: item.card_age,
-        honestIvl: item.card_age,
-        type: 2,
-        queue: 2,
+        honestIvl: prior?.honestIvl !== undefined ? prior.honestIvl : item.card_age,
+        type: item.type ?? prior?.type ?? 2,
+        queue: item.queue ?? prior?.queue ?? 2,
         due: 0,
         lastStudiedMs: prior?.lastStudiedMs ?? Date.now(),
-        installBaselineMs: prior?.installBaselineMs ?? next.installBaselineMs
+        installBaselineMs: prior?.installBaselineMs ?? state.installBaselineMs
       };
     }
 
-    next.allCards = updatedCards;
-    return next;
+    return {
+      ...state,
+      allCards: updatedCards
+    };
   }
 
   /**
@@ -1038,8 +1085,9 @@ export class AnkicasterEngine {
       }
     }
 
+    const allowNew = next.settings.linkNewCards ?? false;
     const freeYoungCards = Object.values(next.allCards)
-      .filter(c => !linkedCardIds.has(c.id) && c.honestIvl <= 30 && c.queue !== -1)
+      .filter(c => !linkedCardIds.has(c.id) && c.honestIvl <= 30 && c.queue !== -1 && (allowNew || (c.type ?? 2) !== 0))
       .sort((a, b) => a.honestIvl - b.honestIvl);
 
     const needed = next.settings.cardsPerStudent;
@@ -1114,8 +1162,9 @@ export class AnkicasterEngine {
       }
     }
 
+    const allowNewCards = next.settings.linkNewCards ?? false;
     const freeYoungCards = Object.values(next.allCards)
-      .filter(c => !linkedCardIds.has(c.id) && c.honestIvl <= 30 && c.queue !== -1)
+      .filter(c => !linkedCardIds.has(c.id) && c.honestIvl <= 30 && c.queue !== -1 && (allowNewCards || (c.type ?? 2) !== 0))
       .sort((a, b) => a.honestIvl - b.honestIvl);
 
     const needed = next.settings.cardsPerStudent;
@@ -1717,8 +1766,9 @@ export class AnkicasterEngine {
     const existingCareerSet = next.cardSets.find(s => s.characterId === char.id && s.career === career && !s.released);
 
     if (!existingCareerSet) {
+      const allowNewCards = next.settings.linkNewCards ?? false;
       const freeCards = Object.values(next.allCards)
-        .filter(c => !linkedCardIds.has(c.id) && c.honestIvl <= 45 && c.queue !== -1)
+        .filter(c => !linkedCardIds.has(c.id) && c.honestIvl <= 45 && c.queue !== -1 && (allowNewCards || (c.type ?? 2) !== 0))
         .sort((a, b) => a.honestIvl - b.honestIvl);
 
       const needed = 20;

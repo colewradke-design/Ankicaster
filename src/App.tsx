@@ -115,21 +115,61 @@ export default function App() {
   // Transient feedback toasts
   const [toasts, setToasts] = useState<Array<{ id: string; text: string; type: string }>>([]);
 
-  // Auto-save state
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch (e) {
-      console.error('Save failed:', e);
-    }
-  }, [state]);
-
   // Check if running inside Anki add-on (QWebEngineView or pycmd bridge)
   const isAddonMode = typeof window !== 'undefined' && (
     new URLSearchParams(window.location.search).get('addon') === '1' ||
     !!(window as any).pycmd ||
     !!(window as any).qt
   );
+
+  // Helper to serialize state without unbounded allCards
+  const getSerializableState = (full: FullGameState) => {
+    // Collect all linked card IDs
+    const linkedIds = new Set<number>();
+    for (const set of full.cardSets) {
+      if (!set.released) {
+        for (const cid of set.cardIds) linkedIds.add(cid);
+      }
+    }
+    // Only store linked cards and their honestIvl
+    const compactCards: Record<number, any> = {};
+    for (const id of linkedIds) {
+      if (full.allCards[id]) {
+        compactCards[id] = {
+          id,
+          honestIvl: full.allCards[id].honestIvl,
+          deckName: full.allCards[id].deckName
+        };
+      }
+    }
+
+    const { allCards, ...rest } = full;
+    return {
+      ...rest,
+      allCards: compactCards
+    };
+  };
+
+  // Auto-save state: In addon mode, save through Python pycmd to user_files/save.json
+  // Fall back to localStorage in standalone web mode
+  useEffect(() => {
+    const compact = getSerializableState(state);
+    const jsonStr = JSON.stringify(compact);
+
+    if (isAddonMode && typeof (window as any).pycmd === 'function') {
+      try {
+        (window as any).pycmd(`ankicaster:save:${jsonStr}`);
+      } catch (e) {
+        console.error('Addon save failed:', e);
+      }
+    } else {
+      try {
+        localStorage.setItem(STORAGE_KEY, jsonStr);
+      } catch (e) {
+        console.error('LocalStorage save failed:', e);
+      }
+    }
+  }, [state, isAddonMode]);
 
   // Build-time Dev Mode flag (must NEVER be on inside Anki)
   const IS_DEV_MODE = !isAddonMode && (import.meta.env.DEV || import.meta.env.VITE_DEV_MODE === 'true');
@@ -240,8 +280,9 @@ export default function App() {
     });
   }, [playChime]);
 
-  // Real Anki Review Bridge (receives reviews from Anki addon pycmd/runJavaScript)
+  // Real Anki Review Bridge (receives reviews and snapshots from Anki addon pycmd/runJavaScript)
   useEffect(() => {
+    // 1. Live Review Handler
     (window as any).ankicasterOnReview = (payload: {
       card_id?: number;
       cardId?: number;
@@ -256,7 +297,7 @@ export default function App() {
       const cid = payload.cardId ?? payload.card_id ?? 1;
       const ms = payload.elapsedMs ?? payload.elapsed_ms ?? 2400;
       const age = payload.cardAge ?? payload.card_age;
-      const rid = payload.reviewId ?? payload.review_id ?? `rev-${cid}-${Date.now()}`;
+      const rid = payload.reviewId ?? payload.review_id; // Use only review_id, no Date.now() fallback
 
       setState(current => {
         const result = AnkicasterEngine.applyHonestReview(current, cid, payload.ease, ms, age, rid);
@@ -269,41 +310,87 @@ export default function App() {
         } else {
           playChime('review');
         }
+
+        // Acknowledge review to Anki
+        if (rid && isAddonMode && typeof (window as any).pycmd === 'function') {
+          try {
+            (window as any).pycmd(`ankicaster:ack:${rid}`);
+          } catch (e) {
+            console.error('Ack failed:', e);
+          }
+        }
+
         return result.state;
       });
     };
 
-    // Load non-suspended card snapshot from Anki
-    (window as any).ankicasterLoadSnapshot = (snapshot: Array<{ id: number; deckName: string; card_age: number }>) => {
-      if (!Array.isArray(snapshot) || snapshot.length === 0) return;
-      setState(current => AnkicasterEngine.loadCardSnapshot(current, snapshot));
-      addToast(`Synchronized ${snapshot.length} cards from Anki collection!`, 'info');
-    };
-
-    // Replay pending reviews recorded offline / between sessions
-    (window as any).ankicasterReplayPendingReviews = (records: Array<any>) => {
-      if (!Array.isArray(records) || records.length === 0) return;
+    // 2. Load Saved Game State from Python (user_files/save.json)
+    (window as any).ankicasterLoadSavedGame = (savedState: any) => {
+      if (!savedState || typeof savedState !== 'object') return;
       setState(current => {
-        let cur = current;
-        let count = 0;
-        for (const r of records) {
-          const cid = r.card_id ?? r.cardId;
-          if (!cid) continue;
-          const rid = r.review_id ?? r.reviewId ?? `${cid}-${r.answered_at_ms || Date.now()}`;
-          const ease = (r.ease || 3) as 1 | 2 | 3 | 4;
-          const elapsed = r.elapsed_ms ?? r.elapsedMs ?? 2400;
-          const age = r.card_age ?? r.cardAge ?? r.honest_ivl;
-          const res = AnkicasterEngine.applyHonestReview(cur, cid, ease, elapsed, age, rid);
-          cur = res.state;
-          count++;
-        }
-        if (count > 0) {
-          addToast(`Processed ${count} offline study reviews from Anki!`, 'success');
-        }
-        return cur;
+        // Merge saved state, preserving any existing allCards until snapshot arrives
+        return {
+          ...current,
+          ...savedState,
+          allCards: {
+            ...current.allCards,
+            ...(savedState.allCards || {})
+          }
+        };
       });
     };
 
+    // 3. Load Snapshot of Non-Suspended Real Cards from Anki
+    (window as any).ankicasterLoadSnapshot = (snapshot: Array<{ id: number; deckName: string; card_age: number; type?: number; queue?: number }>) => {
+      if (!Array.isArray(snapshot) || snapshot.length === 0) return;
+      setState(current => {
+        const next = AnkicasterEngine.loadCardSnapshot(current, snapshot);
+        // Persist immediately in addon mode
+        if (isAddonMode && typeof (window as any).pycmd === 'function') {
+          try {
+            const compact = getSerializableState(next);
+            (window as any).pycmd(`ankicaster:save:${JSON.stringify(compact)}`);
+          } catch (e) {
+            console.error('Save after snapshot failed:', e);
+          }
+        }
+        addToast(`Synchronized ${snapshot.length} cards from Anki collection!`, 'info');
+        return next;
+      });
+    };
+
+    // 4. Batch Replay Pending Reviews
+    (window as any).ankicasterReplayPendingReviews = (records: Array<any>) => {
+      if (!Array.isArray(records) || records.length === 0) return;
+
+      const reviewBatch = records.map(r => ({
+        cardId: r.card_id ?? r.cardId ?? 1,
+        ease: (r.ease || 3) as 1 | 2 | 3 | 4,
+        elapsedMs: r.elapsed_ms ?? r.elapsedMs ?? 2400,
+        cardAge: r.card_age ?? r.cardAge ?? r.honest_ivl,
+        reviewId: r.review_id ?? r.reviewId // Only review_id, no Date.now() fallback
+      }));
+
+      setState(current => {
+        const res = AnkicasterEngine.applyBatchHonestReviews(current, reviewBatch);
+        if (res.count > 0) {
+          addToast(`Processed ${res.count} study reviews from Anki!`, 'success');
+        }
+
+        // Send pycmd ack for the last review id applied
+        if (res.lastReviewId && isAddonMode && typeof (window as any).pycmd === 'function') {
+          try {
+            (window as any).pycmd(`ankicaster:ack:${res.lastReviewId}`);
+          } catch (e) {
+            console.error('Batch ack failed:', e);
+          }
+        }
+
+        return res.state;
+      });
+    };
+
+    // 5. PostMessage Bridge Handler
     const handleMessage = (event: MessageEvent) => {
       // Ignore postMessage events that don't come from the same window
       if (event.source !== window) return;
@@ -330,13 +417,24 @@ export default function App() {
     };
 
     window.addEventListener('message', handleMessage);
+
+    // Ready handshake: Signal to Anki python addon that handlers are fully registered
+    if (isAddonMode && typeof (window as any).pycmd === 'function') {
+      try {
+        (window as any).pycmd('ankicaster:ready');
+      } catch (e) {
+        console.error('Ready handshake failed:', e);
+      }
+    }
+
     return () => {
       delete (window as any).ankicasterOnReview;
+      delete (window as any).ankicasterLoadSavedGame;
       delete (window as any).ankicasterLoadSnapshot;
       delete (window as any).ankicasterReplayPendingReviews;
       window.removeEventListener('message', handleMessage);
     };
-  }, [playChime]);
+  }, [playChime, isAddonMode]);
 
   // Handler: Batch Simulation of Honest Reviews (gated behind devMode)
   const handleSimulateBatch = (count: number) => {
