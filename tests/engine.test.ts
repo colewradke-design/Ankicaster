@@ -400,10 +400,10 @@ test('4. Creature Buffs: mopslime cleans, thistle_hare produces herbs, healing_f
   state.characters = [stagStudent];
   AnkicasterEngine.ringBell(state, []);
 
-  // Base needs after decay: hunger 77, rest 78, leisure 78, composure 79, health 80
-  // calculateMorale: 0.25*77 + 0.25*78 + 0.2*78 + 0.2*79 + 0.1*80 = 19.25 + 19.5 + 15.6 + 15.8 + 8 = 78.15 -> 78
-  // With Glimmerhorn Stag: 78 + 3 = 81
-  assert.equal(stagStudent.morale, 81, 'Glimmerhorn Stag should give +3 morale on top of recalculated needs morale');
+  // Needs follow GDD 14.4. No bed (rest target 25), no leisure rooms (target 30),
+  // composure target 60 + charm/10 + 2 per tamed creature (4 here). Hunger only decays 4.
+  // calculateMorale of those needs rounds to 71; Glimmerhorn Stag adds +3.
+  assert.equal(stagStudent.morale, 74, 'Glimmerhorn Stag should give +3 morale on top of recalculated needs morale');
 });
 
 test('Automated check: every creature id referenced in engine.ts exists in content.ts', () => {

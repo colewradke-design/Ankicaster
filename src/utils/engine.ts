@@ -53,8 +53,11 @@ import {
   calculateTeacherDelay,
   calculateRiftChance,
   calculateMorale,
+  calculateRoomEfficiency,
+  calculateRoomQuality,
   getWizardLevelRequirements
 } from '../utils/formulas';
+import { computeReachability } from './reachability';
 
 /**
  * Anki 4:00 AM Rollover Boundary calculation
@@ -285,15 +288,19 @@ export class AnkicasterEngine {
       }
     }
 
-    // 7. Healing Injuries in Infirmary
-    const hasInfirmary = next.rooms.some(r => r.state === 'built' && r.defId === 'infirmary' && !isRoomUnfinished(r));
+    // 7. Healing Injuries in Infirmary (the infirmary's own bonus scales with its efficiency)
+    let infirmaryBonus = 0;
+    for (const r of next.rooms) {
+      if (r.defId !== 'infirmary' || r.state !== 'built' || isRoomUnfinished(r)) continue;
+      infirmaryBonus = Math.max(infirmaryBonus, 1.5 * AnkicasterEngine.roomEfficiency(next, r));
+    }
     const activeHealers = next.characters.filter(c => c.career === 'healer' && c.careerState === 'active').length;
     const hasHealingCreature = next.creatures.some(c => c.status === 'tamed' && (c.defId === 'halo_lamb' || c.defId === 'fen_sprite' || c.defId === 'ember_phoenix'));
 
     for (const char of next.characters) {
       if (char.injury) {
         let healRate = 1.0;
-        if (hasInfirmary) healRate += 1.5;
+        if (infirmaryBonus > 0) healRate += infirmaryBonus;
         healRate += activeHealers * 1.5;
         if (hasHealingCreature) healRate += 1.5;
 
@@ -358,6 +365,138 @@ export class AnkicasterEngine {
   }
 
   /**
+   * Castle rooms share a vertical wall on an overlapping floor. Grounds plots neighbour on any edge.
+   */
+  private static sharesWall(a: PlacedRoom, b: PlacedRoom): boolean {
+    if (a.area !== b.area) return false;
+    const yOverlap = Math.max(a.y, b.y) < Math.min(a.y + a.h, b.y + b.h);
+    const xOverlap = Math.max(a.x, b.x) < Math.min(a.x + a.w, b.x + b.w);
+    const side = (a.x + a.w === b.x || b.x + b.w === a.x) && yOverlap;
+    if (a.area === 'castle') return side;
+    const end = (a.y + a.h === b.y || b.y + b.h === a.y) && xOverlap;
+    return side || end;
+  }
+
+  /**
+   * GDD 15.9 adjacency, only the rules this pass uses.
+   * Starts at 1. Kitchen with no adjacent Refectory is 0.5 (clamped to 0.8–1.3 by the formula).
+   * Greenhouse adjacent to a Kitchen +10%. Classroom +5% per adjacent Library, max +10%.
+   */
+  private static adjacencyFactor(state: FullGameState, room: PlacedRoom): number {
+    let factor = 1;
+    const others = state.rooms.filter(r => r.id !== room.id && r.state === 'built');
+    const touches = (defId: string) => others.some(r => r.defId === defId && AnkicasterEngine.sharesWall(room, r));
+    if (room.defId === 'kitchen' && !touches('refectory')) factor = 0.5;
+    if (room.defId === 'greenhouse' && touches('kitchen')) factor += 0.1;
+    if (room.defId.startsWith('class_')) {
+      const libs = others.filter(r => r.defId === 'library' && AnkicasterEngine.sharesWall(room, r)).length;
+      factor += Math.min(0.1, libs * 0.05);
+    }
+    return factor;
+  }
+
+  private static roomIsStaffed(state: FullGameState, room: PlacedRoom): boolean {
+    const workplace = ROOM_DEFINITIONS[room.defId]?.workplace;
+    if (!workplace) return true;
+    return state.characters.some(c => c.workplaceRoomId === room.id && c.careerState !== 'sabbatical');
+  }
+
+  private static roomIsLocked(state: FullGameState, room: PlacedRoom): boolean {
+    return (room.lockedUntilReviewIndex ?? -1) > state.reviewIndex;
+  }
+
+  /** Factors behind one room's efficiency, for the room window. */
+  static roomEfficiencyDetail(state: FullGameState, room: PlacedRoom): {
+    efficiency: number;
+    level: number;
+    quality: number;
+    cleanliness: number;
+    staff: number;
+    adjacency: number;
+    blocked?: 'unfinished' | 'unreachable' | 'locked';
+  } {
+    const staffed = AnkicasterEngine.roomIsStaffed(state, room);
+    const reachable = computeReachability(state.rooms).get(room.id)?.reachable ?? false;
+    const locked = AnkicasterEngine.roomIsLocked(state, room);
+    const adj = AnkicasterEngine.adjacencyFactor(state, room);
+    const { q } = calculateRoomQuality(room);
+    const level = room.level === 3 ? 1.2 : room.level === 2 ? 1.1 : 1.0;
+    const quality = 1 + Math.min(q, 80) / 160;
+    const cleanliness = 0.7 + (0.3 * room.cleanliness) / 100;
+    const staff = staffed ? 1 : 0.5;
+    const adjacency = Math.min(1.3, Math.max(0.8, adj));
+    let blocked: 'unfinished' | 'unreachable' | 'locked' | undefined;
+    if (room.state === 'built' && isRoomUnfinished(room)) blocked = 'unfinished';
+    else if (room.state === 'built' && !reachable) blocked = 'unreachable';
+    else if (room.state === 'built' && locked) blocked = 'locked';
+    const efficiency = locked ? 0 : calculateRoomEfficiency(room, staffed, reachable, adj);
+    return { efficiency, level, quality, cleanliness, staff, adjacency, blocked };
+  }
+
+  /** Room efficiency the engine actually uses (reachability, staff, adjacency, locks). */
+  static roomEfficiency(state: FullGameState, room: PlacedRoom): number {
+    return AnkicasterEngine.roomEfficiencyDetail(state, room).efficiency;
+  }
+
+  /** Rest target from a bed room's efficiency. 25 means the character has no bed. */
+  static restTargetFromEfficiency(eff: number): number {
+    return 55 + 45 * Math.min(1, Math.max(0, eff - 0.5));
+  }
+
+  static restTarget(state: FullGameState, char: Character): number {
+    const bed = char.bedRoomId != null ? state.rooms.find(r => r.id === char.bedRoomId) : undefined;
+    if (!bed || bed.state !== 'built') return 25;
+    return AnkicasterEngine.restTargetFromEfficiency(AnkicasterEngine.roomEfficiency(state, bed));
+  }
+
+  /**
+   * Leisure seats from built, finished Common Room, Faculty Lounge, Bathhouse and Orchard,
+   * each multiplied by that room's efficiency.
+   * Bathhouse has no leisureSeats in content.ts, so it counts as 8.
+   */
+  private static leisureCapacity(state: FullGameState): number {
+    const ids = new Set(['common_room', 'faculty_lounge', 'bathhouse', 'orchard']);
+    let cap = 0;
+    for (const room of state.rooms) {
+      if (!ids.has(room.defId) || room.state !== 'built' || isRoomUnfinished(room)) continue;
+      const listed = ROOM_DEFINITIONS[room.defId]?.capacity?.leisureSeats;
+      const seats = listed ?? 8;
+      cap += seats * AnkicasterEngine.roomEfficiency(state, room);
+    }
+    return cap;
+  }
+
+  private static charmBonus(state: FullGameState): number {
+    let charm = 0;
+    for (const room of state.rooms) {
+      if (room.state !== 'built') continue;
+      for (const f of room.furniture) {
+        const pts = FURNITURE_DEFINITIONS[f.defId]?.stats?.charm || 0;
+        charm += f.damaged ? pts * 0.5 : pts;
+      }
+    }
+    return Math.min(20, charm / 10);
+  }
+
+  private static veilModifier(strength: number): number {
+    if (strength >= 80) return 0;       // Strong
+    if (strength >= 50) return -10;     // Thinning
+    if (strength >= 20) return -20;     // Thin
+    return -35;                         // Torn
+  }
+
+  private static composureTarget(state: FullGameState): number {
+    const creatures = state.creatures.filter(c => c.status === 'tamed').length;
+    const creatureBonus = Math.min(10, creatures * 2);
+    return 60 + AnkicasterEngine.charmBonus(state) + creatureBonus + AnkicasterEngine.veilModifier(state.veil.strength);
+  }
+
+  private static approachNeed(current: number, target: number, decay: number): number {
+    const next = current + (target - current) * 0.25 - decay;
+    return Math.min(100, Math.max(0, next));
+  }
+
+  /**
    * Ringing the bell (every 10 honest reviews)
    */
   static ringBell(state: FullGameState, notifications: string[]) {
@@ -370,8 +509,11 @@ export class AnkicasterEngine {
           if (room.hazard?.type === 'cold_snap') continue; // room frozen/disabled
           if (room.hazard?.type === 'echo_loop') continue; // suppresses classroom essence
 
-          let yieldMult = 1.0;
-          if (room.hazard?.type === 'spill_of_night') yieldMult = 0.5; // efficiency halved
+          const eff = AnkicasterEngine.roomEfficiency(state, room);
+          if (eff <= 0) continue;
+
+          let yieldMult = eff;
+          if (room.hazard?.type === 'spill_of_night') yieldMult = eff * 0.5; // efficiency halved
 
           const moraleFactor = 0.6 + (0.6 * char.morale) / 100;
           const yieldAmount = 0.2 * moraleFactor * yieldMult;
@@ -395,9 +537,12 @@ export class AnkicasterEngine {
       if (room.state !== 'built' || isRoomUnfinished(room)) continue; // Unfinished rooms run at 0%
       if (room.hazard?.type === 'cold_snap') continue; // room disabled
 
-      let harvestMult = 1.0;
+      const eff = AnkicasterEngine.roomEfficiency(state, room);
+      if (eff <= 0) continue;
+
+      let harvestMult = eff;
       if (room.hazard?.type === 'spill_of_night') {
-        harvestMult = 0.5;
+        harvestMult = eff * 0.5;
         room.cleanliness = 0; // soot residue
       }
 
@@ -423,6 +568,7 @@ export class AnkicasterEngine {
 
     // 3. Creature Active Buffs per Bell
     const hasGlimmerhornStag = state.creatures.some(c => c.status === 'tamed' && c.defId === 'glimmerhorn_stag');
+    let lanternMoth = false;
 
     for (const c of state.creatures) {
       if (c.status !== 'tamed') continue;
@@ -431,20 +577,28 @@ export class AnkicasterEngine {
       else if (c.defId === 'night_lynx') state.resources.umbra += 0.1;
       else if (c.defId === 'ember_phoenix') state.resources.radiance += 0.2;
       else if (c.defId === 'alembic_salamander') state.resources.reagents += 0.1;
-      else if (c.defId === 'lantern_moth') {
-        for (const char of state.characters) {
-          char.needs.composure = Math.min(100, char.needs.composure + 1);
-        }
+      else if (c.defId === 'lantern_moth') lanternMoth = true;
+    }
+
+    // 4. Needs (GDD 14.4). Hunger keeps the meal block below; it has no room target, only decay 4.
+    const headcount = state.characters.length;
+    const leisureTarget = 30 + 70 * Math.min(1, headcount > 0 ? AnkicasterEngine.leisureCapacity(state) / headcount : 0);
+    const compTarget = AnkicasterEngine.composureTarget(state);
+    for (const char of state.characters) {
+      char.needs.hunger = Math.min(100, Math.max(0, char.needs.hunger - 4));
+      char.needs.rest = AnkicasterEngine.approachNeed(char.needs.rest, AnkicasterEngine.restTarget(state, char), 3);
+      char.needs.leisure = AnkicasterEngine.approachNeed(char.needs.leisure, leisureTarget, 3);
+      char.needs.composure = AnkicasterEngine.approachNeed(char.needs.composure, compTarget, 1);
+    }
+
+    // Creature and hazard tweaks apply after the need update.
+    if (lanternMoth) {
+      for (const char of state.characters) {
+        char.needs.composure = Math.min(100, char.needs.composure + 1);
       }
     }
 
-    // 4. Needs Decay, Hex Fog Hazard & Morale Update
     for (const char of state.characters) {
-      char.needs.hunger = Math.max(0, char.needs.hunger - 3);
-      char.needs.rest = Math.max(0, char.needs.rest - 2);
-      char.needs.leisure = Math.max(0, char.needs.leisure - 2);
-      char.needs.composure = Math.max(0, char.needs.composure - 1);
-
       // Hex fog hazard in classroom or dorm causes extra composure drain
       if (char.seatRoomId) {
         const room = state.rooms.find(r => r.id === char.seatRoomId);
@@ -479,12 +633,18 @@ export class AnkicasterEngine {
       }
     }
 
-    // 5. Mealtime every 5th bell
+    // 5. Mealtime every 5th bell (unchanged +45 / provisions). A finished Refectory caps seats × efficiency, rounded down.
     if (state.bellIndex % 5 === 0) {
       const diners = state.characters.length;
       if (diners > 0) {
+        const refectories = state.rooms.filter(r => r.defId === 'refectory' && r.state === 'built' && !isRoomUnfinished(r));
+        let mealCap = Number.POSITIVE_INFINITY;
+        if (refectories.length > 0) {
+          const seats = ROOM_DEFINITIONS.refectory.capacity?.seats ?? 12;
+          mealCap = refectories.reduce((sum, r) => sum + Math.floor(seats * AnkicasterEngine.roomEfficiency(state, r)), 0);
+        }
         const mealsAvailable = Math.floor(state.resources.provisions);
-        const mealsServed = Math.min(diners, mealsAvailable);
+        const mealsServed = Math.min(diners, mealsAvailable, mealCap);
         state.resources.provisions -= mealsServed;
 
         for (let i = 0; i < mealsServed; i++) {

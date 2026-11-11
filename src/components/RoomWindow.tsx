@@ -22,7 +22,7 @@ import { AnkicasterEngine } from '../utils/engine';
 import { WizardPortrait } from './WizardPortrait';
 import { FullGameState, PlacedRoom } from '../types/ankicaster';
 import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS, SPELL_DEFINITIONS } from '../data/content';
-import { calculateRoomQuality, calculateRoomEfficiency, calculateFacultyLimit } from '../utils/formulas';
+import { calculateRoomQuality, calculateFacultyLimit } from '../utils/formulas';
 import { HAZARD_DISPEL_MANA_COST } from '../utils/engine';
 import { ScreenId, SCREEN_DEFS, getRoomScreens } from '../ui/screens';
 import { ScreenIcon } from './ScreenIcon';
@@ -42,6 +42,26 @@ export const Chip: React.FC<{ icon?: React.ReactNode; label: string; value: Reac
 
 export function upgradeCost(room: PlacedRoom): number {
   return Math.round((ROOM_DEFINITIONS[room.defId]?.cost.mana || 100) * 0.75) + 50;
+}
+
+const STAT_LABELS: Record<string, string> = {
+  comfort: 'Comfort', focus: 'Focus', order: 'Order', aura: 'Aura', charm: 'Charm'
+};
+
+/** Stat points on a piece being bought, and how many quality points it would add in this room. */
+function furnitureBuyTitle(room: PlacedRoom, stats: { comfort?: number; focus?: number; order?: number; aura?: number; charm?: number } | undefined): string {
+  const def = ROOM_DEFINITIONS[room.defId];
+  const parts = Object.entries(stats || {}).filter(([, v]) => v).map(([k, v]) => `${STAT_LABELS[k] || k} ${v}`);
+  let q = 0;
+  if (def && stats) {
+    for (const [stat, val] of Object.entries(stats)) {
+      if (!val) continue;
+      if (def.stats.primary.includes(stat)) q += val;
+      else if (def.stats.secondary === stat) q += 0.5 * val;
+    }
+  }
+  const qText = Number.isInteger(q) ? String(q) : String(Math.round(q * 10) / 10);
+  return `${parts.join(', ') || 'No stat points'} · +${qText} quality here`;
 }
 
 export function facultyLimitFor(state: FullGameState) {
@@ -151,7 +171,11 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
   const stored = state.furnitureInventory || {};
   const def = ROOM_DEFINITIONS[room.defId];
   const { q, tier } = calculateRoomQuality(room);
-  const eff = calculateRoomEfficiency(room, true, true);
+  const detail = AnkicasterEngine.roomEfficiencyDetail(state, room);
+  const eff = detail.efficiency;
+  const factorLine = `Lv ×${detail.level.toFixed(2)} · Q ×${detail.quality.toFixed(2)} · Clean ×${detail.cleanliness.toFixed(2)} · Staff ×${detail.staff.toFixed(2)} · Adj ×${detail.adjacency.toFixed(2)}`;
+  const bedRoom = !!(def?.capacity?.beds || def?.capacity?.facultyBeds);
+  const restTarget = Math.round(AnkicasterEngine.restTargetFromEfficiency(eff));
   // A construction site offers no screens until it is built.
   const screens = room.state === 'built' ? getRoomScreens(room.defId, state) : [];
   const primary = screens.slice(0, 3);
@@ -227,12 +251,18 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
             {isSite ? (
               <Chip icon={<Hammer className="w-3.5 h-3.5 text-amber-400" />} label="Building" value={`${room.buildProgress}/${room.buildRequired}`} title={reviewsToGoText(room)} />
             ) : (
-              <Chip icon={<Gauge className={`w-3.5 h-3.5 ${unfinished ? 'text-amber-400' : 'text-emerald-400'}`} />} label="Eff" value={`${(eff * 100).toFixed(0)}%`} title={unfinished ? 'Unfinished: runs at 0% until every required fixture is installed' : 'Efficiency'} tone={unfinished ? 'text-amber-300' : 'text-emerald-300'} />
+              <Chip icon={<Gauge className={`w-3.5 h-3.5 ${unfinished ? 'text-amber-400' : 'text-emerald-400'}`} />} label="Eff" value={`${(eff * 100).toFixed(0)}%`} title={unfinished ? 'Unfinished: runs at 0% until every required fixture is installed' : factorLine} tone={unfinished ? 'text-amber-300' : 'text-emerald-300'} />
             )}
             <Chip icon={<Droplets className="w-3.5 h-3.5 text-sky-400" />} label="Clean" value={`${Math.round(room.cleanliness)}%`} title="Cleanliness" />
             <Chip icon={<Shield className="w-3.5 h-3.5 text-indigo-300" />} label="Veil" value={`${def?.veil ?? 4}/day`} title="Daily Veil upkeep (mana)" tone="text-indigo-300" />
             <Chip label="Q" value={Math.round(q)} title="Quality score" tone="text-amber-300" />
           </div>
+          {!isSite && (
+            <p className="text-[12px] text-slate-400 -mt-2" data-testid="efficiency-breakdown">
+              Efficiency {(eff * 100).toFixed(0)}%{detail.blocked ? ` (${detail.blocked})` : ''} · {factorLine}
+              {bedRoom && <> · Rest target: {restTarget}</>}
+            </p>
+          )}
 
           {isSite && (
             <div className="flex items-center justify-between gap-2 bg-slate-950/60 border border-slate-800 rounded-xl px-3 py-2 text-[13px]" data-testid="site-countdown">
@@ -452,18 +482,21 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
               <div>
                 <div className="text-[12px] uppercase tracking-wider font-bold text-slate-500 mb-1.5">Furnish</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1">
-                  {compatible.map(fDef => (
-                    <div key={fDef.id} className="flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 px-2.5 py-1.5 rounded-lg">
-                      <span className="text-slate-200 truncate" title={fDef.name}>{fDef.name}</span>
+                  {compatible.map(fDef => {
+                    const buyTitle = furnitureBuyTitle(room, fDef.stats);
+                    return (
+                    <div key={fDef.id} title={buyTitle} className="flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 px-2.5 py-1.5 rounded-lg">
+                      <span className="text-slate-200 truncate">{fDef.name}</span>
                       <button
                         onClick={() => onAddFurniture(room.id, fDef.id)}
                         className="shrink-0 px-2 py-1 min-h-[28px] bg-amber-500/15 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-md text-[12px] font-bold"
-                        title={`Install ${fDef.name}`}
+                        title={`${buyTitle} · Install ${fDef.name}`}
                       >
                         {(stored[fDef.id] || 0) > 0 ? `Stored ×${stored[fDef.id]}` : <>{fDef.cost.mana}m{fDef.cost.timber ? ` · ${fDef.cost.timber}T` : ''}</>}
                       </button>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>
