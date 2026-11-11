@@ -113,20 +113,45 @@ test('UI-5: each former tab feature is reachable via a room window or the top ba
   for (const id of ['reviewer', 'ponder', 'grimoire', 'admissions', 'build', 'draft'] as ScreenId[]) assert.ok(reach.has(id), id);
 });
 
-test('UI-6: content fallbacks keep existing things reachable without their room', () => {
+test('UI-6: room screens stay hidden until their room is BUILT (no data fallbacks; data untouched)', () => {
   const s = fresh();
   const char = (over: any) => ({ id: 900 + Math.random(), name: 'X', status: 'student', masteredSchools: [], careerSetIds: [], traits: [], needs: {}, ...over });
-  const withChars = { ...s, characters: [char({}), char({ career: 'teacher', status: 'faculty', masteredSchools: ['arcane'] })] } as any;
-  assert.ok(isScreenUnlocked(withChars, 'students'));
-  assert.ok(isScreenUnlocked(withChars, 'faculty'));
-  assert.ok(isScreenUnlocked({ ...s, creatures: [{ id: 1 } as any] }, 'bestiary'));
-  assert.ok(isScreenUnlocked({ ...s, resources: { ...s.resources, potions: { mending_draught: 1 } } }, 'alchemy'));
-  assert.ok(isScreenUnlocked({ ...s, alumniGallery: [{ id: 1 } as any] }, 'alumni'));
-  assert.ok(isScreenUnlocked({ ...s, expeditions: [{ state: 'active' } as any] }, 'rift'));
+  const loaded = {
+    ...s,
+    characters: [char({}), char({ career: 'teacher', status: 'faculty', masteredSchools: ['arcane'] })],
+    creatures: [{ id: 1 } as any],
+    resources: { ...s.resources, potions: { mending_draught: 1 } },
+    alumniGallery: [{ id: 1 } as any],
+    expeditions: [{ state: 'active' } as any]
+  } as any;
+  const before = JSON.stringify(loaded);
+  const menu = getAcademyMenuScreens(loaded);
+  for (const id of ['students', 'faculty', 'alumni', 'bestiary', 'alchemy', 'rift'] as ScreenId[]) {
+    assert.ok(!isScreenUnlocked(loaded, id), `${id} hidden without its room`);
+    assert.ok(!menu.includes(id), `${id} not in Academy menu without its room`);
+  }
+  assert.equal(JSON.stringify(loaded), before, 'save data is not touched');
+
+  // A construction site does not unlock its screens, in the menu or in its own window
+  for (const [defId, id] of [['faculty_quarters', 'faculty'], ['dormitory', 'students'], ['alchemy_lab', 'alchemy']] as Array<[string, ScreenId]>) {
+    const site = withRoom(s, defId);
+    site.rooms[site.rooms.length - 1] = { ...site.rooms[site.rooms.length - 1], state: 'site', buildRequired: 50, buildProgress: 3 };
+    assert.ok(!isScreenUnlocked(site, id), `${id} locked while ${defId} is a site`);
+    assert.ok(!getAcademyMenuScreens(site).includes(id));
+    const html = renderRoom(site, site.rooms[site.rooms.length - 1]);
+    assert.ok(!new RegExp(`data-screen="${id}"`).test(html), `${defId} site window offers no ${id}`);
+    const built = withRoom(s, defId);
+    assert.ok(isScreenUnlocked(built, id) && getAcademyMenuScreens(built).includes(id), `${id} unlocked once ${defId} is built`);
+    assert.match(renderRoom(built, built.rooms[built.rooms.length - 1]), new RegExp(`data-screen="${id}"`));
+  }
+
+  // Visitors: Entrance Hall built + someone waiting
   const ev = { ...s, activeEvents: [{ eventId: 'misaddressed_owl', dayArrived: 1 }] };
   assert.ok(isScreenUnlocked(ev, 'events'));
   assert.ok(getRoomScreens('entrance_hall', ev).includes('events'));
   assert.ok(!getRoomScreens('entrance_hall', s).includes('events'));
+  const noHall = { ...ev, rooms: ev.rooms.filter(r => r.defId !== 'entrance_hall') };
+  assert.ok(!isScreenUnlocked(noHall, 'events'));
 });
 
 test('UI-7: hazards stay reachable: top bar chip, Academy menu entry, room window dispel with engine cost', () => {

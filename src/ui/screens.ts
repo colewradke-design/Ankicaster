@@ -93,8 +93,12 @@ export const FORMER_TABS: Array<{ tab: string; features: string[]; screens: Scre
 ];
 
 function builtDefIds(state: FullGameState): Set<string> {
-  // Rooms under construction still count: their window exists and the player placed them.
-  return new Set(state.rooms.map(r => r.defId));
+  // Only completed rooms unlock their screens; construction sites ('site') do not.
+  return new Set(state.rooms.filter(r => r.state === 'built').map(r => r.defId));
+}
+
+export function isRoomBuilt(room: { state: string }): boolean {
+  return room.state === 'built';
 }
 
 export function totalMasters(state: FullGameState): number {
@@ -103,31 +107,6 @@ export function totalMasters(state: FullGameState): number {
 
 export function hazardRooms(state: FullGameState) {
   return state.rooms.filter(r => !!r.hazard);
-}
-
-/**
- * Content fallbacks: a screen whose room isn't built is still listed when there is something
- * in it to manage, so nothing that exists in the save can become unreachable.
- */
-function hasContent(state: FullGameState, id: ScreenId): boolean {
-  switch (id) {
-    case 'students':
-      return state.characters.some(c => !c.career);
-    case 'faculty':
-      return state.characters.some(c => !!c.career || c.masteredSchools.length > 0);
-    case 'alumni':
-      return state.alumniGallery.length > 0;
-    case 'bestiary':
-      return state.creatures.length > 0;
-    case 'alchemy':
-      return Object.values(state.resources.potions || {}).some(n => (n || 0) > 0);
-    case 'rift':
-      return totalMasters(state) >= 3 || state.expeditions.some(e => e.state === 'active');
-    case 'events':
-      return state.activeEvents.length > 0;
-    default:
-      return false;
-  }
 }
 
 /** Screens that belong to no room: always in the top bar or the Academy menu. */
@@ -144,14 +123,12 @@ export function isScreenUnlocked(state: FullGameState, id: ScreenId): boolean {
   const def = SCREEN_DEFS[id];
   if (def.rooms.length === 0) return true;
   const built = builtDefIds(state);
-  if (def.rooms.some(r => built.has(r))) {
-    if (id === 'events') return state.activeEvents.length > 0;
-    return true;
-  }
-  return hasContent(state, id);
+  if (!def.rooms.some(r => built.has(r))) return false; // hidden until its room is built; data is kept
+  if (id === 'events') return state.activeEvents.length > 0;
+  return true;
 }
 
-/** Room-backed screens the Academy menu lists right now (built/unlocked only). */
+/** Room-backed screens the Academy menu lists right now: only those whose room has finished construction. */
 export function getAcademyMenuScreens(state: FullGameState): ScreenId[] {
   return ALL_SCREENS.filter(id => SCREEN_DEFS[id].rooms.length > 0 && isScreenUnlocked(state, id));
 }

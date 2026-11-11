@@ -121,7 +121,8 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
   const def = ROOM_DEFINITIONS[room.defId];
   const { q, tier } = calculateRoomQuality(room);
   const eff = calculateRoomEfficiency(room, true, true);
-  const screens = getRoomScreens(room.defId, state);
+  // A construction site offers no screens until it is built.
+  const screens = room.state === 'built' ? getRoomScreens(room.defId, state) : [];
   const primary = screens.slice(0, 3);
   const extra = screens.slice(3);
   const isSite = room.state === 'site';
