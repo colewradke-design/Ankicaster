@@ -202,7 +202,7 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
       knownSpells: [],
       spellCooldowns: {},
       queuedSessions: [],
-      appearance: {
+      appearance: choices.skin || choices.hair || choices.robeColor || choices.hat || choices.staff ? {
         bodyShape: c.bodyShape,
         skin: c.skin,
         hair: c.hair,
@@ -210,7 +210,7 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
         robeColor: c.robeColor,
         hat: c.hat,
         staff: c.staff
-      },
+      } : undefined,
       foundingSchool: c.foundingSchool,
       foundedAt: new Date(now).toISOString()
     },

@@ -21,18 +21,22 @@ interface AcademyCanvasProps {
   state: FullGameState;
   onSelectRoom: (room: PlacedRoom) => void;
   selectedRoomId?: number;
+  onResolveHazard?: (roomId: number, method: 'warder' | 'spell') => void;
 }
 
 export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   state,
   onSelectRoom,
-  selectedRoomId
+  selectedRoomId,
+  onResolveHazard
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<Application | null>(null);
   const worldRef = useRef<VisualWorld | null>(null);
   const isDraggingRef = useRef(false);
+  const dragStartPosRef = useRef({ x: 0, y: 0 });
   const lastMousePosRef = useRef({ x: 0, y: 0 });
+  const totalDragDistRef = useRef(0);
 
   const [currentZoom, setCurrentZoom] = useState(2);
 
@@ -122,7 +126,9 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   // Mouse / Pointer Controls: Pan, Click Room, Zoom Wheel
   const handlePointerDown = (e: React.PointerEvent) => {
     isDraggingRef.current = true;
+    dragStartPosRef.current = { x: e.clientX, y: e.clientY };
     lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+    totalDragDistRef.current = 0;
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -130,6 +136,7 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     const dx = e.clientX - lastMousePosRef.current.x;
     const dy = e.clientY - lastMousePosRef.current.y;
     lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+    totalDragDistRef.current += Math.abs(dx) + Math.abs(dy);
 
     worldRef.current.camera.pan(dx, dy);
   };
@@ -139,6 +146,11 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   };
 
   const handleClick = (e: React.MouseEvent) => {
+    // If the user dragged more than 6 screen px, it was a pan gesture, not a click
+    if (totalDragDistRef.current > 6) {
+      return;
+    }
+
     const container = containerRef.current;
     const world = worldRef.current;
     if (!container || !world) return;

@@ -19,6 +19,7 @@ import { computeReachability } from '../src/utils/reachability.ts';
 import { NavGraph } from '../src/visual/layout/navGraph.ts';
 import { Choreographer } from '../src/visual/agents/Choreographer.ts';
 import { createNewAcademy } from '../src/visual/onboarding/freshStart.ts';
+import { VisualWorld } from '../src/visual/world/VisualWorld.ts';
 import fs from 'node:fs';
 
 test('F1: Review Mana awards 10 base mana and arcane buff', () => {
@@ -683,8 +684,48 @@ test('8. Safe rest: while player is away and bank has hit 10% floor, skip hazard
   assert.equal(roomsWithHazard.length, 0, 'Hazards must be skipped while bank is at 10% floor (BR-25)');
 });
 
-test('Section 17.1 & VR-01: State immutability test under deep freeze and VisualWorld simulation', () => {
+test('Section 17.1 & VR-01: State immutability test under deep freeze and VisualWorld simulation (15 characters, 10,000 ticks)', () => {
   const state = createInitialGameState();
+
+  // Populate 15 characters across students and faculty
+  const schools: SchoolType[] = ['arcane', 'nature', 'light', 'shadow', 'alchemy'];
+  for (let i = 1; i <= 15; i++) {
+    const isStudent = i <= 10;
+    state.characters.push({
+      id: 1000 + i,
+      name: `Scholar ${i}`,
+      pronouns: i % 2 === 0 ? 'she/her' : 'he/him',
+      appearance: {
+        skin: '#f6d7c3',
+        hair: 'short',
+        hairColor: '#4a2e1e',
+        robeColor: '#4e8b3a',
+        hat: i % 3 === 0 ? 'pointed' : 'none'
+      },
+      personality: 'Bookish',
+      traits: ['Diligent'],
+      status: isStudent ? 'student' : 'faculty',
+      currentSchool: schools[i % 5],
+      masteredSchools: !isStudent ? [schools[i % 5]] : [],
+      seatRoomId: isStudent ? 1 : undefined,
+      bedRoomId: 1,
+      workplaceRoomId: !isStudent ? 1 : undefined,
+      needs: {
+        hunger: 40 + (i * 3) % 50,
+        rest: 35 + (i * 4) % 50,
+        leisure: 60 + (i * 2) % 30,
+        composure: 75,
+        health: 100
+      },
+      morale: 80,
+      readyDays: {},
+      enrolledDay: 1,
+      chronicle: [],
+      careerSetIds: []
+    });
+  }
+
+  assert.equal(state.characters.length >= 15, true, 'Must test with at least 15 characters');
 
   // Deep freeze helper
   function deepFreeze(obj: any): any {
@@ -709,16 +750,21 @@ test('Section 17.1 & VR-01: State immutability test under deep freeze and Visual
   const navGraph = new NavGraph(frozenState.rooms, 400);
   assert.ok(navGraph.nodes.size > 0, 'NavGraph nodes should be populated');
 
-  // Test Choreographer tick on frozen state
-  const choreo = new Choreographer(navGraph, 400);
-  choreo.syncState(frozenState);
-
-  // Run 100 ticks on frozen state; must not throw mutation error
+  // Test VisualWorld and VisualWorld.setSnapshot on frozen state
+  const world = new VisualWorld();
   assert.doesNotThrow(() => {
-    for (let i = 0; i < 100; i++) {
-      choreo.tick(16, frozenState, false);
+    world.setSnapshot(frozenState);
+  }, 'VisualWorld.setSnapshot must never mutate FullGameState');
+
+  // Test Choreographer tick and VisualWorld.update on frozen state for 10,000 ticks
+  assert.doesNotThrow(() => {
+    for (let i = 0; i < 10000; i++) {
+      world.choreographer.tick(16, frozenState, false);
+      if (i % 100 === 0) {
+        world.update(16);
+      }
     }
-  }, 'Choreographer and visual layer must never mutate FullGameState');
+  }, 'Choreographer and VisualWorld must complete 10,000 ticks without mutating FullGameState');
 });
 
 test('computeReachability: unlinked upper room shows as unreachable', () => {

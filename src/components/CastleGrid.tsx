@@ -22,13 +22,15 @@ interface CastleGridProps {
 export const CastleGrid: React.FC<CastleGridProps> = ({
   state,
   onSelectRoom,
-  selectedRoomId
+  selectedRoomId,
+  onResolveHazard
 }) => {
   return (
     <AcademyCanvas
       state={state}
       onSelectRoom={onSelectRoom}
       selectedRoomId={selectedRoomId}
+      onResolveHazard={onResolveHazard}
     />
   );
 };

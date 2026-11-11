@@ -4,13 +4,16 @@
  * 
  * Visual World Coordinator
  * Implements Section 13.3 & Milestone V1:
- * - Manages PixiJS containers: skyLayer, castleLayer, agentsLayer, roofsLayer, overlayLayer
+ * - Manages PixiJS containers: skyLayer, castleLayer, roomLabelsContainer, agentsLayer, roofsLayer, overlayLayer
  * - Coordinates Camera, Choreographer, NavGraph, and ForgeRenderer
+ * - Draws room names on canvas (readable at 2x and never cut off)
+ * - Pools & destroys Unreachable badge text per room once
  * - Handles hit testing for room clicks
  */
 
 import { Container, Graphics, Text, TextStyle } from 'pixi.js';
 import { FullGameState, PlacedRoom } from '../../types/ankicaster';
+import { ROOM_DEFINITIONS } from '../../data/content';
 import { Camera } from './Camera';
 import { NavGraph } from '../layout/navGraph';
 import { Choreographer } from '../agents/Choreographer';
@@ -31,6 +34,7 @@ export class VisualWorld {
 
   skyGraphics = new Graphics();
   castleGraphics = new Graphics();
+  roomLabelsContainer = new Container();
   agentsGraphics = new Graphics();
   roofsGraphics = new Graphics();
   overlayGraphics = new Graphics();
@@ -46,6 +50,9 @@ export class VisualWorld {
   totalWorldWidth: number = 1600;
   selectedRoomId?: number;
 
+  roomNameTexts = new Map<number, Text>();
+  unreachableBadgeTexts = new Map<number, Text>();
+
   constructor() {
     this.camera = new Camera(2);
     this.navGraph = new NavGraph([], 400);
@@ -57,6 +64,7 @@ export class VisualWorld {
 
     this.worldContainer.addChild(this.skyGraphics);
     this.worldContainer.addChild(this.castleGraphics);
+    this.worldContainer.addChild(this.roomLabelsContainer);
     this.worldContainer.addChild(this.agentsGraphics);
     this.worldContainer.addChild(this.roofsGraphics);
     this.overlayContainer.addChild(this.overlayGraphics);
@@ -77,7 +85,7 @@ export class VisualWorld {
     // Update nav graph & choreographer
     this.navGraph.build(state.rooms, this.groundY);
     this.choreographer.updateNavGraph(this.navGraph, this.groundY);
-    this.choreographer.syncState(state);
+    this.choreographer.syncState(state, this.reachability);
 
     // Draw static world layers
     this.renderWorldLayers();
@@ -92,8 +100,10 @@ export class VisualWorld {
     // 2. Castle & Grounds Rooms
     this.castleGraphics.clear();
     const rooms = this.state.rooms;
+    const currentRoomIds = new Set<number>();
 
     for (const room of rooms) {
+      currentRoomIds.add(room.id);
       const box = roomToWorldBox(room, this.groundY);
       const isReachable = this.reachability.get(room.id)?.reachable ?? false;
       const isSelected = this.selectedRoomId === room.id;
@@ -113,6 +123,46 @@ export class VisualWorld {
       }
 
       ForgeRenderer.drawRoom(this.castleGraphics, room, box, isReachable, isSelected, hasLeftDoor, hasRightDoor);
+
+      // Render room name on the canvas (readable at 2x and never cut off)
+      const def = ROOM_DEFINITIONS[room.defId];
+      const roomName = def?.name || room.defId;
+      const maxW = Math.max(28, box.width - 6);
+
+      let roomText = this.roomNameTexts.get(room.id);
+      if (!roomText) {
+        roomText = new Text({
+          text: roomName,
+          style: new TextStyle({
+            fontFamily: 'sans-serif',
+            fontSize: 7,
+            fill: 0xffffff,
+            fontWeight: 'bold',
+            align: 'center',
+            wordWrap: true,
+            wordWrapWidth: maxW,
+            stroke: { color: 0x1b1822, width: 2 }
+          })
+        });
+        roomText.anchor.set(0.5, 0);
+        this.roomLabelsContainer.addChild(roomText);
+        this.roomNameTexts.set(room.id, roomText);
+      } else {
+        roomText.text = roomName;
+        roomText.style.wordWrapWidth = maxW;
+      }
+
+      roomText.x = box.left + box.width / 2;
+      roomText.y = box.top + 3;
+    }
+
+    // Clean up room names for rooms no longer in state
+    for (const [roomId, text] of this.roomNameTexts.entries()) {
+      if (!currentRoomIds.has(roomId)) {
+        this.roomLabelsContainer.removeChild(text);
+        text.destroy();
+        this.roomNameTexts.delete(roomId);
+      }
     }
 
     // 3. Roofs on top of each castle column
@@ -121,7 +171,6 @@ export class VisualWorld {
     for (let col = 0; col < 8; col++) {
       const colRooms = castleRooms.filter(r => r.x <= col && r.x + r.w > col);
       if (colRooms.length > 0) {
-        // Topmost room
         let topRoom = colRooms[0];
         for (const r of colRooms) {
           if (r.y + r.h > topRoom.y + topRoom.h) topRoom = r;
@@ -139,17 +188,15 @@ export class VisualWorld {
 
   renderOverlays() {
     this.overlayGraphics.clear();
-    // Clear overlay text children
-    while (this.overlayContainer.children.length > 1) {
-      this.overlayContainer.removeChildAt(1);
-    }
 
     if (!this.state) return;
+
+    const currentUnreachableRoomIds = new Set<number>();
 
     for (const room of this.state.rooms) {
       const isReachable = this.reachability.get(room.id)?.reachable ?? false;
       if (!isReachable) {
-        // Draw Unreachable badge on top right of the room
+        currentUnreachableRoomIds.add(room.id);
         const box = roomToWorldBox(room, this.groundY);
         const screenX = (box.left + box.width - 20) * this.camera.zoom - (this.camera.x * this.camera.zoom - this.camera.viewportWidth / 2);
         const screenY = (box.top + 16) * this.camera.zoom - (this.camera.y * this.camera.zoom - this.camera.viewportHeight / 2);
@@ -162,19 +209,35 @@ export class VisualWorld {
           screenX + 6, screenY + 6
         ]).stroke({ color: 0xd9472b, width: 2 });
 
-        const badgeText = new Text({
-          text: 'Unreachable',
-          style: new TextStyle({
-            fontFamily: 'sans-serif',
-            fontSize: 10,
-            fill: 0xffffff,
-            fontWeight: 'bold',
-            stroke: { color: 0x000000, width: 2 }
-          })
-        });
+        // Manage persistent badge text once per room
+        let badgeText = this.unreachableBadgeTexts.get(room.id);
+        if (!badgeText) {
+          badgeText = new Text({
+            text: 'Unreachable',
+            style: new TextStyle({
+              fontFamily: 'sans-serif',
+              fontSize: 10,
+              fill: 0xffffff,
+              fontWeight: 'bold',
+              stroke: { color: 0x000000, width: 2 }
+            })
+          });
+          this.overlayContainer.addChild(badgeText);
+          this.unreachableBadgeTexts.set(room.id, badgeText);
+        }
+
         badgeText.x = screenX - 60;
         badgeText.y = screenY - 7;
-        this.overlayContainer.addChild(badgeText);
+        badgeText.visible = true;
+      }
+    }
+
+    // Destroy badge texts when no longer needed (e.g. room became reachable or was removed)
+    for (const [roomId, badgeText] of this.unreachableBadgeTexts.entries()) {
+      if (!currentUnreachableRoomIds.has(roomId)) {
+        this.overlayContainer.removeChild(badgeText);
+        badgeText.destroy();
+        this.unreachableBadgeTexts.delete(roomId);
       }
     }
   }

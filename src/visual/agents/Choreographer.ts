@@ -5,18 +5,22 @@
  * Choreographer & Lively Schedule
  * Implements Section 7:
  * - 10-minute "lively" loop:
- *   0:00-4:00 Class / Work
- *   4:00-6:00 Free time
- *   6:00-9:00 Class / Work
- *   9:00-10:00 Free time
- *   Meals triggered by meal window or 5th bell
- * - Purely visual animation puppet show. Never writes to state.
- * - Respects reduceMotion: snaps agents to destination without tweening or walking.
+ *   0:00-3:30 Class / Work
+ *   3:30-5:00 Free time
+ *   5:00-7:30 Class / Work
+ *   7:30-8:30 Free time
+ *   8:30-10:00 Sleep (bedRoomId)
+ * - Meal window triggered on 5th bell (debounced to 5 min)
+ * - Agents spread across room width with stable per-agent offsets
+ * - Unreachable room replanning
+ * - Free time picks leisure room once per block (seeded)
+ * - reduceMotion places agents once per phase change only
  */
 
 import { FullGameState, Character } from '../../types/ankicaster';
 import { NavGraph, NavNode } from '../layout/navGraph';
-import { roomToWorldBox, getFloorLineY } from '../layout/gridToWorld';
+import { roomToWorldBox } from '../layout/gridToWorld';
+import { ReachabilityInfo } from '../../utils/reachability';
 
 export type AgentAnimation =
   | 'idle'
@@ -43,6 +47,10 @@ export interface VisualAgent {
   animTimer: number;
   activity: 'class' | 'work' | 'meal' | 'sleep' | 'free_time';
   currentRoomId?: number;
+  targetRoomId?: number;
+  freeTimeTargetRoomId?: number;
+  freeTimeBlockId?: number;
+  lastReducedMotionPhase?: string;
   path: NavNode[];
   pathIndex: number;
   robeColor: string;
@@ -59,8 +67,14 @@ export class Choreographer {
   schedulePhase: 'class_work' | 'free_time' | 'meal' | 'sleep' = 'class_work';
   cycleTimeMs: number = 0; // 0..600,000 (10 min)
   mealWindowRemainingMs: number = 0;
+  lastMealBellIndex: number = -1;
+  lastMealTriggerTimeMs: number = -300000;
+  freeTimeBlockCounter: number = 0;
+  lastSchedulePhase: string = 'class_work';
+
   navGraph: NavGraph;
   groundY: number;
+  reachability?: Map<number, ReachabilityInfo>;
 
   constructor(navGraph: NavGraph, groundY: number) {
     this.navGraph = navGraph;
@@ -72,7 +86,39 @@ export class Choreographer {
     this.groundY = groundY;
   }
 
-  syncState(state: FullGameState) {
+  getRoomSlotX(roomId: number, agentId: string, state: FullGameState): number {
+    const room = state.rooms.find(r => r.id === roomId);
+    if (!room) return 400;
+    const box = roomToWorldBox(room, this.groundY);
+
+    let hash = 0;
+    for (let i = 0; i < agentId.length; i++) {
+      hash = ((hash << 5) - hash + agentId.charCodeAt(i)) | 0;
+    }
+    const absHash = Math.abs(hash);
+
+    // Spread across 12 distinct slots
+    const slot = absHash % 12;
+    const usableWidth = Math.max(16, box.width - 24);
+    const slotRatio = (slot + 0.5) / 12 - 0.5; // -0.5 to +0.5
+    return box.left + box.width / 2 + slotRatio * usableWidth;
+  }
+
+  syncState(state: FullGameState, reachability?: Map<number, ReachabilityInfo>) {
+    if (reachability) {
+      this.reachability = reachability;
+    }
+
+    // Check 5th bell meal rule (debounced to 5 min)
+    if (state.bellIndex > 0 && state.bellIndex % 5 === 0 && state.bellIndex !== this.lastMealBellIndex) {
+      const now = Date.now();
+      if (now - this.lastMealTriggerTimeMs >= 300000) {
+        this.triggerMealWindow();
+        this.lastMealTriggerTimeMs = now;
+        this.lastMealBellIndex = state.bellIndex;
+      }
+    }
+
     // 1. Sync Wizard
     if (!this.agents.has('wizard')) {
       const studyRoom = state.rooms.find(r => r.defId === 'wizard_study' && r.state === 'built');
@@ -104,6 +150,7 @@ export class Choreographer {
         animTimer: 0,
         activity: 'work',
         currentRoomId: studyRoom?.id,
+        targetRoomId: studyRoom?.id,
         path: [],
         pathIndex: 0,
         robeColor: wizRobe,
@@ -131,7 +178,7 @@ export class Choreographer {
         let fl = 0;
         if (room) {
           const box = roomToWorldBox(room, this.groundY);
-          sx = box.left + 20 + Math.random() * (box.width - 40);
+          sx = this.getRoomSlotX(room.id, id, state);
           sy = box.floorLineY;
           fl = room.y;
         }
@@ -161,6 +208,7 @@ export class Choreographer {
           animTimer: 0,
           activity: 'free_time',
           currentRoomId: room?.id,
+          targetRoomId: room?.id,
           path: [],
           pathIndex: 0,
           robeColor: robeCol,
@@ -171,7 +219,6 @@ export class Choreographer {
           name: char.name
         });
       } else {
-        // Update character reference
         const agent = this.agents.get(id)!;
         agent.character = char;
         if (char.currentSchool) {
@@ -184,6 +231,19 @@ export class Choreographer {
           };
           agent.robeColor = schoolColors[char.currentSchool] || agent.robeColor;
         }
+
+        // Check if agent's current or target room is unreachable
+        if (this.reachability) {
+          const currentReachable = agent.currentRoomId ? (this.reachability.get(agent.currentRoomId)?.reachable ?? true) : true;
+          const targetReachable = agent.targetRoomId ? (this.reachability.get(agent.targetRoomId)?.reachable ?? true) : true;
+          if (!currentReachable || !targetReachable) {
+            // Replan right away to a reachable room along the nav graph
+            agent.path = [];
+            agent.pathIndex = 0;
+            agent.freeTimeTargetRoomId = undefined;
+            this.planAgentNextGoal(agent, state);
+          }
+        }
       }
     }
 
@@ -193,6 +253,10 @@ export class Choreographer {
         this.agents.delete(id);
       }
     }
+  }
+
+  triggerMealWindow() {
+    this.mealWindowRemainingMs = 90000; // 90 seconds meal window
   }
 
   tick(deltaMs: number, state: FullGameState, reduceMotion: boolean) {
@@ -206,19 +270,33 @@ export class Choreographer {
     const secInCycle = Math.floor(this.cycleTimeMs / 1000);
     if (this.mealWindowRemainingMs > 0) {
       this.schedulePhase = 'meal';
-    } else if (secInCycle < 240) {
-      // 0..4 min
+    } else if (secInCycle < 210) {
+      // 0:00 - 3:30
       this.schedulePhase = 'class_work';
-    } else if (secInCycle < 360) {
-      // 4..6 min
+    } else if (secInCycle < 300) {
+      // 3:30 - 5:00
       this.schedulePhase = 'free_time';
-    } else if (secInCycle < 540) {
-      // 6..9 min
+    } else if (secInCycle < 450) {
+      // 5:00 - 7:30
       this.schedulePhase = 'class_work';
+    } else if (secInCycle < 510) {
+      // 7:30 - 8:30
+      this.schedulePhase = 'free_time';
     } else {
-      // 9..10 min
-      this.schedulePhase = 'free_time';
+      // 8:30 - 10:00 Sleep phase in lively loop
+      this.schedulePhase = 'sleep';
     }
+
+    // Track free-time block changes
+    if (this.schedulePhase === 'free_time' && this.lastSchedulePhase !== 'free_time') {
+      this.freeTimeBlockCounter++;
+    } else if (this.schedulePhase !== 'free_time') {
+      // Clear free-time destinations when leaving free time
+      for (const agent of this.agents.values()) {
+        agent.freeTimeTargetRoomId = undefined;
+      }
+    }
+    this.lastSchedulePhase = this.schedulePhase;
 
     // Update each agent
     for (const agent of this.agents.values()) {
@@ -226,62 +304,68 @@ export class Choreographer {
     }
   }
 
-  triggerMealWindow() {
-    this.mealWindowRemainingMs = 90000; // 90 seconds meal window
-  }
-
   private updateAgent(agent: VisualAgent, deltaMs: number, state: FullGameState, reduceMotion: boolean) {
-    // Animation frame progression
-    if (!reduceMotion) {
-      agent.animTimer += deltaMs;
-      if (agent.animTimer > 150) {
-        agent.animTimer = 0;
-        agent.animFrame = (agent.animFrame + 1) % 4;
-      }
-    } else {
+    if (reduceMotion) {
       agent.animFrame = 0;
+      // With reduceMotion, place agents once per phase change only
+      if (agent.lastReducedMotionPhase !== this.schedulePhase) {
+        agent.lastReducedMotionPhase = this.schedulePhase;
+        if (!agent.isWizard) {
+          this.planAgentNextGoal(agent, state);
+          if (agent.path.length > 0) {
+            const finalNode = agent.path[agent.path.length - 1];
+            agent.x = finalNode.x;
+            agent.y = finalNode.y;
+            agent.currentFloor = finalNode.floor;
+            agent.path = [];
+            agent.pathIndex = 0;
+          }
+          this.setArrivedAnim(agent);
+        } else {
+          const studyRoom = state.rooms.find(r => r.defId === 'wizard_study' && r.state === 'built');
+          if (studyRoom) {
+            const box = roomToWorldBox(studyRoom, this.groundY);
+            agent.x = box.left + box.width / 2;
+            agent.y = box.floorLineY;
+            agent.currentFloor = studyRoom.y;
+          }
+          agent.anim = 'idle';
+        }
+      }
+      return;
     }
 
-    // If wizard, stays near Study or orb
+    // Normal motion animation frame progression
+    agent.animTimer += deltaMs;
+    if (agent.animTimer > 150) {
+      agent.animTimer = 0;
+      agent.animFrame = (agent.animFrame + 1) % 4;
+    }
+
+    // Wizard stays near Study
     if (agent.isWizard) {
       const studyRoom = state.rooms.find(r => r.defId === 'wizard_study' && r.state === 'built');
       if (studyRoom) {
         const box = roomToWorldBox(studyRoom, this.groundY);
         agent.targetX = box.left + box.width / 2;
         agent.targetY = box.floorLineY;
-        if (reduceMotion) {
-          agent.x = agent.targetX;
-          agent.y = agent.targetY;
-        }
       }
       agent.anim = 'idle';
       return;
     }
 
     // Character behavior:
-    // Decide destination based on schedule phase
+    // If no path, decide destination based on schedule phase
     if (agent.path.length === 0) {
       this.planAgentNextGoal(agent, state);
     }
 
-    // Follow path
+    // Follow path along the nav graph (never through floors)
     if (agent.path.length > 0 && agent.pathIndex < agent.path.length) {
       const targetNode = agent.path[agent.pathIndex];
       const dx = targetNode.x - agent.x;
       const dy = targetNode.y - agent.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
-
-      if (reduceMotion) {
-        // Instant teleport with reduceMotion
-        const finalNode = agent.path[agent.path.length - 1];
-        agent.x = finalNode.x;
-        agent.y = finalNode.y;
-        agent.currentFloor = finalNode.floor;
-        agent.path = [];
-        agent.pathIndex = 0;
-        this.setArrivedAnim(agent);
-        return;
-      }
 
       if (dist < 4) {
         agent.x = targetNode.x;
@@ -324,6 +408,11 @@ export class Choreographer {
     }
   }
 
+  private isRoomReachable(roomId: number): boolean {
+    if (!this.reachability) return true;
+    return this.reachability.get(roomId)?.reachable ?? false;
+  }
+
   private planAgentNextGoal(agent: VisualAgent, state: FullGameState) {
     const char = agent.character;
     if (!char) return;
@@ -331,40 +420,82 @@ export class Choreographer {
     let targetRoomId: number | undefined;
     let targetActivity: 'class' | 'work' | 'meal' | 'sleep' | 'free_time' = 'free_time';
 
-    // 1. Recovering / Injured -> infirmary or bed
+    // 1. Recovering / Injured -> infirmary or bed (must be reachable)
     if (char.injury) {
-      const infirmary = state.rooms.find(r => r.state === 'built' && r.defId === 'infirmary');
-      targetRoomId = infirmary ? infirmary.id : char.bedRoomId;
+      const infirmary = state.rooms.find(r => r.state === 'built' && r.defId === 'infirmary' && this.isRoomReachable(r.id));
+      if (infirmary) {
+        targetRoomId = infirmary.id;
+      } else if (char.bedRoomId && this.isRoomReachable(char.bedRoomId)) {
+        targetRoomId = char.bedRoomId;
+      } else {
+        targetRoomId = 1; // Entrance Hall fallback
+      }
       targetActivity = 'sleep';
     } else if (this.schedulePhase === 'meal') {
       // 2. Meal -> Refectory
-      const refectory = state.rooms.find(r => r.state === 'built' && r.defId === 'refectory');
-      targetRoomId = refectory ? refectory.id : 1; // Entrance hall fallback
+      const refectory = state.rooms.find(r => r.state === 'built' && r.defId === 'refectory' && this.isRoomReachable(r.id));
+      targetRoomId = refectory ? refectory.id : 1;
       targetActivity = 'meal';
+    } else if (this.schedulePhase === 'sleep') {
+      // 3. Sleep phase -> bedRoomId
+      if (char.bedRoomId && this.isRoomReachable(char.bedRoomId)) {
+        targetRoomId = char.bedRoomId;
+      } else {
+        targetRoomId = 1; // Entrance Hall
+      }
+      targetActivity = 'sleep';
     } else if (this.schedulePhase === 'class_work') {
-      // 3. Class or Work
-      if (char.status === 'student' && char.seatRoomId) {
+      // 4. Class or Work
+      if (char.status === 'student' && char.seatRoomId && this.isRoomReachable(char.seatRoomId)) {
         targetRoomId = char.seatRoomId;
         targetActivity = 'class';
-      } else if (char.workplaceRoomId) {
+      } else if (char.workplaceRoomId && this.isRoomReachable(char.workplaceRoomId)) {
         targetRoomId = char.workplaceRoomId;
         targetActivity = 'work';
       } else {
         targetActivity = 'free_time';
       }
-    } else {
-      // 4. Free time
+    }
+
+    // 5. Free time
+    if (!targetRoomId || targetActivity === 'free_time') {
       targetActivity = 'free_time';
-      const leisureRooms = state.rooms.filter(
-        r => r.state === 'built' && (r.defId === 'common_room' || r.defId === 'library' || r.defId === 'courtyard_garden' || r.area === 'grounds')
-      );
-      if (leisureRooms.length > 0) {
-        targetRoomId = leisureRooms[Math.floor(Math.random() * leisureRooms.length)].id;
+
+      // Pick leisure spot once per free-time block per agent (seeded)
+      if (agent.freeTimeTargetRoomId && this.isRoomReachable(agent.freeTimeTargetRoomId) && agent.freeTimeBlockId === this.freeTimeBlockCounter) {
+        targetRoomId = agent.freeTimeTargetRoomId;
+      } else {
+        const reachableLeisureRooms = state.rooms.filter(
+          r => r.state === 'built' &&
+            this.isRoomReachable(r.id) &&
+            (r.defId === 'common_room' || r.defId === 'library' || r.defId === 'courtyard_garden' || r.area === 'grounds')
+        );
+
+        if (reachableLeisureRooms.length > 0) {
+          const seed = (char.id * 37 + this.freeTimeBlockCounter) >>> 0;
+          targetRoomId = reachableLeisureRooms[seed % reachableLeisureRooms.length].id;
+        } else {
+          // Fallback to Entrance Hall
+          targetRoomId = 1;
+        }
+        agent.freeTimeTargetRoomId = targetRoomId;
+        agent.freeTimeBlockId = this.freeTimeBlockCounter;
       }
     }
 
-    if (!targetRoomId) {
-      targetRoomId = 1; // Entrance Hall
+    // Ensure fallback is reachable
+    if (!targetRoomId || !this.isRoomReachable(targetRoomId)) {
+      const anyReachable = state.rooms.find(r => r.state === 'built' && this.isRoomReachable(r.id));
+      targetRoomId = anyReachable ? anyReachable.id : 1;
+    }
+
+    agent.targetRoomId = targetRoomId;
+    agent.activity = targetActivity;
+
+    // If agent is already in the target room and has arrived, do not replan path
+    if (agent.currentRoomId === targetRoomId && agent.path.length === 0) {
+      this.setArrivedAnim(agent);
+      return;
     }
 
     // Find destination node in NavGraph
@@ -378,11 +509,13 @@ export class Choreographer {
 
     if (!destNodeId) return;
 
-    // Find closest node to agent's current position
+    // Find closest node to agent's current position on the same floor if possible
     let startNodeId: string | undefined;
     let minD = Infinity;
     for (const [nodeId, node] of this.navGraph.nodes.entries()) {
-      const d = Math.abs(node.x - agent.x) + Math.abs(node.y - agent.y);
+      // Prioritize same-floor node
+      const floorDiff = Math.abs(node.floor - agent.currentFloor);
+      const d = Math.abs(node.x - agent.x) + Math.abs(node.y - agent.y) + floorDiff * 1000;
       if (d < minD) {
         minD = d;
         startNodeId = nodeId;
@@ -392,9 +525,24 @@ export class Choreographer {
     if (startNodeId && destNodeId) {
       const path = this.navGraph.findPath(startNodeId, destNodeId);
       if (path.length > 0) {
+        // Calculate stable slot offset in destination room so agents don't stack
+        const targetRoom = state.rooms.find(r => r.id === targetRoomId);
+        if (targetRoom) {
+          const box = roomToWorldBox(targetRoom, this.groundY);
+          const slotX = this.getRoomSlotX(targetRoomId, agent.id, state);
+          // Append slot waypoint at the floor line
+          path.push({
+            id: `slot-${agent.id}`,
+            roomId: targetRoomId,
+            floor: targetRoom.y,
+            x: slotX,
+            y: box.floorLineY,
+            kind: 'room_floor'
+          });
+        }
+
         agent.path = path;
         agent.pathIndex = 0;
-        agent.activity = targetActivity;
         agent.currentRoomId = targetRoomId;
       }
     }

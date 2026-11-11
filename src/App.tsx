@@ -115,10 +115,8 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // Character Creation / "Choose Your Look" modal
-  // Opens if wizard.appearance is missing (either fresh start or old save migration)
-  const [isCreationModalOpen, setIsCreationModalOpen] = useState<boolean>(() => {
-    return !state.wizard.appearance;
-  });
+  // Decided in an effect that runs after add-on hydration (after ankicasterLoadSavedGame)
+  const [isCreationModalOpen, setIsCreationModalOpen] = useState<boolean>(false);
 
   // Transient feedback toasts
   const [toasts, setToasts] = useState<Array<{ id: string; text: string; type: string }>>([]);
@@ -132,6 +130,13 @@ export default function App() {
 
   // Hydration flag: in addon mode, do NOT auto-save until saved game loads (or null is sent)
   const [hydrated, setHydrated] = useState(!isAddonMode);
+
+  // Once hydrated (or immediately in standalone browser mode), check if appearance is missing
+  useEffect(() => {
+    if (hydrated && !state.wizard.appearance) {
+      setIsCreationModalOpen(true);
+    }
+  }, [hydrated, state.wizard.appearance]);
 
   // Poll for window.pycmd asynchronously up to timeoutMs (every 50ms)
   const waitForPycmd = useCallback((timeoutMs: number = 10000): Promise<boolean> => {
@@ -1073,6 +1078,47 @@ export default function App() {
                 })()}
               </div>
             </div>
+
+            {/* Active Hazard Banner & Dispel Actions */}
+            {currentSelectedRoom.hazard && (
+              <div className="bg-rose-950/40 border border-rose-500/50 p-4 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-rose-200">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-lg bg-rose-500/20 text-rose-300 mt-0.5">
+                    <AlertTriangle className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-sm text-rose-300 capitalize">
+                        Hazard: {currentSelectedRoom.hazard.type.replace(/_/g, ' ')}
+                      </span>
+                      <span className="text-xs bg-rose-900/60 text-rose-300 px-2 py-0.5 rounded font-mono">
+                        Lock: {Math.max(0, (currentSelectedRoom.lockedUntilReviewIndex || 0) - state.reviewIndex)} reviews
+                      </span>
+                    </div>
+                    <p className="text-xs text-rose-300/80 mt-1">
+                      {currentSelectedRoom.hazard.description}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => handleResolveHazard(currentSelectedRoom.id, 'warder')}
+                    className="px-3.5 py-2 bg-rose-800 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow transition"
+                    title="Assign active Warder to cleanse room"
+                  >
+                    Dispel (Warder)
+                  </button>
+                  <button
+                    onClick={() => handleResolveHazard(currentSelectedRoom.id, 'spell')}
+                    className="px-3.5 py-2 bg-purple-700 hover:bg-purple-600 text-white font-bold text-xs rounded-xl shadow transition"
+                    title="Dispel immediately using 25 Mana"
+                  >
+                    Dispel (25 Mana)
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Renovation Upgrade Button */}
             {currentSelectedRoom.level < 3 && (
