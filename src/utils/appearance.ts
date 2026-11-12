@@ -25,20 +25,16 @@ export const HAIR_COLOURS: Array<{ id: string; name: string; color: string }> = 
   { id: 'teal', name: 'Teal', color: '#2E8B8B' }
 ];
 
-/** 12 hair styles (GDD 7.2). */
+/** 8 side-profile hair styles. Removed ids resolve through HAIR_ALIAS. */
 export const HAIR_STYLES: Array<{ id: string; name: string }> = [
   { id: 'short', name: 'Short' },
-  { id: 'short_messy', name: 'Messy' },
   { id: 'bob', name: 'Bob' },
   { id: 'long', name: 'Long' },
   { id: 'braid', name: 'Braid' },
-  { id: 'bun', name: 'Bun' },
   { id: 'ponytail', name: 'Ponytail' },
-  { id: 'curls', name: 'Curls' },
-  { id: 'locs', name: 'Locs' },
+  { id: 'bun', name: 'Bun' },
   { id: 'mohawk', name: 'Mohawk' },
-  { id: 'bald', name: 'Bald' },
-  { id: 'wavy', name: 'Wavy' }
+  { id: 'bald', name: 'Bald' }
 ];
 
 /** 4 body shapes (GDD 7.2). */
@@ -115,10 +111,14 @@ const HAT_ALIAS: Record<string, string> = {
   none_hat: 'none'
 };
 
-const HAIR_ALIAS: Record<string, string> = {
-  messy: 'short_messy',
+export const HAIR_ALIAS: Record<string, string> = {
+  messy: 'short',
+  short_messy: 'short',
   pixie: 'short',
-  straight: 'long'
+  straight: 'long',
+  curls: 'bob',
+  locs: 'long',
+  wavy: 'long'
 };
 
 export interface WizardAppearance {
@@ -137,7 +137,7 @@ export interface WizardAppearance {
 export const DEFAULT_APPEARANCE: WizardAppearance = {
   bodyShape: 1,
   skin: SKIN_TONES[0],
-  hair: 'short_messy',
+  hair: 'short',
   hairColor: '#4A2E1E',
   eyes: EYE_COLOURS[0].color,
   face: 'round',

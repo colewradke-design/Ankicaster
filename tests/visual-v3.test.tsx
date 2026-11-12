@@ -11,11 +11,11 @@ import { CharacterCreationModal } from '../src/visual/onboarding/CharacterCreati
 import { FoundingDay, GoalBanner, GuidedTour } from '../src/visual/onboarding/FoundingTour.tsx';
 import { FIRST_GOAL, TOUR_STEPS, advanceTour, applyTutorialAction, defaultTourTargets, DEFAULT_TOUR_VIEWPORT, phaseAfterCreate, placeTourBox, rectsIntersect, STUDY_PARTS, tourStepId, tourView } from '../src/visual/onboarding/flow.ts';
 import {
-  BODY_SHAPES, CREATION_HATS, EYE_COLOURS, FACE_SHAPES, HAIR_COLOURS, HAIR_STYLES, SHOE_KINDS, SKIN_TONES, STAFFS
+  BODY_SHAPES, CREATION_HATS, EYE_COLOURS, FACE_SHAPES, HAIR_ALIAS, HAIR_COLOURS, HAIR_STYLES, SHOE_KINDS, SKIN_TONES, STAFFS, resolveHair
 } from '../src/utils/appearance.ts';
 import {
   DOLL_ANIMS, HELD_ITEMS, HEAD_R, LAYER_OPTIONS, MOVE_SPEED, appearanceToLayers, bubbleLabel, chooseBubble,
-  dollAnchors, dollFrame, drawBubble, drawCharacter, drawPortrait, hairPalette, healingPlaceFor, portraitBackgroundColor, portraitLayout
+  dollAnchors, dollFrame, drawBubble, drawCharacter, drawPortrait, hairMaskPixels, hairPalette, healingPlaceFor, portraitBackgroundColor, portraitLayout
 } from '../src/visual/agents/doll.ts';
 import { Choreographer } from '../src/visual/agents/Choreographer.ts';
 import { NavGraph } from '../src/visual/layout/navGraph.ts';
@@ -171,7 +171,7 @@ test('a new game runs creation, then Founding Day, and lands on the three starti
   for (const h of CREATION_HATS) assert.match(create, new RegExp(`data-hat="${h.id}"`));
   for (const e of EYE_COLOURS) assert.match(create, new RegExp(`data-eye="${e.id}"`));
   for (const s of STAFFS) assert.match(create, new RegExp(`data-staff="${s.id}"`));
-  assert.match(create, /data-hair="short_messy"/);
+  assert.match(create, /data-hair="short"/);
   assert.match(create, /Skin tone 1 of 8/);
   assert.match(create, /data-testid="headmaster-preview"/);
   assert.match(create, /data-scale="4"/);
@@ -434,6 +434,68 @@ test('every hair style meets the crown on all 4 bodies, and a hat hides hair tha
       }
     }
   }
+});
+
+test('side-profile hair is distinct, mirrored, and stays off the chin', () => {
+  const poses = [
+    { facing: 'L' as const, anim: 'idle' as const },
+    { facing: 'R' as const, anim: 'idle' as const },
+    { facing: 'R' as const, anim: 'climb' as const }
+  ];
+  for (const style of HAIR_STYLES) {
+    for (const pose of poses) {
+      const p = new RecordingPainter();
+      drawCharacter(p, lookOf('student', 2, style.id, 'none', 'round'), {
+        x: 40, y: 90, facing: pose.facing, anim: pose.anim, frame: 0
+      });
+      assert.deepEqual(p.problems, [], `${style.id} ${pose.facing} ${pose.anim}`);
+    }
+  }
+
+  const masks = new Map<string, Set<string>>();
+  for (const style of HAIR_STYLES) {
+    if (style.id === 'bald') {
+      assert.equal(hairMaskPixels(style.id, 'R').length, 0);
+      continue;
+    }
+    const right = new Set(hairMaskPixels(style.id, 'R'));
+    const left = new Set(hairMaskPixels(style.id, 'L'));
+    const mirrored = new Set([...right].map(key => {
+      const [x, y] = key.split(',').map(Number);
+      return `${-x - 1},${y}`;
+    }));
+    assert.deepEqual(left, mirrored, `${style.id} does not mirror`);
+    for (const key of right) {
+      const [x, y] = key.split(',').map(Number);
+      assert.ok(!(x >= 0 && y >= 3), `${style.id} hair sits on the chin at ${x},${y}`);
+    }
+    masks.set(style.id, right);
+  }
+
+  const ids = [...masks.keys()];
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const a = masks.get(ids[i])!;
+      const b = masks.get(ids[j])!;
+      let diff = 0;
+      for (const px of a) if (!b.has(px)) diff++;
+      for (const px of b) if (!a.has(px)) diff++;
+      assert.ok(diff >= 8, `${ids[i]} vs ${ids[j]} differ by ${diff}`);
+    }
+  }
+
+  assert.equal(HAIR_STYLES.length, 8);
+  assert.equal(HAIR_ALIAS.short_messy, 'short');
+  assert.equal(HAIR_ALIAS.curls, 'bob');
+  assert.equal(HAIR_ALIAS.locs, 'long');
+  assert.equal(HAIR_ALIAS.wavy, 'long');
+  assert.equal(resolveHair('short_messy'), 'short');
+  assert.equal(resolveHair('curls'), 'bob');
+  assert.equal(resolveHair('locs'), 'long');
+  assert.equal(resolveHair('wavy'), 'long');
+  assert.equal(resolveHair('messy'), 'short');
+  assert.equal(resolveHair('pixie'), 'short');
+  assert.equal(resolveHair('straight'), 'long');
 });
 
 test('tutorial box never intersects its target for every step at the default window size', () => {

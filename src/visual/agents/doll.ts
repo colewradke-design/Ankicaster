@@ -332,6 +332,10 @@ export function drawCharacter(g: Painter, look: DollLook, pose: DollPose): { mar
     g.rect(x - 5 * sign, hip - 4, 3, 2).fill({ color: 0xc9b88a });
   }
 
+  // Back hair (crown and the mass behind the ear) sits behind the body, so long
+  // styles cannot cross the neck or poke out under the chin.
+  if (!p.back && look.hair !== 'bald' && look.hat !== 'hood') drawHair(g, look.hair, x, headY, hair, sign, 'back', look.hat);
+
   // 3-4. Shoes / legs (visible under a short robe or tunic)
   const shoe = look.shoes === 'sandals' ? 0xc9b88a : look.shoes === 'slippers' ? 0x9e2a3a : 0x3b3a40;
   const leg = p.step * sign;
@@ -364,12 +368,11 @@ export function drawCharacter(g: Painter, look: DollLook, pose: DollPose): { mar
   // 10. Role mark
   drawMark(g, look, x, hip, hem, sign, robe);
 
-  // 6-8. Hair back, head, hair front, face
-  if (!p.back && look.hair !== 'bald' && look.hat !== 'hood') drawHair(g, look.hair, x, headY, hair, sign, true, look.hat);
+  // 6-8. Stairs hair is the symmetric view. Side view: head, then the face-side fringe.
+  if (p.back && look.hair !== 'bald' && look.hat !== 'hood') drawHair(g, look.hair, x, headY, hair, 1, 'stairs', look.hat);
   drawHead(g, look.face, x, headY, skin);
   if (!p.back) drawFace(g, look.expression || 'neutral', x, headY, eye, sign, p.talk);
-  if (!p.back && look.hair !== 'bald' && look.hat !== 'hood') drawHair(g, look.hair, x, headY, hair, sign, false, look.hat);
-  if (p.back) g.circle(x, headY, 5).fill({ color: hair });
+  if (!p.back && look.hair !== 'bald' && look.hat !== 'hood') drawHair(g, look.hair, x, headY, hair, sign, 'front', look.hat);
 
   // 9. Hat
   drawHat(g, look.hat, x, headY, robe, sign);
@@ -415,10 +418,12 @@ function drawFace(g: Painter, exp: Expression, x: number, y: number, eye: number
   if (talk) g.rect(x + 1.4 * sign, y + 1.6, 1.2, 1.2).fill({ color: 0x1b1822 });
 }
 
-function drawHair(g: Painter, style: string, x: number, y: number, hair: number, sign: number, back: boolean, hat = 'none') {
-  const cells = hairCells(style, back, hat);
+type HairPart = 'back' | 'front' | 'stairs';
+
+function drawHair(g: Painter, style: string, x: number, y: number, hair: number, sign: number, part: HairPart, hat = 'none') {
+  const cells = hairCells(style, part, hat);
   if (!cells.length) return;
-  drawHairCells(g, Math.round(x), Math.round(y), cells, hairPalette(hair), sign);
+  drawHairCells(g, Math.round(x), Math.round(y), cells, hairPalette(hair), part === 'stairs' ? 1 : sign, part === 'stairs');
 }
 
 /** 1px outline, mid tone, and a lighter streak. All three come from the chosen hair colour. */
@@ -429,138 +434,160 @@ export function hairPalette(color: number): { outline: number; mid: number; hi: 
 
 type HairCell = { x: number; y: number; t: 1 | 2 };
 
-/** Hats that cover the crown. Hair above the brim is left out so it cannot poke through. */
+/** Hats that cover the crown and the fringe. Under them only the back mass below the brim shows. */
 const CROWN_HATS = new Set(['pointed', 'floppy', 'crooked', 'wide', 'hood', 'cap', 'beret', 'crown']);
 
-/**
- * Hand pixels for the 16px chibi head. Coordinates are local to the head centre
- * (negative y is up). Every style except bald includes a row on the crown (y = -5)
- * so there is no gap above the head. Back sits behind the skull; front is the fringe.
- */
-const HAIR_PIX: Record<string, { back: string[]; backTop: number; front: string[]; frontTop: number; extra?: HairCell[] }> = {
-  short: {
-    backTop: -7,
-    back: ['..+++..', '.#####.', '#######', '##...##'],
-    frontTop: -4,
-    front: ['.+++++.', '##...##']
-  },
-  short_messy: {
-    backTop: -8,
-    back: ['.+.+.+.', '#.###.#', '#######', '#######', '#.....#'],
-    frontTop: -4,
-    front: ['+#+#+#+', '.#.#.#.']
-  },
-  bob: {
-    backTop: -7,
-    back: ['..+++..', '.#####.', '#######', '#######', '##...##', '##...##', '##...##', '.##.##.', '..#.#..'],
-    frontTop: -5,
-    front: ['.+++++.', '#######', '##...##']
-  },
-  long: {
-    backTop: -7,
-    back: ['..+++..', '.#####.', '#######', '#######', '##...##', '##...##', '##...##', '##...##', '##...##', '##...##', '##...##', '##...##', '##...##', '.##.##.', '..#.#..'],
-    frontTop: -4,
-    front: ['##+.+##', '#.....#']
-  },
-  braid: {
-    backTop: -7,
-    back: ['..+++..', '.#####.', '#######', '##...##'],
-    frontTop: -4,
-    front: ['.++#++.', '##...##'],
-    extra: [
-      { x: 0, y: 1, t: 1 }, { x: 1, y: 1, t: 2 }, { x: -1, y: 2, t: 1 }, { x: 0, y: 2, t: 1 },
-      { x: 0, y: 3, t: 1 }, { x: 1, y: 3, t: 1 }, { x: -1, y: 4, t: 1 }, { x: 0, y: 4, t: 2 },
-      { x: 0, y: 5, t: 1 }, { x: 1, y: 5, t: 1 }, { x: -1, y: 6, t: 1 }, { x: 0, y: 6, t: 1 },
-      { x: 0, y: 7, t: 1 }, { x: 1, y: 7, t: 2 }, { x: -1, y: 8, t: 1 }, { x: 0, y: 8, t: 1 },
-      { x: 0, y: 9, t: 1 }, { x: 1, y: 9, t: 1 }, { x: 0, y: 10, t: 1 }, { x: -1, y: 11, t: 1 }, { x: 0, y: 11, t: 2 }
-    ]
-  },
-  bun: {
-    backTop: -10,
-    back: ['..+++..', '.#####.', '.#####.', '..###..', '.#####.', '#######'],
-    frontTop: -4,
-    front: ['.+++++.', '###.###']
-  },
-  ponytail: {
-    backTop: -7,
-    back: ['..+++..', '.#####.', '#######', '##...##'],
-    frontTop: -4,
-    front: ['+++....', '.##....'],
-    extra: [
-      { x: -5, y: -2, t: 2 }, { x: -6, y: -1, t: 1 }, { x: -5, y: -1, t: 1 },
-      { x: -6, y: 0, t: 1 }, { x: -5, y: 1, t: 1 }, { x: -6, y: 2, t: 1 }, { x: -5, y: 3, t: 2 },
-      { x: -6, y: 4, t: 1 }, { x: -5, y: 5, t: 1 }, { x: -6, y: 6, t: 1 }, { x: -5, y: 7, t: 1 }, { x: -5, y: 8, t: 2 }
-    ]
-  },
-  curls: {
-    backTop: -8,
-    back: ['.+.+.+.', '#.#.#.#', '#######', '#.###.#', '#.....#', '#.....#', '#.....#', '.#...#.'],
-    frontTop: -4,
-    front: ['+#+#+#+', '.#.#.#.']
-  },
-  locs: {
-    backTop: -7,
-    back: ['#+#+#+#', '#.#.#.#', '#.#.#.#', '#.#.#.#', '#.#.#.#', '#.#.#.#', '#.#.#.#', '#.#.#.#', '.#.#.#.', '.#.#.#.', '..#.#..'],
-    frontTop: -4,
-    front: ['#+#+#+#', '#.#.#.#', '#.#.#.#']
-  },
-  mohawk: {
-    backTop: -6,
-    back: ['..#.#..', '.#####.'],
-    frontTop: -11,
-    front: ['..+..', '..#..', '..#..', '.#+#.', '.###.', '#####', '#####', '.#+#.']
-  },
-  bald: { backTop: 0, back: [], frontTop: 0, front: [] },
-  wavy: {
-    backTop: -7,
-    back: ['.+.+.+.', '#.#.#.#', '#######', '##...##', '#.....#', '##...##', '#.....#', '##...##', '#.....#', '.##.##.', '..#.#..'],
-    frontTop: -4,
-    front: ['+#+#+#+', '.#.#.#.']
-  }
-};
+/** Brim line in head-local px. Cells above this are covered by a crown hat. */
+const BRIM_Y = -2;
 
-function parseRows(rows: string[], top: number): HairCell[] {
+const HAIR_IDS = new Set(['short', 'bob', 'long', 'braid', 'ponytail', 'bun', 'mohawk', 'bald']);
+
+function block(x0: number, x1: number, y0: number, y1: number, t: 1 | 2 = 1): HairCell[] {
   const cells: HairCell[] = [];
-  rows.forEach((row, i) => {
-    const y = top + i;
-    const x0 = -Math.floor(row.length / 2);
-    for (let k = 0; k < row.length; k++) {
-      const ch = row[k];
-      if (ch !== '#' && ch !== '+') continue;
-      cells.push({ x: x0 + k, y, t: ch === '+' ? 2 : 1 });
-    }
-  });
-  return cells;
-}
-
-function hairCells(style: string, back: boolean, hat: string): HairCell[] {
-  if (style === 'bald' || hat === 'hood') return [];
-  const spec = HAIR_PIX[style] || HAIR_PIX.short;
-  let cells = back ? parseRows(spec.back, spec.backTop) : parseRows(spec.front, spec.frontTop);
-  if (back && spec.extra) cells = cells.concat(spec.extra);
-  if (CROWN_HATS.has(hat)) cells = cells.filter(c => c.y >= -4);
-  return cells;
-}
-
-function drawHairCells(g: Painter, ox: number, oy: number, cells: HairCell[], pal: { outline: number; mid: number; hi: number }, sign: number) {
-  const occ = new Set(cells.map(c => `${c.x},${c.y}`));
-  const outline: HairCell[] = [];
-  const seen = new Set<string>();
-  for (const c of cells) {
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-      const nx = c.x + dx;
-      const ny = c.y + dy;
-      const k = `${nx},${ny}`;
-      if (occ.has(k) || seen.has(k)) continue;
-      seen.add(k);
-      outline.push({ x: nx, y: ny, t: 1 });
-    }
+  const xa = Math.min(x0, x1);
+  const xb = Math.max(x0, x1);
+  const ya = Math.min(y0, y1);
+  const yb = Math.max(y0, y1);
+  for (let y = ya; y <= yb; y++) {
+    for (let x = xa; x <= xb; x++) cells.push({ x, y, t });
   }
-  blitHair(g, ox, oy, outline, pal.outline, sign);
-  const mid = cells.filter(c => c.t === 1);
-  const hi = cells.filter(c => c.t === 2);
-  blitHair(g, ox, oy, mid, pal.mid, sign);
-  blitHair(g, ox, oy, hi, pal.hi, sign);
+  return cells;
+}
+
+/**
+ * Side-profile hair in right-facing space: +x is the face, -x is the back, -y is up.
+ * The crown is a flat cap, higher at the back. The fringe is only on the face side.
+ * Back mass stays outside the skull (about x <= -5) so the head does not swallow it
+ * and it cannot cross the chin.
+ */
+function hairParts(style: string): { back: HairCell[]; front: HairCell[] } {
+  if (style === 'bald') return { back: [], front: [] };
+  if (style === 'mohawk') {
+    const back: HairCell[] = [];
+    // Spikes are 3px apart so the top shade line cannot join them into a bar.
+    for (const x of [-5, -1, 3]) back.push({ x, y: -7, t: 1 }, { x, y: -6, t: 1 }, { x, y: -5, t: 1 });
+    back.push(...block(-6, -6, 0, 1));
+    return { back, front: [] };
+  }
+  const crown = [
+    ...block(-4, -2, -7, -7),
+    ...block(-5, 0, -6, -6),
+    ...block(-5, 2, -5, -5),
+    ...block(-6, -4, -4, -4)
+  ];
+  const front = [
+    ...block(3, 4, -3, -3),
+    ...block(4, 4, -2, -1)
+  ];
+  let mass: HairCell[];
+  if (style === 'bob') {
+    mass = [
+      ...block(-8, -6, -3, 1),
+      ...block(-7, -5, 2, 4),
+      ...block(-6, -5, 5, 5)
+    ];
+  } else if (style === 'long') {
+    mass = block(-8, -6, -3, 16);
+  } else if (style === 'braid') {
+    mass = [
+      ...block(-7, -6, -3, -1),
+      ...block(-8, -7, 0, 1, 1),
+      ...block(-7, -6, 3, 4, 2),
+      ...block(-8, -7, 6, 7, 1),
+      ...block(-7, -6, 9, 10, 2)
+    ];
+  } else if (style === 'ponytail') {
+    mass = [
+      ...block(-7, -5, -4, -3),
+      ...block(-9, -7, -2, 0),
+      ...block(-11, -9, 1, 8)
+    ];
+  } else if (style === 'bun') {
+    mass = [
+      ...block(-6, -4, -10, -10),
+      ...block(-7, -3, -9, -7),
+      ...block(-6, -4, -6, -6),
+      ...block(-7, -6, -2, 1)
+    ];
+  } else {
+    mass = [
+      ...block(-7, -6, -3, 0),
+      ...block(-6, -5, 1, 2)
+    ];
+  }
+  return { back: crown.concat(mass), front };
+}
+
+function clipHair(cells: HairCell[], hat: string, part: 'back' | 'front'): HairCell[] {
+  if (hat === 'hood') return [];
+  if (!CROWN_HATS.has(hat)) return cells;
+  if (part === 'front') return [];
+  return cells.filter(c => c.y >= BRIM_Y);
+}
+
+/** Stairs are the only symmetric view: crown, plus the back mass mirrored to each side. */
+function stairsCells(cells: HairCell[]): HairCell[] {
+  const out: HairCell[] = [];
+  const seen = new Set<string>();
+  const add = (c: HairCell) => {
+    const k = `${c.x},${c.y}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push(c);
+  };
+  for (const c of cells) {
+    const crown = c.y <= -4;
+    const mass = c.x <= -1 && c.y > -4;
+    if (!crown && !mass) continue;
+    add(c);
+    add({ x: -c.x - 1, y: c.y, t: c.t });
+  }
+  return out;
+}
+
+function hairCells(style: string, part: HairPart, hat: string): HairCell[] {
+  if (hat === 'hood' || style === 'bald') return [];
+  const id = HAIR_IDS.has(style) ? style : 'short';
+  const parts = hairParts(id);
+  const back = clipHair(parts.back, hat, 'back');
+  const front = clipHair(parts.front, hat, 'front');
+  if (part === 'front') return front;
+  if (part === 'back') return back;
+  return stairsCells([...back, ...front]);
+}
+
+/** Darker edge along the back and the top only. Stairs shade the outer sides instead. */
+function edgeShade(cells: HairCell[], stairs: boolean): HairCell[] {
+  const occ = new Set(cells.map(c => `${c.x},${c.y}`));
+  const out: HairCell[] = [];
+  const seen = new Set<string>();
+  const add = (x: number, y: number) => {
+    const k = `${x},${y}`;
+    if (occ.has(k) || seen.has(k)) return;
+    seen.add(k);
+    out.push({ x, y, t: 1 });
+  };
+  for (const c of cells) {
+    add(c.x, c.y - 1);
+    if (stairs) add(c.x < 0 ? c.x - 1 : c.x + 1, c.y);
+    else add(c.x - 1, c.y);
+  }
+  return out;
+}
+
+/** Occupied hair pixels, including the back/top shade, in right- or left-facing space. */
+export function hairMaskPixels(style: string, facing: 'L' | 'R'): string[] {
+  const sign = facing === 'L' ? -1 : 1;
+  const cells = [...hairCells(style, 'back', 'none'), ...hairCells(style, 'front', 'none')];
+  const keys = new Set<string>();
+  for (const c of [...cells, ...edgeShade(cells, false)]) keys.add(`${sign < 0 ? -c.x - 1 : c.x},${c.y}`);
+  return [...keys].sort();
+}
+
+function drawHairCells(g: Painter, ox: number, oy: number, cells: HairCell[], pal: { outline: number; mid: number; hi: number }, sign: number, stairs = false) {
+  blitHair(g, ox, oy, edgeShade(cells, stairs), pal.outline, sign);
+  blitHair(g, ox, oy, cells.filter(c => c.t === 1), pal.mid, sign);
+  blitHair(g, ox, oy, cells.filter(c => c.t === 2), pal.hi, sign);
 }
 
 function blitHair(g: Painter, ox: number, oy: number, cells: HairCell[], color: number, sign: number) {
@@ -748,6 +775,7 @@ export function drawPortraitSource(g: Painter, look: DollLook): void {
   const skin = num(look.skin);
   const hair = num(look.hairColor);
   const neck = a.neck;
+  if (look.hair !== 'bald' && look.hat !== 'hood') drawHair(sg, look.hair, 0, a.head, hair, 1, 'back', look.hat);
   sg.poly([
     -10, neck + 8,
     10, neck + 8,
@@ -755,10 +783,9 @@ export function drawPortraitSource(g: Painter, look: DollLook): void {
     -7, neck - 1
   ]).fill({ color: look.role === 'sabbatical' ? mix(robe, 0x8a8994, 0.55) : robe });
   if (look.role === 'wizard') sg.poly([-12, neck, -8, neck - 3, -9, neck + 6]).fill({ color: shade(robe, 0.55) });
-  if (look.hair !== 'bald' && look.hat !== 'hood') drawHair(sg, look.hair, 0, a.head, hair, 1, true, look.hat);
   drawHead(sg, look.face, 0, a.head, skin);
   drawFace(sg, 'neutral', 0, a.head, num(look.eyes), 1, false);
-  if (look.hair !== 'bald' && look.hat !== 'hood') drawHair(sg, look.hair, 0, a.head, hair, 1, false, look.hat);
+  if (look.hair !== 'bald' && look.hat !== 'hood') drawHair(sg, look.hair, 0, a.head, hair, 1, 'front', look.hat);
   drawHat(sg, look.hat, 0, a.head, robe, 1);
   drawMark(sg, look, 0, neck + 2, neck + 8, 1, robe);
 }
