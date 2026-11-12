@@ -64,7 +64,7 @@ import {
 } from './decks';
 import {
   BellNote, commitBell, ensureLedger, glassworksConversion, logResourceChange, logResourceDiff,
-  resourceSnapshot, weavingOutput
+  resourceSnapshot, storageCap as storageCapOf, weavingOutput
 } from './resourceReport';
 
 export { isRoomUnlocked, planHint as blueprintLockHint, isStructure };
@@ -88,6 +88,11 @@ export class AnkicasterEngine {
   /** One-off resource changes (builds, draws, events). Display only. */
   static logResourceChange(state: FullGameState, resource: string, amount: number, label: string): void {
     logResourceChange(state, resource, amount, label);
+  }
+
+  /** 200 common-material storage, plus 100 for each built Storage Vault that is not Unfinished. */
+  static storageCap(state: { rooms?: FullGameState['rooms'] }): number {
+    return storageCapOf(state);
   }
 
   /** Grant the Rift Gate plan once the Academy has 3 masters, active or alumni. */
@@ -645,6 +650,8 @@ export class AnkicasterEngine {
     // 2. Grounds & Resource Plots Output (influenced by hazards & creature buffs)
     const hasTortoise = state.creatures.some(c => c.status === 'tamed' && c.defId === 'mossback_tortoise');
     const greenhouseMult = hasTortoise ? 1.05 : 1.0;
+    const cap = AnkicasterEngine.storageCap(state);
+    const store = (before: number, add: number) => (add > 0 && before >= cap ? before : add > 0 ? Math.min(cap, before + add) : before + add);
 
     for (const room of state.rooms) {
       if (room.state !== 'built' || isRoomUnfinished(room)) continue; // Unfinished rooms run at 0%
@@ -662,10 +669,10 @@ export class AnkicasterEngine {
       if (room.defId === 'vegetable_patch') {
         const src = roomName(room.defId);
         let before = bag.provisions || 0;
-        bag.provisions = Math.min(500, before + 1.0 * harvestMult);
+        bag.provisions = store(before, 1.0 * harvestMult);
         note('provisions', before, src);
         before = bag.greens || 0;
-        bag.greens = Math.min(500, before + 0.2 * harvestMult);
+        bag.greens = store(before, 0.2 * harvestMult);
         note('greens', before, src);
       } else if (room.defId === 'herb_garden') {
         const before = bag.herbs || 0;
@@ -674,7 +681,7 @@ export class AnkicasterEngine {
       } else if (room.defId === 'woodlot') {
         const src = roomName(room.defId);
         let before = bag.timber || 0;
-        bag.timber = Math.min(500, before + 2 * harvestMult);
+        bag.timber = store(before, 2 * harvestMult);
         note('timber', before, src);
         if (Math.random() < 0.02) {
           before = bag.heartwood || 0;
@@ -684,7 +691,7 @@ export class AnkicasterEngine {
       } else if (room.defId === 'quarry') {
         const src = roomName(room.defId);
         let before = bag.stone || 0;
-        bag.stone = Math.min(500, before + 1 * harvestMult);
+        bag.stone = store(before, 1 * harvestMult);
         note('stone', before, src);
         if (Math.random() < 0.04) {
           before = bag.crystal || 0;
@@ -694,7 +701,7 @@ export class AnkicasterEngine {
       } else if (room.defId === 'greenhouse') {
         const src = roomName(room.defId);
         let before = bag.provisions || 0;
-        bag.provisions = Math.min(500, before + 1.5 * harvestMult * greenhouseMult);
+        bag.provisions = store(before, 1.5 * harvestMult * greenhouseMult);
         note('provisions', before, src);
         before = bag.herbs || 0;
         bag.herbs = before + 0.5 * harvestMult * greenhouseMult;
@@ -702,26 +709,26 @@ export class AnkicasterEngine {
       } else if (room.defId === 'orchard') {
         const src = roomName(room.defId);
         let before = bag.provisions || 0;
-        bag.provisions = Math.min(500, before + 0.8 * harvestMult);
+        bag.provisions = store(before, 0.8 * harvestMult);
         note('provisions', before, src);
         before = bag.nectar || 0;
-        bag.nectar = Math.min(500, before + 0.3 * harvestMult);
+        bag.nectar = store(before, 0.3 * harvestMult);
         note('nectar', before, src);
       } else if (room.defId === 'glassworks') {
-        const conv = glassworksConversion(bag.stone || 0, harvestMult, bag.glass || 0);
+        const conv = glassworksConversion(bag.stone || 0, harvestMult, bag.glass || 0, cap);
         if (conv.stoneUsed > 0) {
           const beforeS = bag.stone || 0;
           bag.stone = beforeS - conv.stoneUsed;
           note('stone', beforeS, 'Glassworks');
           const beforeG = bag.glass || 0;
-          bag.glass = Math.min(500, beforeG + conv.glassGain);
+          bag.glass = beforeG + conv.glassGain;
           note('glass', beforeG, 'Glassworks');
         }
       } else if (room.defId === 'weaving_room') {
         const moonsheep = state.creatures.some(c => c.status === 'tamed' && c.defId === 'moonsheep');
         const gain = weavingOutput(harvestMult, moonsheep);
         const before = bag.cloth || 0;
-        bag.cloth = Math.min(500, before + gain);
+        bag.cloth = store(before, gain);
         note('cloth', before, moonsheep ? 'Weaving Room (Moonsheep)' : 'Weaving Room');
       }
     }
@@ -2052,6 +2059,8 @@ export class AnkicasterEngine {
     const refund = demolishRefund(room);
 
     const beforeRes = resourceSnapshot(next);
+    // A demolished vault stops counting toward the cap before the refund is added.
+    next.rooms = next.rooms.filter(r => r.id !== roomId);
     next.mana += refund.mana;
     for (const k of BUILD_MATERIALS) {
       const n = (refund as unknown as Record<string, number>)[k] || 0;
@@ -2073,8 +2082,6 @@ export class AnkicasterEngine {
       next.roomPlans = { ...(next.roomPlans || {}) };
       next.roomPlans[room.defId] = (next.roomPlans[room.defId] || 0) + 1;
     }
-
-    next.rooms = next.rooms.filter(r => r.id !== roomId);
 
     // Occupants: same-kind room if one exists, otherwise between rooms
     const bedKinds = ['dormitory', 'grand_dormitory', 'faculty_quarters'];

@@ -542,10 +542,11 @@ export interface FullGameState {
   draftsCompleted?: number;
   /** The Rift Gate plan is granted once, at 3 masters. */
   riftGateGranted?: boolean;
-  /** Display-only. Last 5 bells of production, and the last 20 one-off changes per resource. */
+  /** Display-only. Last 5 bells of production, the last 20 one-off changes per resource, and the last 20 across all of them. */
   resourceLedger?: {
     bells: Array<{ entries: Array<{ resource: string; amount: number; source: string }> }>;
     recent: Record<string, Array<{ amount: number; label: string }>>;
+    recentAll?: Array<{ resource: string; amount: number; label: string }>;
   };
   activeEvents: Array<{ eventId: string; dayArrived: number }>;
   notices: Array<{ id: string; time: number; text: string; type: string }>;

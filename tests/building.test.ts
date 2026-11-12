@@ -195,7 +195,10 @@ test('B5 move keeps the room\'s level, furniture, progress and state, and stays 
 
 test('B6 demolish refund bounds: cancel = 100%, demolish = 50% materials and 0 mana, never more than spent', () => {
   const s = rich();
-  const placed = AnkicasterEngine.placeRoom(s, 'dormitory', 'castle', 6, 0); // 250m 30T 10S
+  // Common materials sit under the storage cap, so a refund is allowed to land.
+  s.resources.timber = 100;
+  s.resources.stone = 100;
+  const placed = AnkicasterEngine.placeRoom(s, 'dormitory', 'castle', 6, 0); // 30T 10S
   const afterPlace = placed.state;
   const id = placed.roomId!;
 
@@ -230,6 +233,8 @@ test('B6 demolish refund bounds: cancel = 100%, demolish = 50% materials and 0 m
 
 test('B7 no-exploit loop: build/renovate/demolish and build/cancel never gain mana, materials or renown', () => {
   let s = rich();
+  s.resources.timber = 150;
+  s.resources.stone = 100;
   const start = { total: total(s), renown: s.renown };
   for (let i = 0; i < 5; i++) {
     const p = AnkicasterEngine.placeRoom(s, 'dormitory', 'castle', 6, 0);

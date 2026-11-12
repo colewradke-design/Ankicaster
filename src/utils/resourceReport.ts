@@ -1,10 +1,12 @@
 /**
- * Display-only resource ledger. Amounts elsewhere in the engine are unchanged;
- * this only records them so the top bar can show income, use and recent spends.
+ * Display-only resource ledger, plus the common-material storage cap.
+ * Bell production and one-off gains both stop at the cap. Stock already
+ * above it is left alone.
  */
-import { FullGameState, ResourceInventory } from '../types/ankicaster';
+import { FullGameState, PlacedRoom, ResourceInventory } from '../types/ankicaster';
+import { isRoomUnfinished } from './requiredFurniture';
 
-export const CAPPED_RESOURCES = new Set(['timber', 'stone', 'glass', 'cloth', 'provisions', 'greens', 'nectar']);
+export const CAPPED_RESOURCES = new Set(['timber', 'stone', 'glass', 'cloth', 'provisions', 'greens', 'fish', 'nectar']);
 
 export const COMMON_RESOURCES: Array<[keyof ResourceInventory, string, string]> = [
   ['timber', 'Timber', '🪵'],
@@ -45,16 +47,52 @@ export const TRACKED_RESOURCES: string[] = [
 
 export const STRIP_RESOURCES = COMMON_RESOURCES.slice(0, 6);
 
+const RESOURCE_LABEL = new Map<string, string>(
+  [...COMMON_RESOURCES, ...ESSENCE_RESOURCES, ...RARE_RESOURCES].map(([id, name]) => [id, name])
+);
+
+export function resourceLabel(resource: string): string {
+  return RESOURCE_LABEL.get(resource) || resource;
+}
+
+/** 200, plus 100 for every Storage Vault that is built and not Unfinished. */
+export function storageCap(state: { rooms?: PlacedRoom[] }): number {
+  const vaults = (state.rooms || []).filter(r => r.defId === 'storage_vault' && r.state === 'built' && !isRoomUnfinished(r)).length;
+  return 200 + 100 * vaults;
+}
+
+/**
+ * Add `delta` without crossing `cap`, and without throwing away stock that is
+ * already over it. Spending (delta <= 0) is unchanged.
+ */
+export function addUpToCap(current: number, delta: number, cap: number): number {
+  if (!(delta > 0)) return current + delta;
+  if (current >= cap) return current;
+  return Math.min(cap, current + delta);
+}
+
+/** Pull one-off gains back down to the cap. Never lowers stock that was already over it. */
+export function enforceStorageCap(state: FullGameState, before: Record<string, number>): void {
+  const cap = storageCap(state);
+  const bag = state.resources as unknown as Record<string, number>;
+  for (const k of CAPPED_RESOURCES) {
+    const prev = before[k] || 0;
+    const now = bag[k] || 0;
+    if (now > prev) bag[k] = addUpToCap(prev, now - prev, cap);
+  }
+}
+
 export interface FlowLine { label: string; per: number; }
 
 export function emptyLedger(): NonNullable<FullGameState['resourceLedger']> {
-  return { bells: [], recent: {} };
+  return { bells: [], recent: {}, recentAll: [] };
 }
 
 export function ensureLedger(state: FullGameState): NonNullable<FullGameState['resourceLedger']> {
   if (!state.resourceLedger) state.resourceLedger = emptyLedger();
   if (!state.resourceLedger.bells) state.resourceLedger.bells = [];
   if (!state.resourceLedger.recent) state.resourceLedger.recent = {};
+  if (!state.resourceLedger.recentAll) state.resourceLedger.recentAll = [];
   return state.resourceLedger;
 }
 
@@ -64,6 +102,9 @@ export function logResourceChange(state: FullGameState, resource: string, amount
   const list = ledger.recent[resource] || [];
   list.push({ amount, label });
   ledger.recent[resource] = list.slice(-20);
+  const all = ledger.recentAll || [];
+  all.push({ resource, amount, label });
+  ledger.recentAll = all.slice(-20);
 }
 
 export function resourceSnapshot(state: FullGameState): Record<string, number> {
@@ -74,6 +115,7 @@ export function resourceSnapshot(state: FullGameState): Record<string, number> {
 }
 
 export function logResourceDiff(state: FullGameState, before: Record<string, number>, label: string): void {
+  enforceStorageCap(state, before);
   const bag = state.resources as unknown as Record<string, number>;
   for (const k of TRACKED_RESOURCES) {
     const delta = (bag[k] || 0) - (before[k] || 0);
@@ -133,7 +175,58 @@ export function bellsUntilNextMeal(bellIndex: number): number {
   return k === 0 ? 5 : k;
 }
 
-export function glassworksConversion(stone: number, harvestMult: number, glass: number, cap = 500): { stoneUsed: number; glassGain: number } {
+export function formatSigned(n: number): string {
+  const abs = Math.abs(n);
+  const text = abs >= 10 ? abs.toFixed(0) : abs.toFixed(1);
+  return `${n < 0 ? '−' : '+'}${text}`;
+}
+
+export function runsOutText(bells: number): string {
+  return `runs out in about ${bells} bells (${bells * 10} reviews)`;
+}
+
+export function mealNeedText(bellIndex: number, people: number): string {
+  return `Next meal in ${bellsUntilNextMeal(bellIndex)} bells, needs ${people}`;
+}
+
+/** "Built Dormitory −30 timber" */
+export function formatRecentLine(entry: { resource: string; amount: number; label: string }): string {
+  return `${entry.label} ${formatSigned(entry.amount)} ${resourceLabel(entry.resource).toLowerCase()}`;
+}
+
+/** Last 20 one-off changes across every resource, newest first. */
+export function recentChanges(state: FullGameState): Array<{ resource: string; amount: number; label: string }> {
+  return [...(state.resourceLedger?.recentAll || [])].reverse();
+}
+
+export interface ResourceBrief {
+  amount: number;
+  cap?: number;
+  income: FlowLine[];
+  use: FlowLine[];
+  net: number;
+  runsOutBells: number;
+  mealText?: string;
+}
+
+/** The numbers the top-bar tooltip and the Stores screen both show. */
+export function resourceBrief(state: FullGameState, resource: string): ResourceBrief {
+  const flow = resourceFlow(state, resource);
+  const amount = (state.resources as unknown as Record<string, number>)[resource] || 0;
+  const capped = CAPPED_RESOURCES.has(resource);
+  const runsOutBells = flow.net < -0.0001 && amount > 0 ? Math.ceil(amount / -flow.net) : 0;
+  return {
+    amount,
+    cap: capped ? storageCap(state) : undefined,
+    income: flow.income,
+    use: flow.use,
+    net: flow.net,
+    runsOutBells,
+    mealText: resource === 'provisions' ? mealNeedText(state.bellIndex, state.characters.length) : undefined
+  };
+}
+
+export function glassworksConversion(stone: number, harvestMult: number, glass: number, cap = 200): { stoneUsed: number; glassGain: number } {
   const room = Math.max(0, cap - glass);
   let stoneUsed = Math.min(Math.max(0, stone), 2 * harvestMult);
   let glassGain = stoneUsed / 2;

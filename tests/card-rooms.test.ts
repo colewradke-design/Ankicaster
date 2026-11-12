@@ -82,6 +82,7 @@ test('founding draws cost the normal price and include the guaranteed rooms', ()
 
 test('demolish returns the plan and move does not', () => {
   let s = stocked();
+  s.resources.timber = 80;
   s.roomPlans = { dormitory: 1 };
   const placed = AnkicasterEngine.placeRoom(s, 'dormitory', 'castle', 6, 0);
   assert.equal(placed.success, true, placed.error);
@@ -273,15 +274,91 @@ test('the ledger matches provisions, and building writes a Recent line', () => {
   assert.equal(line.amount, -(ROOM_DEFINITIONS.dormitory.cost.timber || 0));
 });
 
-test('the build menu shows plan counts and the deck the room comes from', () => {
+test('the build menu shows plan counts for rooms you can build', () => {
   const s = createNewAcademy();
   s.roomPlans = { library: 2 };
   const html = renderToStaticMarkup(React.createElement(BuildMenuPanel, { state: s, onPlaceRoom: () => {} }));
   assert.match(html, /2 plans/);
-  assert.match(html, /Find it in the Magic deck/);
-  assert.match(html, /Find it in the Foundation deck/);
-  assert.ok(!/spiral_stair[\s\S]{0,400}plan/.test(html) || html.includes('data-build-card="spiral_stair"'));
+  assert.match(html, /data-build-card="library"/);
+  assert.ok(!html.includes('data-build-card="dormitory"'));
   const stair = html.split('data-build-card="spiral_stair"')[1]?.slice(0, 500) || '';
   assert.ok(!/plan-count|plans</.test(stair), 'structure pieces show no plan count');
   assert.ok(!html.includes('>0m<') && !/Cost:[\s\S]{0,40}\d+m/.test(html));
+});
+
+function vault(id: number, finished: boolean, state: 'built' | 'site' = 'built') {
+  return {
+    id, defId: 'storage_vault', x: 0, y: 0, w: 1, h: 1, area: 'castle' as const, level: 1 as const, state,
+    buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {},
+    furniture: finished ? [item('shelving', 'required:shelving')] : []
+  };
+}
+
+test('storage cap is 200, 300 with a finished vault, and 200 if that vault is Unfinished', () => {
+  const s = createNewAcademy();
+  assert.equal(AnkicasterEngine.storageCap(s), 200);
+  s.rooms.push(vault(90, true));
+  assert.equal(AnkicasterEngine.storageCap(s), 300);
+  s.rooms[s.rooms.length - 1].furniture = [];
+  assert.equal(AnkicasterEngine.storageCap(s), 200);
+  s.rooms[s.rooms.length - 1].state = 'site';
+  s.rooms[s.rooms.length - 1].furniture = [item('shelving', 'required:shelving')];
+  assert.equal(AnkicasterEngine.storageCap(s), 200, 'a site does not raise the cap');
+});
+
+test('a woodlot at 199 timber ends the bell at 200', () => {
+  const s = stocked();
+  s.resources.timber = 199;
+  s.rooms.push({
+    id: 91, defId: 'woodlot', x: 6, y: 0, w: 1, h: 1, area: 'grounds', level: 1, state: 'built',
+    buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {}, furniture: []
+  });
+  AnkicasterEngine.ringBell(s, []);
+  assert.equal(s.resources.timber, 200);
+});
+
+test('a supply crate at 195 timber ends at 200 and does not throw away surplus', () => {
+  const s = stocked();
+  s.resources.timber = 195;
+  const stone = s.resources.stone;
+  const glass = s.resources.glass;
+  const res = AnkicasterEngine.chooseDraftCard(s, {
+    id: 'extra-supply', deck: 'foundation', rarity: 'common', name: 'Supply Shipment Boon', type: 'boon', description: ''
+  });
+  assert.equal(res.state.resources.timber, 200);
+  assert.equal(res.state.resources.stone, stone);
+  assert.equal(res.state.resources.glass, glass);
+});
+
+test('demolishing a vault leaves surplus timber, and the next bell adds nothing', () => {
+  const s = stocked();
+  s.resources.timber = 280;
+  s.rooms.push(vault(92, true));
+  s.rooms.push({
+    id: 93, defId: 'woodlot', x: 6, y: 0, w: 1, h: 1, area: 'grounds', level: 1, state: 'built',
+    buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {}, furniture: []
+  });
+  assert.equal(AnkicasterEngine.storageCap(s), 300);
+  const gone = AnkicasterEngine.demolishRoom(s, 92);
+  assert.equal(gone.success, true, gone.error);
+  assert.equal(gone.state.resources.timber, 280);
+  AnkicasterEngine.ringBell(gone.state, []);
+  assert.equal(gone.state.resources.timber, 280);
+});
+
+test('the build list shows only planned rooms plus the three structure pieces', () => {
+  const s = createNewAcademy();
+  s.roomPlans = { library: 1 };
+  const html = renderToStaticMarkup(React.createElement(BuildMenuPanel, { state: s, onPlaceRoom: () => {} }));
+  const cards = [...html.matchAll(/data-build-card="([^"]+)"/g)].map(m => m[1]).sort();
+  assert.deepEqual(cards, ['corridor', 'library', 'spiral_stair', 'support_pillar']);
+  const tabs = [...html.matchAll(/data-build-tab="([^"]+)"/g)].map(m => m[1]);
+  assert.ok(tabs.includes('all') && tabs.includes('core') && tabs.includes('arcane'));
+  assert.ok(!tabs.includes('alchemy') && !tabs.includes('living') && !tabs.includes('grounds'));
+
+  const bare = renderToStaticMarkup(React.createElement(BuildMenuPanel, { state: createNewAcademy(), onPlaceRoom: () => {} }));
+  assert.match(bare, /Draw room cards to unlock more rooms/);
+  assert.match(bare, /data-build-card="spiral_stair"/);
+  assert.ok(!bare.includes('data-build-card="dormitory"'));
+  assert.ok(!bare.includes('data-build-tab="alchemy"'));
 });

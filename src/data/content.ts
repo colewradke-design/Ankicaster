@@ -116,7 +116,7 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     optionalSlots: 2,
     stats: { primary: ['order', 'order'], secondary: 'aura' },
     level3Perk: 'Auto-sorts vault; builders clean +1 cleanliness per bell.',
-    description: 'Expands maximum storage cap for common materials by +200 each.'
+    description: '+100 storage for common materials.'
   },
 
   // --- LIVING ---
@@ -689,7 +689,7 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     requiredFurniture: [{ role: 'kiln', count: 1, name: 'Kiln' }],
     optionalSlots: 1,
     stats: { primary: ['aura', 'order'], secondary: 'focus' },
-    description: 'At full efficiency, converts 2 Stone into 1 Glass per bell. Short on stone, it converts only what it has (half as much glass as the stone used). Glass caps at 500.'
+    description: 'At full efficiency, converts 2 Stone into 1 Glass per bell. Short on stone, it converts only what it has (half as much glass as the stone used).'
   },
   weaving_room: {
     id: 'weaving_room',
@@ -704,7 +704,7 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     requiredFurniture: [{ role: 'loom', count: 1, name: 'Loom' }],
     optionalSlots: 2,
     stats: { primary: ['order', 'charm'], secondary: 'comfort' },
-    description: 'Spins 0.5 Cloth per bell at full efficiency (doubled with a tamed Moonsheep). Cloth caps at 500.'
+    description: 'Spins 0.5 Cloth per bell at full efficiency (doubled with a tamed Moonsheep).'
   },
 
   // --- RIFT & DISPLAY ---

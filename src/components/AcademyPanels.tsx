@@ -10,9 +10,12 @@
  */
 
 import React from 'react';
-import { BookOpen, Leaf, Sun, Moon, FlaskConical } from 'lucide-react';
 import { FullGameState, SchoolEvent } from '../types/ankicaster';
 import { POTION_RECIPES, SCHOOL_EVENTS } from '../data/content';
+import {
+  COMMON_RESOURCES, ESSENCE_RESOURCES, RARE_RESOURCES,
+  formatRecentLine, formatSigned, recentChanges, resourceBrief, runsOutText
+} from '../utils/resourceReport';
 
 const Stat: React.FC<{ icon: React.ReactNode; label: string; value: number }> = ({ icon, label, value }) => (
   <div className="flex items-center gap-2 bg-slate-950/70 border border-slate-800 rounded-lg px-3 py-2 text-[13px]" title={label}>
@@ -27,44 +30,62 @@ export const StoresPanel: React.FC<{ state: FullGameState }> = ({ state }) => {
   const potionNames: Record<string, string> = {};
   for (const p of (Array.isArray(POTION_RECIPES) ? POTION_RECIPES : Object.values(POTION_RECIPES)) as any[]) potionNames[p.id] = p.name;
   const potions = Object.entries(r.potions || {}).filter(([, n]) => (n || 0) > 0);
-  const rare: Array<[string, string]> = [
-    ['crystal', 'Crystal'], ['heartwood', 'Heartwood'], ['sunstone', 'Sunstone'], ['void_pearl', 'Void Pearl'],
-    ['ember_salt', 'Ember Salt'], ['moonsilk', 'Moonsilk'], ['starmetal', 'Starmetal'], ['golem_core', 'Golem Core'], ['phoenix_ash', 'Phoenix Ash']
-  ];
-  const rareOwned = rare.filter(([k]) => ((r as any)[k] || 0) > 0);
+  const recent = recentChanges(state);
+
+  const group = (title: string, rows: Array<[string, string, string]>) => (
+    <section>
+      <h4 className="text-[12px] uppercase tracking-wider font-bold text-slate-400 mb-2">{title}</h4>
+      <div className="space-y-2">
+        {rows.map(([key, label]) => {
+          const brief = resourceBrief(state, key);
+          const atCap = brief.cap !== undefined && brief.amount >= brief.cap;
+          return (
+            <div key={key} className={`rounded-lg border px-3 py-2 text-[13px] ${atCap ? 'border-amber-400/70 bg-amber-500/10' : 'border-slate-800 bg-slate-950/60'}`} data-resource={key} data-at-cap={atCap ? 'true' : undefined}>
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="font-bold text-slate-100">{label}</span>
+                <span className={`font-mono ${atCap ? 'text-amber-100' : 'text-slate-100'}`}>
+                  {brief.cap !== undefined ? `${Math.floor(brief.amount)} / ${brief.cap}` : Math.floor(brief.amount)}
+                </span>
+              </div>
+              <div className="mt-1 text-slate-400">Income per bell</div>
+              {brief.income.length === 0 ? <div className="text-slate-500">None</div> : brief.income.map(l => (
+                <div key={l.label} className="text-slate-200">{l.label}: {formatSigned(l.per)}</div>
+              ))}
+              <div className="mt-1 text-slate-400">Use per bell</div>
+              {brief.use.length === 0 ? <div className="text-slate-500">None</div> : brief.use.map(l => (
+                <div key={l.label} className="text-slate-200">{l.label}: {formatSigned(l.per)}</div>
+              ))}
+              <div className={`mt-1 font-bold ${brief.net > 0.0001 ? 'text-emerald-300' : brief.net < -0.0001 ? 'text-rose-300' : 'text-slate-300'}`}>
+                Net {formatSigned(brief.net)} per bell
+              </div>
+              {brief.runsOutBells > 0 && <div className="text-rose-300">{runsOutText(brief.runsOutBells)}</div>}
+              {brief.mealText && <div className="text-amber-100">{brief.mealText}</div>}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+
   return (
     <div className="space-y-4" data-testid="stores-panel">
+      {group('Common materials', COMMON_RESOURCES as unknown as Array<[string, string, string]>)}
+      {group('Essences', ESSENCE_RESOURCES as unknown as Array<[string, string, string]>)}
+      {group('Rare', RARE_RESOURCES as unknown as Array<[string, string, string]>)}
       <section>
-        <h4 className="text-[12px] uppercase tracking-wider font-bold text-slate-400 mb-2">Essences</h4>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-          <Stat icon={<BookOpen className="w-4 h-4 text-purple-400" />} label="Insight" value={r.insight} />
-          <Stat icon={<Leaf className="w-4 h-4 text-emerald-400" />} label="Herbs" value={r.herbs} />
-          <Stat icon={<Sun className="w-4 h-4 text-amber-400" />} label="Radiance" value={r.radiance} />
-          <Stat icon={<Moon className="w-4 h-4 text-indigo-400" />} label="Umbra" value={r.umbra} />
-          <Stat icon={<FlaskConical className="w-4 h-4 text-orange-400" />} label="Reagents" value={r.reagents} />
-        </div>
-      </section>
-      <section>
-        <h4 className="text-[12px] uppercase tracking-wider font-bold text-slate-400 mb-2">Materials &amp; food</h4>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <Stat icon="🪵" label="Timber" value={r.timber} />
-          <Stat icon="🪨" label="Stone" value={r.stone} />
-          <Stat icon="🪟" label="Glass" value={r.glass} />
-          <Stat icon="🧵" label="Cloth" value={r.cloth} />
-          <Stat icon="🍞" label="Provisions" value={r.provisions} />
-          <Stat icon="🥬" label="Greens" value={r.greens} />
-          <Stat icon="🐟" label="Fish" value={r.fish} />
-          <Stat icon="🍯" label="Nectar" value={r.nectar} />
-        </div>
-      </section>
-      {rareOwned.length > 0 && (
-        <section>
-          <h4 className="text-[12px] uppercase tracking-wider font-bold text-slate-400 mb-2">Rare</h4>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {rareOwned.map(([k, n]) => <Stat key={k} icon="✦" label={n} value={(r as any)[k]} />)}
+        <h4 className="text-[12px] uppercase tracking-wider font-bold text-slate-400 mb-2">Recent changes</h4>
+        {recent.length === 0 ? (
+          <div className="text-[13px] text-slate-500">None yet.</div>
+        ) : (
+          <div className="space-y-1" data-testid="stores-recent">
+            {recent.map((entry, i) => (
+              <div key={i} className="text-[13px] text-slate-200 bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-1.5">
+                {formatRecentLine(entry)}
+              </div>
+            ))}
           </div>
-        </section>
-      )}
+        )}
+      </section>
       <section>
         <h4 className="text-[12px] uppercase tracking-wider font-bold text-slate-400 mb-2">Potions</h4>
         {potions.length === 0 ? (

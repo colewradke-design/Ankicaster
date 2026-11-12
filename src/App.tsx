@@ -784,7 +784,7 @@ export default function App() {
       case 'admissions':
         return <RecruitmentPanel state={state} onEnroll={handleEnrollStudent} />;
       case 'build':
-        return <BuildMenuPanel state={state} onPlaceRoom={handlePlaceRoom} onAutoPlace={handleAutoPlaceRoom} />;
+        return <BuildMenuPanel state={state} onPlaceRoom={handlePlaceRoom} onAutoPlace={handleAutoPlaceRoom} onOpenDraft={() => handleOpenScreen('draft')} />;
       case 'draft':
         return <CardDraftPanel state={state} onDrawDeck={handleDrawDeck} />;
       case 'bestiary':

@@ -15,7 +15,7 @@
 
 import { roomLimitStatus } from '../utils/placement';
 import { WizardPortrait } from './WizardPortrait';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   FullGameState,
   SchoolType,
@@ -698,11 +698,22 @@ export const BuildMenuPanel: React.FC<{
   state: FullGameState;
   onPlaceRoom: (defId: string, area: 'castle' | 'grounds') => void;
   onAutoPlace?: (defId: string) => void;
-}> = ({ state, onPlaceRoom, onAutoPlace }) => {
+  onOpenDraft?: () => void;
+}> = ({ state, onPlaceRoom, onAutoPlace, onOpenDraft }) => {
   const [category, setCategory] = useState<string>('all');
   const roomList = Object.values(ROOM_DEFINITIONS);
+  const listed = roomList.filter(r => isStructure(r.id) || (state.roomPlans?.[r.id] || 0) > 0);
+  const hasPlans = Object.values(state.roomPlans || {}).some(n => (n || 0) > 0);
+  const tabs = ['all', 'core', 'living', 'arcane', 'nature', 'light', 'shadow', 'alchemy', 'craft', 'rift', 'grounds'].filter(cat => {
+    if (cat === 'all') return listed.length > 0;
+    return listed.some(r => r.category === cat || (cat === 'grounds' && r.area === 'grounds'));
+  });
+  const tabKey = tabs.join(',');
+  useEffect(() => {
+    if (tabKey && !tabKey.split(',').includes(category)) setCategory(tabKey.split(',')[0]);
+  }, [tabKey, category]);
 
-  const filtered = roomList.filter(
+  const filtered = listed.filter(
     r => category === 'all' || r.category === category || (category === 'grounds' && r.area === 'grounds')
   );
 
@@ -723,10 +734,24 @@ export const BuildMenuPanel: React.FC<{
           ))}
         </div>
       )}
+      {!hasPlans && (
+        <div className="flex items-center justify-between gap-3 bg-slate-950/60 border border-slate-800 rounded-xl px-3 py-2" data-testid="build-no-plans">
+          <p className="text-[13px] text-slate-200">Draw room cards to unlock more rooms</p>
+          <button
+            type="button"
+            onClick={() => onOpenDraft?.()}
+            className="px-3 py-1.5 min-h-[32px] rounded-lg bg-purple-600/30 hover:bg-purple-600/50 text-purple-100 border border-purple-500/40 text-xs font-bold"
+          >
+            Draw
+          </button>
+        </div>
+      )}
       <div className="flex items-center gap-2 flex-wrap border-b border-slate-800 pb-2 text-xs">
-        {['all', 'core', 'living', 'arcane', 'nature', 'light', 'shadow', 'alchemy', 'craft', 'rift', 'grounds'].map(cat => (
+        {tabs.map(cat => (
           <button
             key={cat}
+            type="button"
+            data-build-tab={cat}
             onClick={() => setCategory(cat)}
             className={`px-3 py-1.5 rounded-lg text-xs capitalize font-semibold transition ${
               category === cat
