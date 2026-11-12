@@ -32,13 +32,14 @@ import {
   GROUNDS_PLOTS_PER_SIDE
 } from '../layout/gridToWorld';
 import { unlockedPlotIndices } from '../../utils/groundsLayout';
-import { drawRoomInterior, drawEmitter, drawAnimatedItem, Emitter, AnimatedItem } from '../rooms/roomArt';
+import { drawRoomInterior, drawEmitter, drawAnimatedItem, Emitter, AnimatedItem, roomTier, TIERS, vaultFillStep } from '../rooms/roomArt';
 import { drawSite } from '../rooms/siteArt';
 import { isRoomUnfinished } from '../../utils/requiredFurniture';
 import { drawDirt, dirtLevel, drawLockHazard, drawPadlock, drawWrench, drawDirtyBadge, drawRing, drawUnfinishedBadge } from '../rooms/statusArt';
 import { drawEffect, VisualEffect, EFFECT_MS } from '../rooms/effects';
 import { reviewsToGo, siteFraction } from '../../utils/construction';
 import { hexToNum } from '../../utils/appearance';
+import { CAPPED_RESOURCES, resourceLabel, storageCap } from '../../utils/resourceReport';
 
 /** Fixed ambient rate (Addendum 5.5: 2-8 fps, never tied to reviews). 5 fps -> 0.8 s per 4-frame loop. */
 export const AMBIENT_FRAME_MS = 200;
@@ -78,6 +79,8 @@ export class VisualWorld {
   clockMs = 0;
   effects: VisualEffect[] = [];
   private prevRooms: Map<number, PlacedRoom> | null = null;
+  /** Last bellIndex seen. Output pops fire once when it changes, never per review. */
+  private prevBell: number | null = null;
   overlayLabels: OverlayLabel[] = [];
   overlayTexts = new Map<string, Text>();
   roomLabelsContainer = new Container();
@@ -215,11 +218,14 @@ export class VisualWorld {
     this.renderWorldLayers();
   }
 
-  /** Compare with the previous snapshot: site -> built (reveal), removed (demolish/cancel dust), level up. */
+  /** Compare with the previous snapshot: site -> built (reveal), removed (demolish/cancel dust), level up, tier change, bell pops. */
   private detectEffects(state: FullGameState) {
     const next = new Map(state.rooms.map(r => [r.id, r] as const));
     const prev = this.prevRooms;
     this.prevRooms = next;
+    const bell = state.bellIndex ?? 0;
+    const bellChanged = this.prevBell !== null && bell !== this.prevBell;
+    this.prevBell = bell;
     if (!prev || state.settings.reduceMotion) return;
     const now = this.clockMs;
     for (const [id, before] of prev) {
@@ -228,10 +234,51 @@ export class VisualWorld {
         this.effects.push({ kind: 'dust', box: roomToWorldBox(before, this.groundY), start: now, ms: EFFECT_MS.dust });
       } else if (before.state === 'site' && after.state === 'built') {
         this.effects.push({ kind: 'reveal', box: roomToWorldBox(after, this.groundY), start: now, ms: EFFECT_MS.reveal });
-      } else if (after.state === 'built' && after.level > before.level) {
-        const def = ROOM_DEFINITIONS[after.defId];
-        this.effects.push({ kind: 'level', box: roomToWorldBox(after, this.groundY), start: now, ms: after.level >= 3 ? EFFECT_MS.level3 : EFFECT_MS.level, level: after.level, name: def?.name, roomId: id });
+      } else if (after.state === 'built') {
+        if (after.level > before.level) {
+          const def = ROOM_DEFINITIONS[after.defId];
+          this.effects.push({ kind: 'level', box: roomToWorldBox(after, this.groundY), start: now, ms: after.level >= 3 ? EFFECT_MS.level3 : EFFECT_MS.level, level: after.level, name: def?.name, roomId: id });
+        }
+        if (before.state === 'built') {
+          const delta = TIERS.indexOf(roomTier(after)) - TIERS.indexOf(roomTier(before));
+          if (delta > 0) this.effects.push({ kind: 'wipe', box: roomToWorldBox(after, this.groundY), start: now, ms: EFFECT_MS.tier, roomId: id });
+          else if (delta < 0) this.effects.push({ kind: 'fade', box: roomToWorldBox(after, this.groundY), start: now, ms: EFFECT_MS.tier, roomId: id });
+        }
       }
+    }
+    if (bellChanged) this.spawnOutputPops(state, now);
+  }
+
+  /** One floater per producing room, from the latest bell's real ledger amounts. */
+  private spawnOutputPops(state: FullGameState, now: number) {
+    const entries = state.resourceLedger?.bells?.[state.resourceLedger.bells.length - 1]?.entries || [];
+    const chunks: Array<{ source: string; items: Array<{ resource: string; amount: number }>; used?: boolean }> = [];
+    for (const e of entries) {
+      if (!(e.amount > 0)) continue;
+      const last = chunks[chunks.length - 1];
+      if (last && last.source === e.source) last.items.push(e);
+      else chunks.push({ source: e.source, items: [e] });
+    }
+    const matches = (source: string, name: string) => source === name || source.startsWith(name + ' ') || source.startsWith(name + '(');
+    for (const room of state.rooms) {
+      if (room.state !== 'built' || isRoomUnfinished(room)) continue;
+      const locked = (room.lockedUntilReviewIndex ?? -1) > (state.reviewIndex ?? 0);
+      if (locked || !(this.reachability.get(room.id)?.reachable ?? false)) continue;
+      const name = ROOM_DEFINITIONS[room.defId]?.name || room.defId;
+      const chunk = chunks.find(c => !c.used && matches(c.source, name));
+      if (!chunk) continue;
+      chunk.used = true;
+      const best = chunk.items.reduce((a, b) => (b.amount > a.amount ? b : a));
+      const box = roomToWorldBox(room, this.groundY);
+      this.effects.push({
+        kind: 'pop',
+        box,
+        start: now,
+        ms: EFFECT_MS.pop,
+        roomId: room.id,
+        name: popLabel(best.amount, best.resource),
+        color: POP_COLOR[best.resource] ?? 0xe0a33a
+      });
     }
   }
 
@@ -249,6 +296,11 @@ export class VisualWorld {
     const robeColor = this.state.wizard?.appearance?.robeColor;
     // Crop growth: no harvest timing in the engine yet, so bell index modulo 4 (Addendum 5.5)
     const cropStage = Math.abs(this.state.bellIndex ?? 0) % 4;
+    let stored = 0;
+    const bag = this.state.resources as unknown as Record<string, number>;
+    for (const k of CAPPED_RESOURCES) stored += bag?.[k] || 0;
+    const cap = storageCap(this.state);
+    const vaultFill = vaultFillStep(stored, cap > 0 ? cap : 200);
     const rooms = this.state.rooms;
     const currentRoomIds = new Set<number>();
     let labelsCreated = false;
@@ -274,7 +326,7 @@ export class VisualWorld {
       }
 
       if (room.state === 'built') {
-        const art = drawRoomInterior(this.castleGraphics, room, box, { robeColor, hasLeftDoor, hasRightDoor, cropStage });
+        const art = drawRoomInterior(this.castleGraphics, room, box, { robeColor, hasLeftDoor, hasRightDoor, cropStage, vaultFill });
         const locked = (room.lockedUntilReviewIndex ?? -1) > (this.state.reviewIndex ?? 0);
         // Ambient loops run only in built, reachable, unlocked, finished rooms (Addendum 5.5)
         const unfinished = isRoomUnfinished(room);
@@ -530,8 +582,11 @@ export class VisualWorld {
     // Status / construction labels (screen space, fixed size, device-pixel snapped)
     const labels = [...this.overlayLabels];
     for (const e of this.effects) {
-      if (e.kind === 'level' && (e.level ?? 0) >= 3 && e.name && this.clockMs - e.start < 2000) {
-        labels.push({ key: `fx:${e.roomId}`, text: `${e.name} · Level 3`, wx: e.box.left + e.box.width / 2, wy: e.box.top - 12, color: 0xf7e39a, size: 12, align: 'center' });
+      if (e.kind === 'level' && (e.level ?? 0) >= 3 && e.name && this.clockMs - e.start < e.ms) {
+        labels.push({ key: `fx:${e.roomId}`, text: e.name, wx: e.box.left + e.box.width / 2, wy: e.box.top - 14, color: 0xf7e39a, size: 12, align: 'center' });
+      } else if (e.kind === 'pop' && e.name && this.clockMs - e.start < e.ms) {
+        const t = Math.max(0, Math.min(1, (this.clockMs - e.start) / e.ms));
+        labels.push({ key: `pop:${e.roomId}:${e.start}`, text: e.name, wx: e.box.left + e.box.width / 2 + 6, wy: e.box.top - 10 - t * 18, color: 0xf6f1e8, size: 11, align: 'center' });
       }
     }
     const live = new Set<string>();
@@ -628,4 +683,17 @@ export class VisualWorld {
 
     return null;
   }
+}
+
+const POP_COLOR: Record<string, number> = {
+  timber: 0x6e4529, stone: 0x8a8994, glass: 0x9cd4ff, cloth: 0xd97a9a,
+  provisions: 0xe0a33a, greens: 0x6ba34f, fish: 0x5a9ad6, nectar: 0xf5ce7a,
+  herbs: 0x4e8b3a, insight: 0x6b4fbb, radiance: 0xe8c547, umbra: 0x4c5ba3, reagents: 0xd9472b,
+  crystal: 0x9c86e0, heartwood: 0x7db861
+};
+
+function popLabel(amount: number, resource: string): string {
+  const n = Math.abs(amount);
+  const shown = Math.abs(n - Math.round(n)) < 0.05 ? String(Math.round(n)) : String(Math.round(n * 10) / 10);
+  return `+${shown} ${resourceLabel(resource)}`;
 }

@@ -8,7 +8,8 @@ import assert from 'node:assert/strict';
 
 import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS } from '../src/data/content.ts';
 import { PlacedRoom } from '../src/types/ankicaster.ts';
-import { drawRoomInterior, TIERS, drawEmitter, drawAnimatedItem } from '../src/visual/rooms/roomArt.ts';
+import { drawRoomInterior, TIERS, drawEmitter, drawAnimatedItem, vaultFillStep } from '../src/visual/rooms/roomArt.ts';
+import { LEVEL3_SIGNATURE } from '../src/visual/rooms/level3Props.ts';
 import { drawFurniture, hasFurnitureArt, FURNITURE_ART_IDS, getFurnitureArt } from '../src/visual/rooms/furnitureArt.ts';
 import { layoutRoomFurniture } from '../src/visual/layout/roomLayouts.ts';
 import { roomToWorldBox } from '../src/visual/layout/gridToWorld.ts';
@@ -93,6 +94,20 @@ test('V2-3 every room id draws in every tier and level, furnished and empty', ()
       }
       if (furnished) assert.equal(res.missing.length, 0, `${defId} furnished has no ghosts`);
     }
+  }
+  assert.deepEqual(Object.keys(ROOM_DEFINITIONS).filter(id => !LEVEL3_SIGNATURE[id]), [], 'every room has a level-3 signature prop');
+  for (const fill of [0, 1, 2, 3, 4] as const) {
+    const room = makeRoom('storage_vault', 3, true);
+    const p = new RecordingPainter();
+    assert.doesNotThrow(() => drawRoomInterior(p, room, roomToWorldBox(room, 400), { tier: 'plain', vaultFill: fill }), `vault fill ${fill}`);
+    assert.deepEqual(p.problems, [], `vault fill ${fill}`);
+  }
+  assert.deepEqual([0, 0.24, 0.25, 0.5, 0.75, 1, 1.4].map(f => vaultFillStep(f * 8 * 200, 200)), [0, 0, 1, 2, 3, 4, 4]);
+  for (const cropStage of [0, 1, 2, 3]) {
+    const room = makeRoom('greenhouse', 3, false);
+    const p = new RecordingPainter();
+    assert.doesNotThrow(() => drawRoomInterior(p, room, roomToWorldBox(room, 400), { cropStage }), `greenhouse stage ${cropStage}`);
+    assert.deepEqual(p.problems, [], `greenhouse stage ${cropStage}`);
   }
 });
 

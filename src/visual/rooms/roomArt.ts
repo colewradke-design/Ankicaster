@@ -20,9 +20,21 @@ import { Painter, hex, line, noise, mix, darken, flame, glyph } from './painter'
 import { drawFurniture, getFurnitureArt, furnitureBox, drawGhostSlot } from './furnitureArt';
 import { layoutRoomFurniture, floorLineFor, getRoomLayout, NO_FURNITURE_ROOMS } from '../layout/roomLayouts';
 import { CELL_H } from '../layout/gridToWorld';
+import { drawSignatureProp } from './level3Props';
 
 export type Tier = 'bare' | 'plain' | 'cozy' | 'fine' | 'splendid';
 export const TIERS: Tier[] = ['bare', 'plain', 'cozy', 'fine', 'splendid'];
+
+/** Crate-pile step for a Storage Vault: total common materials / (8 × storage cap). */
+export function vaultFillStep(total: number, cap: number): 0 | 1 | 2 | 3 | 4 {
+  const denom = 8 * (cap > 0 ? cap : 200);
+  const f = denom > 0 ? total / denom : 0;
+  if (f >= 1) return 4;
+  if (f >= 0.75) return 3;
+  if (f >= 0.5) return 2;
+  if (f >= 0.25) return 1;
+  return 0;
+}
 
 export interface Box { left: number; top: number; width: number; height: number; floorLineY: number }
 
@@ -51,6 +63,8 @@ export interface RoomArtOpts {
   tier?: Tier;
   /** Crop growth stage 0..3 (bell index modulo 4 until the engine has harvest timing). */
   cropStage?: number;
+  /** Storage Vault pile step 0..4. Omit to draw a mid pile (callers with no resource state). */
+  vaultFill?: number;
 }
 
 const STONE = PALETTE.stone.map(hex);
@@ -93,13 +107,19 @@ export function drawRoomInterior(g: Painter, room: PlacedRoom, box: Box, opts: R
   const res: RoomArtResult = { tier, emitters: [], animated: [], damaged: [], missing: [], bespoke: false };
   if (room.area === 'grounds') {
     res.bespoke = drawGroundsPlot(g, room, box, res.emitters, opts.cropStage ?? 3);
+    if (room.level >= 2) drawLevelTrim(g, box, room.level, tint, gk);
   } else {
     drawTierSkin(g, box, tier, tint, gk, room.id, res.emitters);
-    res.bespoke = drawDressing(g, room, box, tint, gk, res.emitters);
+    res.bespoke = drawDressing(g, room, box, tint, gk, res.emitters, opts.cropStage ?? 3, opts.vaultFill);
     drawShell(g, room, box, tier, !!opts.hasLeftDoor, !!opts.hasRightDoor);
     drawLevelTrim(g, box, room.level, tint, gk);
   }
+  if (room.level >= 3) drawSignatureProp(g, room.defId, box.left + box.width - 16, box.top + 20, tint);
   placeFurniture(g, room, box, tint, gk, res);
+  if (tier === 'splendid') {
+    let sparkles = 0;
+    res.emitters = res.emitters.filter(e => e.kind !== 'twinkle' || ++sparkles <= 3);
+  }
   return res;
 }
 
@@ -311,6 +331,17 @@ export function drawLevelTrim(g: Painter, box: Box, level: number, tint: number,
   g.poly([cx - 4, cy - 4, cx + 4, cy - 4, cx + 4, cy + 1, cx, cy + 5, cx - 4, cy + 1]).fill({ color: level >= 3 ? GOLDS[1] : STONE[2] });
   glyph(g, gk, cx, cy, 2.2, level >= 3 ? GOLDS[3] : tint);
   if (level >= 3) {
+    // Trim II: stained-glass window in the category colour, plus a crest banner.
+    const wx = L + 12, wy = T + 5;
+    g.rect(wx - 1, wy - 1, 11, 14).fill({ color: GOLDS[1] });
+    g.rect(wx, wy, 9, 12).fill({ color: tint });
+    g.rect(wx + 1, wy + 1, 3, 3).fill({ color: 0xffffff, alpha: 0.45 });
+    line(g, wx + 4.5, wy, wx + 4.5, wy + 12, GOLDS[2], 0.6);
+    line(g, wx, wy + 6, wx + 9, wy + 6, GOLDS[2], 0.6);
+    const bx = Math.min(L + W - 22, wx + 18);
+    g.rect(bx - 5, T, 10, 1.5).fill({ color: GOLDS[2] });
+    g.poly([bx - 4, T + 1.5, bx + 4, T + 1.5, bx + 4, T + 12, bx, T + 15, bx - 4, T + 12]).fill({ color: tint });
+    glyph(g, gk, bx, T + 7, 2, GOLDS[3]);
     for (const fx of [L + 3, L + W - 3]) {
       g.circle(fx, T + 2, 1.8).fill({ color: GOLDS[3] });
       g.rect(fx - 0.75, T + 3, 1.5, box.floorLineY - T - 3).fill({ color: GOLDS[1], alpha: 0.6 });
@@ -394,7 +425,7 @@ function plinthSpot(g: Painter, x: number, top: number, B: number, em: Emitter[]
   em.push({ kind: 'twinkle', x, y: B - 18, color: 0xf7e39a });
 }
 
-export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: number, gk: string, em: Emitter[]): boolean {
+export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: number, gk: string, em: Emitter[], cropStage = 3, vaultFill?: number): boolean {
   const L = box.left, T = box.top + 3, W = box.width, B = box.floorLineY, R = L + W, cx = L + W / 2;
   const s = room.id;
   switch (room.defId) {
@@ -442,10 +473,19 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
     }
     case 'storage_vault': {
       g.ellipse(cx, T + 2, W / 2, 10).stroke({ color: STONE[1], width: 2 });
-      // sacks + crates; the pile steps with storage fill in a later milestone (V3 resources)
-      g.ellipse(L + 10, B - 4, 5, 4).fill({ color: 0xc9b88a });
-      g.rect(L + 15, B - 8, 9, 8).fill({ color: WOOD[2] });
-      line(g, L + 15, B - 8, L + 24, B, WOOD[0], 0.75);
+      // ledger desk stays; the crate pile steps with storage fill (0 / 25 / 50 / 75 / 100%)
+      g.rect(R - 18, B - 10, 14, 10).fill({ color: WOOD[1] });
+      g.rect(R - 16, B - 12, 8, 2).fill({ color: 0xf6f1e8 });
+      const step = vaultFill === undefined ? 2 : Math.max(0, Math.min(4, Math.floor(vaultFill)));
+      for (let i = 0; i < step; i++) {
+        const y = B - 6 - i * 6;
+        const x = L + 8 + (i % 2) * 5;
+        if (i % 2 === 0) g.ellipse(x + 4, y + 3, 5, 3.2).fill({ color: 0xc9b88a });
+        else {
+          g.rect(x, y, 12, 6).fill({ color: WOOD[2] });
+          line(g, x, y, x + 12, y + 6, WOOD[0], 0.6);
+        }
+      }
       break;
     }
     case 'dormitory': {
@@ -569,10 +609,20 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
       }
       break;
     case 'greenhouse': {
-      // glass roof and walls
+      // glass roof and walls, plus the same four crop stages as the outdoor plots
       g.rect(L + 2, T, W - 4, B - T - 12).fill({ color: GLASS, alpha: 0.35 });
       for (let x = L + 2; x <= R - 2; x += 16) line(g, x, T, x, B - 12, 0xd8eef7, 1);
       line(g, L + 2, T + 12, R - 2, T + 12, 0xd8eef7, 0.75);
+      const cs = Math.max(0, Math.min(3, cropStage));
+      for (const bedX of [L + 8, cx]) {
+        const bedW = Math.min(36, cx - L - 12);
+        g.rect(bedX, B - 8, bedW, 6).fill({ color: WOOD[1] });
+        g.rect(bedX + 1, B - 7, bedW - 2, 4).fill({ color: 0x5a4030 });
+        for (let i = 0; i < 4; i++) {
+          const px = bedX + 4 + i * ((bedW - 8) / 3);
+          g.circle(px, B - 8 - cs * 1.1, 0.8 + cs * 0.55).fill({ color: cs === 0 ? 0x9ccb72 : 0x3a6b2c });
+        }
+      }
       g.rect(L + 8, B - 6, 5, 5).fill({ color: 0x5a9ad6 }); // watering can
       em.push({ kind: 'twinkle', x: cx, y: T + 10, color: 0xd8eef7 });
       break;

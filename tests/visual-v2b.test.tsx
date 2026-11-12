@@ -106,7 +106,7 @@ test('V2B-5 cleanliness decal sets, lock hazard, ring and effects draw cleanly',
   assert.equal(drawDirt(g, r, box), 3);
   drawLockHazard(g, r, box);
   for (const p of [0, 0.01, 0.5, 1]) drawRing(g, 10, 10, 6, p, 0x7dd87a);
-  for (const kind of ['dust', 'reveal', 'level'] as const) for (const t of [0, 0.3, 0.8, 1]) drawEffect(g, { kind, box, start: 0, ms: 1000, level: 3, name: 'Dormitory' }, t);
+  for (const kind of ['dust', 'reveal', 'level', 'wipe', 'fade', 'pop'] as const) for (const t of [0, 0.3, 0.8, 1]) drawEffect(g, { kind, box, start: 0, ms: 1000, level: 3, name: 'Dormitory', color: 0xe0a33a }, t);
   assert.deepEqual(g.problems, []);
 });
 
@@ -163,4 +163,83 @@ test('V2B-7 ambience runs at a fixed real-time rate; reduce motion freezes it an
   assert.equal(w2.effects.length, 1);
   for (let i = 0; i < 20; i++) w2.update(100);
   assert.equal(w2.effects.length, 0);
+});
+
+test('tier up triggers a wipe and tier down a fade; reduceMotion triggers neither', async () => {
+  const { VisualWorld } = await import('../src/visual/world/VisualWorld.ts');
+  const { roomTier, TIERS } = await import('../src/visual/rooms/roomArt.ts');
+  const bed = (id: number): PlacedRoom['furniture'][number] => ({ id, defId: 'canopy_bed', slotKind: 'bed', damaged: false });
+  const dorm = (furniture: PlacedRoom['furniture']): PlacedRoom => ({
+    id: 80, defId: 'dormitory', x: 0, y: 0, w: 2, h: 1, area: 'castle', level: 1, state: 'built',
+    buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {}, furniture
+  });
+  const bare = dorm([]);
+  const furnished = dorm([bed(1), bed(2)]);
+  assert.ok(TIERS.indexOf(roomTier(furnished)) > TIERS.indexOf(roomTier(bare)), 'two canopy beds climb a tier');
+  const s = createNewAcademy();
+  s.rooms = [...s.rooms, bare];
+  const world = new VisualWorld();
+  world.setSnapshot(s);
+  world.setSnapshot({ ...s, rooms: s.rooms.map(r => (r.id === 80 ? furnished : r)) });
+  assert.ok(world.effects.some(e => e.kind === 'wipe'), 'tier up wipes');
+  assert.ok(!world.effects.some(e => e.kind === 'fade'));
+  world.setSnapshot({ ...s, rooms: s.rooms.map(r => (r.id === 80 ? bare : r)) });
+  assert.ok(world.effects.some(e => e.kind === 'fade'), 'tier down fades');
+
+  const still = new VisualWorld();
+  const rm = { ...s, settings: { ...s.settings, reduceMotion: true } };
+  still.setSnapshot(rm);
+  still.setSnapshot({ ...rm, rooms: rm.rooms.map(r => (r.id === 80 ? furnished : r)) });
+  still.setSnapshot({ ...rm, rooms: rm.rooms.map(r => (r.id === 80 ? bare : r)) });
+  assert.equal(still.effects.length, 0, 'reduceMotion swaps the skin with no effect');
+});
+
+test('an output pop is created once per bell per producing room, and none for an Unfinished room', async () => {
+  const { VisualWorld } = await import('../src/visual/world/VisualWorld.ts');
+  const { isRoomUnfinished } = await import('../src/utils/requiredFurniture.ts');
+  const wood: PlacedRoom = {
+    id: 81, defId: 'woodlot', x: 9, y: 0, w: 1, h: 1, area: 'grounds', level: 1, state: 'built',
+    buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {}, furniture: []
+  };
+  const greenhouse: PlacedRoom = {
+    id: 82, defId: 'greenhouse', x: 6, y: 0, w: 2, h: 1, area: 'castle', level: 1, state: 'built',
+    buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {}, furniture: []
+  };
+  assert.equal(isRoomUnfinished(greenhouse), true);
+  const base = createNewAcademy();
+  base.rooms = [...base.rooms, wood, greenhouse];
+  base.bellIndex = 0;
+  const world = new VisualWorld();
+  world.setSnapshot(base);
+  const bell = {
+    ...base,
+    bellIndex: 1,
+    reviewIndex: base.reviewIndex,
+    resourceLedger: {
+      bells: [{ entries: [
+        { resource: 'timber', amount: 2, source: 'Woodlot' },
+        { resource: 'provisions', amount: 1.5, source: 'Greenhouse' },
+        { resource: 'herbs', amount: 0.5, source: 'Greenhouse' }
+      ] }],
+      recent: {}
+    }
+  };
+  world.setSnapshot(bell);
+  const pops = () => world.effects.filter(e => e.kind === 'pop');
+  assert.equal(pops().length, 1);
+  assert.equal(pops()[0].roomId, 81);
+  assert.equal(pops()[0].name, '+2 Timber');
+  assert.ok(!pops().some(e => e.roomId === 82), 'Unfinished greenhouse has no pop');
+  world.setSnapshot({ ...bell, reviewIndex: bell.reviewIndex + 500 });
+  assert.equal(pops().length, 1, 'reviews do not add pops');
+  world.setSnapshot(bell);
+  assert.equal(pops().length, 1, 'the same bell does not pop again');
+  world.setSnapshot({ ...bell, bellIndex: 2 });
+  assert.equal(pops().filter(e => e.roomId === 81).length, 2, 'the next bell pops once more');
+
+  const quiet = new VisualWorld();
+  const rm = { ...base, settings: { ...base.settings, reduceMotion: true } };
+  quiet.setSnapshot(rm);
+  quiet.setSnapshot({ ...bell, settings: rm.settings });
+  assert.equal(quiet.effects.filter(e => e.kind === 'pop').length, 0);
 });
