@@ -79,6 +79,9 @@ export default function App() {
   const [activeEventModal, setActiveEventModal] = useState<SchoolEvent | null>(null);
   const [isCodexOpen, setIsCodexOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // In-app reset confirm: window.confirm is blocked in some embedded previews (e.g. AI Studio)
+  const [confirmReset, setConfirmReset] = useState(false);
+  useEffect(() => { if (!confirmReset) return; const t = setTimeout(() => setConfirmReset(false), 5000); return () => clearTimeout(t); }, [confirmReset]);
 
   // Character Creation / "Choose Your Look" modal
   // Decided in an effect that runs after add-on hydration (after ankicasterLoadSavedGame)
@@ -1302,17 +1305,17 @@ export default function App() {
               <div className="border-t border-slate-800 pt-3">
                 <button
                   onClick={() => {
-                    if (window.confirm('Reset the academy and start fresh? All progress will be re-initialized.')) {
-                      const fresh = createInitialGameState();
-                      setState(fresh);
-                      localStorage.removeItem(STORAGE_KEY);
-                      setIsSettingsOpen(false);
-                      addToast('Academy restarted afresh!', 'info');
-                    }
+                    if (!confirmReset) { setConfirmReset(true); return; }
+                    setConfirmReset(false);
+                    const fresh = createInitialGameState();
+                    setState(fresh);
+                    localStorage.removeItem(STORAGE_KEY);
+                    setIsSettingsOpen(false);
+                    addToast('Academy restarted afresh!', 'info');
                   }}
                   className="w-full py-2.5 bg-rose-950/60 hover:bg-rose-900 text-rose-200 border border-rose-800/60 font-bold rounded-xl transition text-xs shadow"
                 >
-                  Restart Academy (Reset State)
+                  {confirmReset ? 'Click again to reset (all progress will be lost)' : 'Restart Academy (Reset State)'}
                 </button>
               </div>
             </div>
