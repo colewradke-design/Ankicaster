@@ -175,7 +175,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
   const eff = detail.efficiency;
   const factorLine = `Lv ×${detail.level.toFixed(2)} · Q ×${detail.quality.toFixed(2)} · Clean ×${detail.cleanliness.toFixed(2)} · Staff ×${detail.staff.toFixed(2)} · Adj ×${detail.adjacency.toFixed(2)}`;
   const bedRoom = !!(def?.capacity?.beds || def?.capacity?.facultyBeds);
-  const restTarget = Math.round(AnkicasterEngine.restTargetFromEfficiency(eff));
+  const restTarget = Math.round(AnkicasterEngine.restTargetForRoom(state, room));
   // A construction site offers no screens until it is built.
   const screens = room.state === 'built' ? getRoomScreens(room.defId, state) : [];
   const primary = screens.slice(0, 3);

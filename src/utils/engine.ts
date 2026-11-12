@@ -57,7 +57,7 @@ import {
   calculateRoomQuality,
   getWizardLevelRequirements
 } from '../utils/formulas';
-import { computeReachability } from './reachability';
+import { computeReachability, ReachabilityInfo } from './reachability';
 
 /**
  * Anki 4:00 AM Rollover Boundary calculation
@@ -71,6 +71,26 @@ export function getAnkiDayNumber(timeMs: number): number {
 }
 
 export const HAZARD_DISPEL_MANA_COST = 30;
+
+const STAFF_CAREERS = new Set<string>(['teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist', 'builder']);
+
+/** start/standard rooms are always buildable. draft, rift and grant rooms need a blueprint in knownPlans. */
+export function isRoomUnlocked(state: { knownPlans?: string[] }, defId: string): boolean {
+  const unlock = ROOM_DEFINITIONS[defId]?.unlock;
+  if (!unlock) return false;
+  if (unlock.type === 'start' || unlock.type === 'standard') return true;
+  if (unlock.type === 'draft' || unlock.type === 'rift' || unlock.type === 'grant') {
+    return !!state.knownPlans?.includes(defId);
+  }
+  return false;
+}
+
+export function blueprintLockHint(defId: string): string {
+  const t = ROOM_DEFINITIONS[defId]?.unlock?.type;
+  if (t === 'rift') return 'Found on Rift expeditions';
+  if (t === 'grant') return 'Earned from a milestone';
+  return 'Find this blueprint in the card draws';
+}
 
 export class AnkicasterEngine {
   /**
@@ -378,15 +398,14 @@ export class AnkicasterEngine {
   }
 
   /**
-   * GDD 15.9 adjacency, only the rules this pass uses.
-   * Starts at 1. Kitchen with no adjacent Refectory is 0.5 (clamped to 0.8–1.3 by the formula).
-   * Greenhouse adjacent to a Kitchen +10%. Classroom +5% per adjacent Library, max +10%.
+   * GDD 15.9 adjacency bonuses (the Kitchen's missing-Refectory penalty is applied separately,
+   * outside the 0.8–1.3 clamp). Starts at 1. Greenhouse adjacent to a Kitchen +10%.
+   * Classroom +5% per adjacent Library, max +10%.
    */
   private static adjacencyFactor(state: FullGameState, room: PlacedRoom): number {
     let factor = 1;
     const others = state.rooms.filter(r => r.id !== room.id && r.state === 'built');
     const touches = (defId: string) => others.some(r => r.defId === defId && AnkicasterEngine.sharesWall(room, r));
-    if (room.defId === 'kitchen' && !touches('refectory')) factor = 0.5;
     if (room.defId === 'greenhouse' && touches('kitchen')) factor += 0.1;
     if (room.defId.startsWith('class_')) {
       const libs = others.filter(r => r.defId === 'library' && AnkicasterEngine.sharesWall(room, r)).length;
@@ -395,10 +414,55 @@ export class AnkicasterEngine {
     return factor;
   }
 
+  /** GDD: a Kitchen with no adjacent Refectory works at 50%, not clamped up to 80%. */
+  private static kitchenOffRefectory(state: FullGameState, room: PlacedRoom): boolean {
+    if (room.defId !== 'kitchen') return false;
+    const others = state.rooms.filter(r => r.id !== room.id && r.state === 'built');
+    return !others.some(r => r.defId === 'refectory' && AnkicasterEngine.sharesWall(room, r));
+  }
+
+  private static roomWorkable(room: PlacedRoom): boolean {
+    return room.state === 'built' && !isRoomUnfinished(room);
+  }
+
+  private static slotsUsed(state: FullGameState, room: PlacedRoom, exceptId?: number): number {
+    return state.characters.filter(c =>
+      c.id !== exceptId && c.workplaceRoomId === room.id && !!c.career && c.careerState !== 'sabbatical'
+    ).length;
+  }
+
+  private static findOpenWorkplace(state: FullGameState, career: string, exceptId?: number): PlacedRoom | undefined {
+    return state.rooms.find(r => {
+      const wp = ROOM_DEFINITIONS[r.defId]?.workplace;
+      return !!wp && wp.career === career && AnkicasterEngine.roomWorkable(r) && AnkicasterEngine.slotsUsed(state, r, exceptId) < wp.slots;
+    });
+  }
+
+  /**
+   * Point each working faculty member at a built, finished room of their career with a free slot.
+   * Keeps a still-valid assignment. Clears the post when they have no career.
+   */
+  static syncWorkplaces(state: FullGameState): void {
+    if (!state.characters || !state.rooms) return;
+    for (const c of state.characters) {
+      if (!c.career) {
+        c.workplaceRoomId = undefined;
+        continue;
+      }
+      if (c.careerState === 'sabbatical') continue;
+      const current = c.workplaceRoomId != null ? state.rooms.find(r => r.id === c.workplaceRoomId) : undefined;
+      const wp = current ? ROOM_DEFINITIONS[current.defId]?.workplace : undefined;
+      const still = !!current && !!wp && wp.career === c.career && AnkicasterEngine.roomWorkable(current)
+        && AnkicasterEngine.slotsUsed(state, current, c.id) < wp.slots;
+      if (still) continue;
+      c.workplaceRoomId = AnkicasterEngine.findOpenWorkplace(state, c.career, c.id)?.id;
+    }
+  }
+
   private static roomIsStaffed(state: FullGameState, room: PlacedRoom): boolean {
     const workplace = ROOM_DEFINITIONS[room.defId]?.workplace;
-    if (!workplace) return true;
-    return state.characters.some(c => c.workplaceRoomId === room.id && c.careerState !== 'sabbatical');
+    if (!workplace || !STAFF_CAREERS.has(workplace.career)) return true;
+    return state.characters.some(c => c.workplaceRoomId === room.id && c.career === workplace.career && c.careerState !== 'sabbatical');
   }
 
   private static roomIsLocked(state: FullGameState, room: PlacedRoom): boolean {
@@ -406,7 +470,7 @@ export class AnkicasterEngine {
   }
 
   /** Factors behind one room's efficiency, for the room window. */
-  static roomEfficiencyDetail(state: FullGameState, room: PlacedRoom): {
+  static roomEfficiencyDetail(state: FullGameState, room: PlacedRoom, reach?: Map<number, ReachabilityInfo>): {
     efficiency: number;
     level: number;
     quality: number;
@@ -416,37 +480,46 @@ export class AnkicasterEngine {
     blocked?: 'unfinished' | 'unreachable' | 'locked';
   } {
     const staffed = AnkicasterEngine.roomIsStaffed(state, room);
-    const reachable = computeReachability(state.rooms).get(room.id)?.reachable ?? false;
+    const reachable = (reach ?? computeReachability(state.rooms)).get(room.id)?.reachable ?? false;
     const locked = AnkicasterEngine.roomIsLocked(state, room);
-    const adj = AnkicasterEngine.adjacencyFactor(state, room);
+    const rawAdj = AnkicasterEngine.adjacencyFactor(state, room);
+    const kitchenHalf = AnkicasterEngine.kitchenOffRefectory(state, room);
     const { q } = calculateRoomQuality(room);
     const level = room.level === 3 ? 1.2 : room.level === 2 ? 1.1 : 1.0;
     const quality = 1 + Math.min(q, 80) / 160;
     const cleanliness = 0.7 + (0.3 * room.cleanliness) / 100;
     const staff = staffed ? 1 : 0.5;
-    const adjacency = Math.min(1.3, Math.max(0.8, adj));
+    const adjacency = kitchenHalf ? 0.5 : Math.min(1.3, Math.max(0.8, rawAdj));
     let blocked: 'unfinished' | 'unreachable' | 'locked' | undefined;
     if (room.state === 'built' && isRoomUnfinished(room)) blocked = 'unfinished';
     else if (room.state === 'built' && !reachable) blocked = 'unreachable';
     else if (room.state === 'built' && locked) blocked = 'locked';
-    const efficiency = locked ? 0 : calculateRoomEfficiency(room, staffed, reachable, adj);
+    let efficiency = locked ? 0 : calculateRoomEfficiency(room, staffed, reachable, rawAdj);
+    if (efficiency > 0 && kitchenHalf) efficiency *= 0.5;
     return { efficiency, level, quality, cleanliness, staff, adjacency, blocked };
   }
 
   /** Room efficiency the engine actually uses (reachability, staff, adjacency, locks). */
-  static roomEfficiency(state: FullGameState, room: PlacedRoom): number {
-    return AnkicasterEngine.roomEfficiencyDetail(state, room).efficiency;
+  static roomEfficiency(state: FullGameState, room: PlacedRoom, reach?: Map<number, ReachabilityInfo>): number {
+    return AnkicasterEngine.roomEfficiencyDetail(state, room, reach).efficiency;
   }
 
-  /** Rest target from a bed room's efficiency. 25 means the character has no bed. */
+  /** Rest target from a bed room's efficiency. 25 means no usable bed. */
   static restTargetFromEfficiency(eff: number): number {
     return 55 + 45 * Math.min(1, Math.max(0, eff - 0.5));
   }
 
-  static restTarget(state: FullGameState, char: Character): number {
+  /** Same number the room window shows. Unfinished, unreachable or locked beds are 25. */
+  static restTargetForRoom(state: FullGameState, room: PlacedRoom | undefined, reach?: Map<number, ReachabilityInfo>): number {
+    if (!room || room.state !== 'built') return 25;
+    const eff = AnkicasterEngine.roomEfficiency(state, room, reach);
+    if (eff <= 0) return 25;
+    return AnkicasterEngine.restTargetFromEfficiency(eff);
+  }
+
+  static restTarget(state: FullGameState, char: Character, reach?: Map<number, ReachabilityInfo>): number {
     const bed = char.bedRoomId != null ? state.rooms.find(r => r.id === char.bedRoomId) : undefined;
-    if (!bed || bed.state !== 'built') return 25;
-    return AnkicasterEngine.restTargetFromEfficiency(AnkicasterEngine.roomEfficiency(state, bed));
+    return AnkicasterEngine.restTargetForRoom(state, bed, reach);
   }
 
   /**
@@ -454,14 +527,14 @@ export class AnkicasterEngine {
    * each multiplied by that room's efficiency.
    * Bathhouse has no leisureSeats in content.ts, so it counts as 8.
    */
-  private static leisureCapacity(state: FullGameState): number {
+  private static leisureCapacity(state: FullGameState, reach?: Map<number, ReachabilityInfo>): number {
     const ids = new Set(['common_room', 'faculty_lounge', 'bathhouse', 'orchard']);
     let cap = 0;
     for (const room of state.rooms) {
       if (!ids.has(room.defId) || room.state !== 'built' || isRoomUnfinished(room)) continue;
       const listed = ROOM_DEFINITIONS[room.defId]?.capacity?.leisureSeats;
       const seats = listed ?? 8;
-      cap += seats * AnkicasterEngine.roomEfficiency(state, room);
+      cap += seats * AnkicasterEngine.roomEfficiency(state, room, reach);
     }
     return cap;
   }
@@ -497,9 +570,26 @@ export class AnkicasterEngine {
   }
 
   /**
+   * Who eats on a meal bell. cap is two sittings (floor(seats × 2 × efficiency)) across finished Refectories.
+   * No Refectory means cap 0: everyone with food stands. Food, not seats, is what leaves someone unfed.
+   */
+  static mealPlan(state: FullGameState, reach?: Map<number, ReachabilityInfo>): { cap: number; seated: number; standing: number; unfed: number } {
+    const diners = state.characters.length;
+    const food = Math.max(0, Math.floor(state.resources.provisions));
+    const refectories = state.rooms.filter(r => r.defId === 'refectory' && r.state === 'built' && !isRoomUnfinished(r));
+    const seats = ROOM_DEFINITIONS.refectory?.capacity?.seats ?? 12;
+    const cap = refectories.reduce((sum, r) => sum + Math.floor(seats * 2 * AnkicasterEngine.roomEfficiency(state, r, reach)), 0);
+    const served = Math.min(diners, food);
+    const seated = Math.min(served, cap);
+    return { cap, seated, standing: served - seated, unfed: diners - served };
+  }
+
+  /**
    * Ringing the bell (every 10 honest reviews)
    */
   static ringBell(state: FullGameState, notifications: string[]) {
+    const reach = computeReachability(state.rooms);
+
     // 1. Classroom Essence Production (influenced by room hazards)
     for (const char of state.characters) {
       if (char.status === 'student' && char.seatRoomId && char.currentSchool) {
@@ -509,7 +599,7 @@ export class AnkicasterEngine {
           if (room.hazard?.type === 'cold_snap') continue; // room frozen/disabled
           if (room.hazard?.type === 'echo_loop') continue; // suppresses classroom essence
 
-          const eff = AnkicasterEngine.roomEfficiency(state, room);
+          const eff = AnkicasterEngine.roomEfficiency(state, room, reach);
           if (eff <= 0) continue;
 
           let yieldMult = eff;
@@ -537,7 +627,7 @@ export class AnkicasterEngine {
       if (room.state !== 'built' || isRoomUnfinished(room)) continue; // Unfinished rooms run at 0%
       if (room.hazard?.type === 'cold_snap') continue; // room disabled
 
-      const eff = AnkicasterEngine.roomEfficiency(state, room);
+      const eff = AnkicasterEngine.roomEfficiency(state, room, reach);
       if (eff <= 0) continue;
 
       let harvestMult = eff;
@@ -580,13 +670,13 @@ export class AnkicasterEngine {
       else if (c.defId === 'lantern_moth') lanternMoth = true;
     }
 
-    // 4. Needs (GDD 14.4). Hunger keeps the meal block below; it has no room target, only decay 4.
+    // 4. Needs (GDD 14.4). Hunger decays 4 every bell; meal targets are applied on the 5th bell below.
     const headcount = state.characters.length;
-    const leisureTarget = 30 + 70 * Math.min(1, headcount > 0 ? AnkicasterEngine.leisureCapacity(state) / headcount : 0);
+    const leisureTarget = 30 + 70 * Math.min(1, headcount > 0 ? AnkicasterEngine.leisureCapacity(state, reach) / headcount : 0);
     const compTarget = AnkicasterEngine.composureTarget(state);
     for (const char of state.characters) {
       char.needs.hunger = Math.min(100, Math.max(0, char.needs.hunger - 4));
-      char.needs.rest = AnkicasterEngine.approachNeed(char.needs.rest, AnkicasterEngine.restTarget(state, char), 3);
+      char.needs.rest = AnkicasterEngine.approachNeed(char.needs.rest, AnkicasterEngine.restTarget(state, char, reach), 3);
       char.needs.leisure = AnkicasterEngine.approachNeed(char.needs.leisure, leisureTarget, 3);
       char.needs.composure = AnkicasterEngine.approachNeed(char.needs.composure, compTarget, 1);
     }
@@ -633,27 +723,18 @@ export class AnkicasterEngine {
       }
     }
 
-    // 5. Mealtime every 5th bell (unchanged +45 / provisions). A finished Refectory caps seats × efficiency, rounded down.
-    if (state.bellIndex % 5 === 0) {
-      const diners = state.characters.length;
-      if (diners > 0) {
-        const refectories = state.rooms.filter(r => r.defId === 'refectory' && r.state === 'built' && !isRoomUnfinished(r));
-        let mealCap = Number.POSITIVE_INFINITY;
-        if (refectories.length > 0) {
-          const seats = ROOM_DEFINITIONS.refectory.capacity?.seats ?? 12;
-          mealCap = refectories.reduce((sum, r) => sum + Math.floor(seats * AnkicasterEngine.roomEfficiency(state, r)), 0);
-        }
-        const mealsAvailable = Math.floor(state.resources.provisions);
-        const mealsServed = Math.min(diners, mealsAvailable, mealCap);
-        state.resources.provisions -= mealsServed;
-
-        for (let i = 0; i < mealsServed; i++) {
-          state.characters[i].needs.hunger = Math.min(100, state.characters[i].needs.hunger + 45);
-        }
-
-        if (mealsServed < diners) {
-          notifications.push(`⚠️ Food shortage! ${diners - mealsServed} students went hungry.`);
-        }
+    // 5. Mealtime every 5th bell. Two sittings (seats × 2 × efficiency). No Refectory means everyone with food eats standing.
+    // A Refectory never feeds fewer people than having none: anyone with food but no seat still eats, at target 50.
+    if (state.bellIndex % 5 === 0 && state.characters.length > 0) {
+      const plan = AnkicasterEngine.mealPlan(state, reach);
+      const served = plan.seated + plan.standing;
+      state.resources.provisions -= served;
+      state.characters.forEach((char, i) => {
+        const target = i < plan.seated ? 100 : i < served ? 50 : 25;
+        char.needs.hunger = AnkicasterEngine.approachNeed(char.needs.hunger, target, 0);
+      });
+      if (plan.unfed > 0) {
+        notifications.push(`⚠️ Food shortage! ${plan.unfed} students went hungry.`);
       }
     }
 
@@ -1665,6 +1746,9 @@ export class AnkicasterEngine {
   ): { state: FullGameState; success: boolean; error?: string; roomId?: number; warnings?: string[] } {
     const def = ROOM_DEFINITIONS[defId];
     if (!def) return { state, success: false, error: 'Unknown room definition.' };
+    if (!isRoomUnlocked(state, defId)) {
+      return { state, success: false, error: `Blueprint locked. ${blueprintLockHint(defId)}.` };
+    }
     const placeArea = area ?? def.area;
 
     // Per-room limits (content maxCount; sites count)
@@ -1736,6 +1820,7 @@ export class AnkicasterEngine {
     if (isInstant && def.requiredFurniture) fillRequiredFixtures(newRoom, allFurnitureIds(next.rooms));
 
     next.rooms.push(newRoom);
+    AnkicasterEngine.syncWorkplaces(next);
     next.notices.push({
       id: `room-built-${roomId}`,
       time: Date.now(),
@@ -1895,11 +1980,12 @@ export class AnkicasterEngine {
         moved++;
       }
       if (c.seatRoomId === roomId) { c.seatRoomId = sameKind([room.defId])?.id; moved++; }
-      if (c.workplaceRoomId === roomId) { c.workplaceRoomId = sameKind([room.defId])?.id; moved++; }
+      if (c.workplaceRoomId === roomId) { c.workplaceRoomId = undefined; moved++; }
     }
     for (const cr of next.creatures) {
       if (cr.roomId === roomId) { cr.roomId = sameKind([room.defId])?.id; moved++; }
     }
+    AnkicasterEngine.syncWorkplaces(next);
 
     const parts = REFUND_MATERIALS.filter(k => refund[k] > 0).map(k => `${refund[k]} ${k}`);
     if (refund.mana > 0) parts.unshift(`${refund.mana} mana`);
@@ -1941,6 +2027,16 @@ export class AnkicasterEngine {
       });
       out.requiredFixturesVersion = 1;
     }
+    if (Array.isArray(out.characters) && Array.isArray(out.rooms) && (out.staffingVersion ?? 0) < 1) {
+      AnkicasterEngine.syncWorkplaces(out);
+      out.staffingVersion = 1;
+    }
+    if (Array.isArray(out.rooms) && (out.knownPlansVersion ?? 0) < 1) {
+      const plans = new Set<string>(Array.isArray(out.knownPlans) ? out.knownPlans : []);
+      for (const r of out.rooms) if (r?.defId) plans.add(r.defId);
+      out.knownPlans = [...plans];
+      out.knownPlansVersion = 1;
+    }
     return out;
   }
 
@@ -1966,6 +2062,7 @@ export class AnkicasterEngine {
         ? `Construction finished for ${name}. It is Unfinished (0%) until you install: ${list}. Open the room to install them.`
         : `Construction finished for ${name}. Ready for furnishings.`
     });
+    AnkicasterEngine.syncWorkplaces(next);
   }
 
   /**
@@ -2009,6 +2106,7 @@ export class AnkicasterEngine {
       type: 'furniture',
       text: `Installed ${slot.name} in ${rDef?.name || 'room'} (${opt.free ? 'free' : costText(opt.cost)}).${left ? ` ${left} required fixture${left === 1 ? '' : 's'} still missing.` : ' The room is now open.'}`
     });
+    AnkicasterEngine.syncWorkplaces(next);
     return { state: next, success: true };
   }
 
@@ -2232,6 +2330,7 @@ export class AnkicasterEngine {
     char.career = career;
     char.careerState = 'active';
     char.status = career === 'adventurer' ? 'resident' : 'faculty';
+    AnkicasterEngine.syncWorkplaces(next);
     char.chronicle.push({
       day: next.day,
       text: previousCareer

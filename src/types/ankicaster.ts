@@ -132,7 +132,7 @@ export interface RoomDefinition {
   noDemolish?: boolean;
   floorRule?: 'floor_0' | 'floors_0_1' | 'highest_floor';
   unlock: {
-    type: 'start' | 'standard' | 'draft' | 'grant';
+    type: 'start' | 'standard' | 'draft' | 'grant' | 'rift';
     school?: SchoolType;
     level?: number;
     rarity?: string;
@@ -530,4 +530,8 @@ export interface FullGameState {
    * construction keep their required furniture empty until the player installs it.
    */
   requiredFixturesVersion?: number;
+  /** One-time load migration: faculty already in a save get a workplaceRoomId. */
+  staffingVersion?: number;
+  /** One-time load migration: rooms already built or started stay in knownPlans. */
+  knownPlansVersion?: number;
 }

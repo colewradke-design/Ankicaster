@@ -67,6 +67,7 @@ import {
   UserCheck
 } from 'lucide-react';
 import { reviewsToGoText } from '../utils/construction';
+import { blueprintLockHint, isRoomUnlocked } from '../utils/engine';
 
 // ==========================================
 // 1. WIZARD STUDY PANEL
@@ -740,17 +741,22 @@ export const BuildMenuPanel: React.FC<{
           const canAfford = state.mana >= room.cost.mana;
           // Per-room limits come from the engine rules (content maxCount), sites included
           const limit = roomLimitStatus(state.rooms, room.id);
-          const disabled = !canAfford || limit.capped;
+          const unlocked = isRoomUnlocked(state, room.id);
+          const disabled = !canAfford || limit.capped || !unlocked;
           return (
             <div
               key={room.id}
               data-build-card={room.id}
               data-capped={limit.capped ? 'true' : undefined}
-              className={`bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow ${limit.capped ? 'opacity-50 grayscale' : ''}`}
+              data-locked={unlocked ? undefined : 'true'}
+              className={`bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow ${!unlocked || limit.capped ? 'opacity-50 grayscale' : ''}`}
             >
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="font-bold text-sm text-slate-100">{room.name}</span>
+                  <span className="font-bold text-sm text-slate-100 flex items-center gap-1">
+                    {!unlocked && <Lock className="w-3.5 h-3.5 text-slate-400" />}
+                    {room.name}
+                  </span>
                   <span className="text-xs text-slate-400 capitalize">{room.area} ({room.size.join('x')})</span>
                 </div>
                 <p className="text-xs text-slate-300 mb-2 line-clamp-2 leading-relaxed">{room.description}</p>
@@ -762,6 +768,9 @@ export const BuildMenuPanel: React.FC<{
                   {room.cost.cloth && ` · ${room.cost.cloth}C`}
                   {' · '}Build: {room.buildReviews} revs
                 </div>
+                {!unlocked && (
+                  <div className="text-xs text-slate-400 mb-2" data-testid="blueprint-lock">{blueprintLockHint(room.id)}</div>
+                )}
                 {limit.capped && (
                   <div className="text-xs text-amber-300/90 mb-2" data-testid="build-cap-reason">🔒 {limit.reason} ({limit.count}/{limit.max})</div>
                 )}
@@ -771,10 +780,10 @@ export const BuildMenuPanel: React.FC<{
                 <button
                   onClick={() => onPlaceRoom(room.id, room.area)}
                   disabled={disabled}
-                  title={limit.capped ? limit.reason : !canAfford ? `Need ${room.cost.mana} Mana` : 'Choose where to build it on the map'}
+                  title={!unlocked ? blueprintLockHint(room.id) : limit.capped ? limit.reason : !canAfford ? `Need ${room.cost.mana} Mana` : 'Choose where to build it on the map'}
                   className="flex-1 py-2 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-200 border border-indigo-500/30 rounded-xl text-xs font-bold disabled:opacity-40 transition shadow"
                 >
-                  {limit.capped ? 'Limit reached' : 'Place…'}
+                  {!unlocked ? 'Locked' : limit.capped ? 'Limit reached' : 'Place…'}
                 </button>
                 {onAutoPlace && (
                   <button

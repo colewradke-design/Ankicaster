@@ -46,6 +46,8 @@ test('B1 uniqueness: a second Wizard\'s Study or Entrance Hall is rejected by th
     assert.equal(manual.state, s, 'state untouched');
   }
   // Rift Gate: one per Academy (GDD 16.9 duplicates level it up), sites count
+  // Rift Gate is a grant blueprint: the test holds the plan, then checks the one-per-Academy limit.
+  s.knownPlans.push('rift_gate');
   const r1 = AnkicasterEngine.placeRoom(s, 'rift_gate');
   assert.equal(r1.success, true);
   assert.equal(AnkicasterEngine.placeRoom(r1.state, 'rift_gate').success, false);
