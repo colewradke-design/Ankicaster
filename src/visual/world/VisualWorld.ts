@@ -39,6 +39,7 @@ import { drawDirt, dirtLevel, drawLockHazard, drawPadlock, drawWrench, drawDirty
 import { drawEffect, VisualEffect, EFFECT_MS } from '../rooms/effects';
 import { reviewsToGo, siteFraction } from '../../utils/construction';
 import { hexToNum } from '../../utils/appearance';
+import { chooseBubble, drawBubble, bubbleLabel, BubbleKind } from '../agents/doll';
 import { CAPPED_RESOURCES, resourceLabel, storageCap } from '../../utils/resourceReport';
 
 /** Fixed ambient rate (Addendum 5.5: 2-8 fps, never tied to reviews). 5 fps -> 0.8 s per 4-frame loop. */
@@ -589,6 +590,51 @@ export class VisualWorld {
         labels.push({ key: `pop:${e.roomId}:${e.start}`, text: e.name, wx: e.box.left + e.box.width / 2 + 6, wy: e.box.top - 10 - t * 18, color: 0xf6f1e8, size: 11, align: 'center' });
       }
     }
+    // Status bubbles (Addendum 6.7): one per character, 24 screen px, crowded rooms collapse.
+    const byRoom = new Map<number, Array<{ x: number; y: number; b: BubbleKind }>>();
+    const loose: Array<{ x: number; y: number; b: BubbleKind }> = [];
+    for (const agent of this.choreographer.agents.values()) {
+      const char = agent.character;
+      if (!char) continue;
+      const showMorale = !!agent.arrivedAt && (Date.now() - agent.arrivedAt) < 3000;
+      const b = chooseBubble(char, { showMorale });
+      if (!b) continue;
+      const wx = agent.x;
+      const wy = agent.y - 30;
+      const roomId = agent.currentRoomId;
+      if (roomId == null) loose.push({ x: wx, y: wy, b });
+      else {
+        const list = byRoom.get(roomId) || [];
+        list.push({ x: wx, y: wy, b });
+        byRoom.set(roomId, list);
+      }
+    }
+    const paint = (wx: number, wy: number, b: BubbleKind) => {
+      const sx = wx * this.camera.zoom - (this.camera.x * this.camera.zoom - this.camera.viewportWidth / 2);
+      const sy = wy * this.camera.zoom - (this.camera.y * this.camera.zoom - this.camera.viewportHeight / 2);
+      drawBubble(this.overlayGraphics, b, sx, sy, 2);
+    };
+    for (const [roomId, list] of byRoom) {
+      if (list.length > 8) {
+        const sx = list[0].x;
+        const sy = list[0].y;
+        labels.push({ key: `crowd:${roomId}`, text: bubbleLabel(list.map(i => i.b)), wx: sx, wy: sy, color: 0xf6f1e8, size: 12, align: 'center' });
+      } else {
+        for (const item of list) paint(item.x, item.y, item.b);
+      }
+    }
+    for (const item of loose) paint(item.x, item.y, item.b);
+
+    for (const agent of this.choreographer.agents.values()) {
+      const schools = agent.isWizard ? [] : (agent.character?.masteredSchools || []);
+      if (this.camera.zoom >= 2 && schools.length) {
+        labels.push({ key: `pips:${agent.id}`, text: schools.map(s => s.slice(0, 1).toUpperCase()).join(''), wx: agent.x, wy: agent.y + 8, color: 0xf7e39a, size: 10, align: 'center' });
+      }
+      if (this.camera.zoom >= 3 && agent.character?.career) {
+        labels.push({ key: `career:${agent.id}`, text: agent.character.career, wx: agent.x, wy: agent.y + 16, color: 0xf6f1e8, size: 10, align: 'center' });
+      }
+    }
+
     const live = new Set<string>();
     const z = this.camera.zoom, ox = this.worldContainer.x, oy = this.worldContainer.y;
     for (const l of labels) {

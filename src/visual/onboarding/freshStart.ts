@@ -30,6 +30,9 @@ export interface HeadmasterChoices {
   skin: string;
   hair: string;
   hairColor: string;
+  eyes: string;
+  face: string;
+  shoes: string;
   robeColor: string;
   hat: string;
   staff: string;
@@ -47,6 +50,9 @@ export const DEFAULT_HEADMASTER_CHOICES: HeadmasterChoices = {
   skin: SKIN_TONES[0],
   hair: 'short_messy',
   hairColor: '#4A2E1E',
+  eyes: '#4A2E1E',
+  face: 'round',
+  shoes: 'boots',
   robeColor: '#4E8B3A', // Nature default
   hat: 'pointed',
   staff: 'oak',
@@ -153,10 +159,13 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
       queuedSessions: [],
       // The chosen look lives on the player's character and is drawn by the forge renderer
       appearance: choices.skin || choices.hair || choices.hairColor || choices.robeColor || choices.hat || choices.staff ? normalizeAppearance({
-        bodyShape: c.bodyShape,
+        bodyShape: c.bodyShape as 1 | 2 | 3 | 4,
         skin: c.skin,
         hair: c.hair,
         hairColor: c.hairColor,
+        eyes: c.eyes,
+        face: c.face,
+        shoes: c.shoes,
         robeColor: c.robeColor,
         hat: c.hat,
         staff: c.staff

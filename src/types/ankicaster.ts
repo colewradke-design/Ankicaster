@@ -428,6 +428,9 @@ export interface WizardState {
     robeColor?: string;
     hat?: string;
     staff?: string;
+    eyes?: string;
+    face?: string;
+    shoes?: string;
   };
   foundingSchool?: SchoolType;
   foundedAt?: string;

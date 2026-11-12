@@ -15,6 +15,7 @@
 
 import { roomLimitStatus } from '../utils/placement';
 import { WizardPortrait } from './WizardPortrait';
+import { CharacterPortrait } from './CharacterPortrait';
 import React, { useEffect, useState } from 'react';
 import {
   FullGameState,
@@ -332,9 +333,7 @@ export const RosterPanel: React.FC<{
               {alumniGallery.map(al => (
                 <div key={al.id} className="bg-slate-900 border border-amber-900/40 p-4 rounded-xl shadow">
                   <div className="flex items-center gap-3 mb-2">
-                    <div className="w-10 h-10 rounded-full bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-lg">
-                      🎓
-                    </div>
+                    <CharacterPortrait name={al.name} role="resident" size={48} />
                     <div>
                       <h4 className="font-bold text-sm text-slate-100">{al.name}</h4>
                       <span className="text-xs text-amber-300">Retired Day {al.retiredDay}</span>
@@ -379,7 +378,9 @@ export const RosterPanel: React.FC<{
                         : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
                     }`}
                   >
-                    <div>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <CharacterPortrait character={char} size={40} />
+                      <div>
                       <div className="font-bold text-xs text-slate-100">{char.name}</div>
                       <div className="text-xs text-slate-400 capitalize">
                         {char.currentSchool
@@ -387,6 +388,7 @@ export const RosterPanel: React.FC<{
                           : char.career
                           ? `Faculty · ${char.career}`
                           : char.status}
+                      </div>
                       </div>
                     </div>
                     <div className="text-right">
@@ -409,7 +411,9 @@ export const RosterPanel: React.FC<{
           {selectedChar ? (
             <div className="md:col-span-2 space-y-4">
               <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex items-center justify-between shadow">
-                <div>
+                <div className="flex items-center gap-3">
+                  <CharacterPortrait character={selectedChar} size={64} />
+                  <div>
                   <div className="flex items-center gap-2">
                     <h3 className="text-base font-bold text-amber-200">{selectedChar.name}</h3>
                     {selectedChar.title && (
@@ -421,6 +425,7 @@ export const RosterPanel: React.FC<{
                   <p className="text-xs text-slate-300 mt-1">
                     Personality: <strong className="text-slate-100">{selectedChar.personality}</strong> · Traits: {selectedChar.traits.join(', ')}
                   </p>
+                  </div>
                 </div>
                 <div className="text-right">
                   <span className="text-xs text-slate-400">School Skill:</span>
@@ -661,7 +666,8 @@ export const RecruitmentPanel: React.FC<{
         {sampleApplicants.map((app, idx) => (
           <div key={idx} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow">
             <div>
-              <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center justify-between mb-1 gap-2">
+                <CharacterPortrait name={app.name} school={selectedSchool} role="student" size={40} />
                 <span className="font-bold text-sm text-slate-100">{app.name}</span>
                 <span className="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded">
                   {app.personality}
@@ -1231,7 +1237,7 @@ export const RiftPanel: React.FC<{
                         isSelected ? 'bg-purple-950/50 border-purple-500 text-purple-200 font-bold' : 'bg-slate-900 border-slate-800 text-slate-300'
                       }`}
                     >
-                      <span>{adv.name}</span>
+                      <span className="flex items-center gap-2"><CharacterPortrait character={adv} size={36} />{adv.name}</span>
                       <span className="text-xs text-slate-400 font-mono">
                         {adv.status === 'away' ? 'On Expedition' : adv.injury ? 'Injured' : 'Ready'}
                       </span>

@@ -10,6 +10,8 @@
  */
 
 import React from 'react';
+import { CharacterPortrait } from './CharacterPortrait';
+import { WizardPortrait } from './WizardPortrait';
 import { FullGameState, SchoolEvent } from '../types/ankicaster';
 import { POTION_RECIPES, SCHOOL_EVENTS } from '../data/content';
 import {
@@ -107,11 +109,17 @@ export const JournalPanel: React.FC<{ state: FullGameState }> = ({ state }) => {
       {notices.length === 0 ? (
         <div className="text-[13px] text-slate-500 text-center py-8">Nothing recorded yet.</div>
       ) : (
-        notices.map(n => (
-          <div key={n.id} className="text-[13px] text-slate-200 bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-2">
-            {n.text}
+        notices.map(n => {
+          const named = state.characters.filter(c => c.name && n.text.includes(c.name));
+          const wizardNamed = state.wizard?.name && n.text.includes(state.wizard.name);
+          return (
+          <div key={n.id} className="text-[13px] text-slate-200 bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-2 flex items-center gap-2">
+            {wizardNamed && <WizardPortrait appearance={state.wizard.appearance} size={32} title={state.wizard.name} />}
+            {named.map(c => <CharacterPortrait key={c.id} character={c} size={32} />)}
+            <span>{n.text}</span>
           </div>
-        ))
+          );
+        })
       )}
     </div>
   );

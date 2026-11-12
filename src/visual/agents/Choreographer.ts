@@ -22,15 +22,9 @@ import { NavGraph, NavNode } from '../layout/navGraph';
 import { roomToWorldBox } from '../layout/gridToWorld';
 import { ReachabilityInfo } from '../../utils/reachability';
 import { normalizeAppearance } from '../../utils/appearance';
+import { DOLL_ANIMS, MOVE_SPEED, healingPlaceFor, DollAnim } from './doll';
 
-export type AgentAnimation =
-  | 'idle'
-  | 'walk'
-  | 'walk_front'
-  | 'climb'
-  | 'sit_study'
-  | 'eat'
-  | 'sleep';
+export type AgentAnimation = DollAnim;
 
 export interface VisualAgent {
   id: string; // 'wizard' or 'char-<id>'
@@ -60,6 +54,12 @@ export interface VisualAgent {
   hairColor: string;
   skin: string;
   staff?: string;
+  bodyShape?: number;
+  eyes?: string;
+  face?: string;
+  shoes?: string;
+  /** Real-time stamp when the agent last arrived, for the 3 s morale heart. */
+  arrivedAt?: number;
   name: string;
   unreachableWarning?: boolean;
 }
@@ -205,6 +205,10 @@ export class Choreographer {
       wiz.hairColor = look.hairColor;
       wiz.skin = look.skin;
       wiz.staff = look.staff;
+      wiz.bodyShape = look.bodyShape;
+      wiz.eyes = look.eyes;
+      wiz.face = look.face;
+      wiz.shoes = look.shoes;
       wiz.name = `${state.wizard.title} ${state.wizard.name}`;
     }
 
@@ -239,7 +243,8 @@ export class Choreographer {
           shadow: '#2F3A73',
           alchemy: '#B5651D'
         };
-        const robeCol = char.currentSchool ? (schoolColors[char.currentSchool] || '#4E8B3A') : (char.appearance.robeColor || '#4E8B3A');
+        const look = normalizeAppearance({ ...char.appearance, staff: 'oak' }, char.id);
+        const robeCol = char.currentSchool ? (schoolColors[char.currentSchool] || '#4E8B3A') : look.robeColor;
 
         this.agents.set(id, {
           id,
@@ -261,15 +266,28 @@ export class Choreographer {
           path: [],
           pathIndex: 0,
           robeColor: robeCol,
-          hat: char.appearance.hat || 'none',
-          hair: char.appearance.hair || 'short',
-          hairColor: char.appearance.hairColor || '#4A2E1E',
-          skin: char.appearance.skin || '#F6D7C3',
+          hat: look.hat,
+          hair: look.hair,
+          hairColor: look.hairColor,
+          skin: look.skin,
+          bodyShape: look.bodyShape,
+          eyes: look.eyes,
+          face: look.face,
+          shoes: look.shoes,
           name: char.name
         });
       } else {
         const agent = this.agents.get(id)!;
         agent.character = char;
+        const look = normalizeAppearance({ ...char.appearance, staff: 'oak' }, char.id);
+        agent.hat = look.hat;
+        agent.hair = look.hair;
+        agent.hairColor = look.hairColor;
+        agent.skin = look.skin;
+        agent.bodyShape = look.bodyShape;
+        agent.eyes = look.eyes;
+        agent.face = look.face;
+        agent.shoes = look.shoes;
         if (char.currentSchool) {
           const schoolColors: Record<string, string> = {
             arcane: '#6B4FBB',
@@ -403,9 +421,11 @@ export class Choreographer {
 
     // Normal motion animation frame progression
     agent.animTimer += deltaMs;
-    if (agent.animTimer > 150) {
-      agent.animTimer = 0;
-      agent.animFrame = (agent.animFrame + 1) % 4;
+    const spec = DOLL_ANIMS[agent.anim] || DOLL_ANIMS.idle;
+    const frameMs = 1000 / spec.fps;
+    if (agent.animTimer >= frameMs) {
+      agent.animTimer -= frameMs;
+      agent.animFrame = (agent.animFrame + 1) % spec.frames;
     }
 
     // Wizard stays near Study
@@ -442,19 +462,24 @@ export class Choreographer {
           agent.path = [];
           agent.pathIndex = 0;
           this.setArrivedAnim(agent);
+          agent.arrivedAt = Date.now();
         }
       } else {
         // Move towards target
-        const speed = 28 * (deltaMs / 1000); // 28 art px / s
+        const inj = agent.character?.injury?.type;
+        const limp = inj === 'sprained' || inj === 'broken_bone';
+        const climbing = Math.abs(dy) > 2 && (() => {
+          const currentRoom = state.rooms.find(r => r.id === agent.currentRoomId);
+          return (currentRoom && (currentRoom.defId === 'spiral_stair' || currentRoom.defId === 'wizard_study')) || targetNode.kind === 'stair';
+        })();
+        const px = climbing ? MOVE_SPEED.climb : limp ? MOVE_SPEED.limp : agent.anim === 'carry_walk' ? MOVE_SPEED.carry : MOVE_SPEED.walk;
+        const speed = px * (deltaMs / 1000);
         if (Math.abs(dx) > 1) {
           agent.facing = dx > 0 ? 'R' : 'L';
         }
 
         if (Math.abs(dy) > 2) {
-          const currentRoom = state.rooms.find(r => r.id === agent.currentRoomId);
-          const isStairRoom = currentRoom && (currentRoom.defId === 'spiral_stair' || currentRoom.defId === 'wizard_study');
-          const isStairNode = targetNode.kind === 'stair';
-          if (isStairRoom || isStairNode) {
+          if (climbing) {
             agent.anim = 'climb';
             agent.y += (dy / dist) * Math.min(speed, Math.abs(dy));
           } else {
@@ -464,7 +489,7 @@ export class Choreographer {
           }
         } else {
           agent.y = targetNode.y;
-          agent.anim = 'walk';
+          agent.anim = limp ? 'limp_walk' : 'walk';
         }
         agent.x += (dx / dist) * Math.min(speed, Math.abs(dx));
       }
@@ -497,14 +522,7 @@ export class Choreographer {
 
     // 1. Recovering / Injured -> infirmary or bed (must be reachable)
     if (char.injury) {
-      const infirmary = state.rooms.find(r => r.state === 'built' && r.defId === 'infirmary' && this.isRoomReachable(r.id));
-      if (infirmary) {
-        targetRoomId = infirmary.id;
-      } else if (char.bedRoomId && this.isRoomReachable(char.bedRoomId)) {
-        targetRoomId = char.bedRoomId;
-      } else {
-        targetRoomId = 1; // Entrance Hall fallback
-      }
+      targetRoomId = healingPlaceFor(char, state.rooms, id => this.isRoomReachable(id));
       targetActivity = 'sleep';
     } else if (this.schedulePhase === 'meal') {
       // 2. Meal -> Refectory

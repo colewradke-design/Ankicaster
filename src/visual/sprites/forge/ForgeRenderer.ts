@@ -14,7 +14,7 @@ import { PlacedRoom } from '../../../types/ankicaster';
 import { calculateRoomQuality } from '../../../utils/formulas';
 import { PALETTE } from './palettes';
 import { VisualAgent } from '../../agents/Choreographer';
-import { hexToNum, shade, resolveHairColour, resolveSkin, resolveHat, resolveStaff, STAFFS } from '../../../utils/appearance';
+import { appearanceToLayers, drawCharacter, DollAnim, DOLL_ANIMS } from '../../agents/doll';
 
 export class ForgeRenderer {
   /**
@@ -151,153 +151,36 @@ export class ForgeRenderer {
   }
 
   /**
-   * Draw Paper-Doll Sprite for a Character or Wizard
-   * Body, Robe, Hair, Hat, Staff / Item. The wizard uses the look saved on state.wizard.appearance
-   * (robe, skin, hair colour, hat, staff). `g` is a Pixi Graphics or any PaperDollPainter (the
-   * creation preview and portraits draw the same figure onto a 2D canvas).
+   * Layered paper doll (Addendum Section 6). Map, creation preview and portraits share this.
    */
   static drawPaperDoll(g: PaperDollPainter, agent: PaperDollAgent) {
-    const x = agent.x;
-    const y = agent.y; // Floor line (feet position)
-    const isL = agent.facing === 'L';
-    const sign = isL ? -1 : 1;
-
-    // Shadow under feet
-    g.ellipse(x, y - 1, 8, 3).fill({ color: 0x000000, alpha: 0.35 });
-
-    const robeColorHex = hexToNum(agent.robeColor || '#4E8B3A');
-    const hairColorHex = hexToNum(agent.isWizard ? resolveHairColour(agent.hairColor) : (agent.hairColor || '#4A2E1E'), 0x4a2e1e);
-    const skinColorHex = hexToNum(agent.isWizard ? resolveSkin(agent.skin) : (agent.skin || '#F6D7C3'), 0xf6d7c3);
-
-    // Bobbing / walking offsets
-    let bobY = 0;
-    let legOffset = 0;
-    if (agent.anim === 'walk') {
-      bobY = Math.sin(agent.animTimer * 0.05) * 1.5;
-      legOffset = Math.sin(agent.animTimer * 0.05) * 3;
-    } else if (agent.anim === 'climb') {
-      bobY = (agent.animFrame % 2) * 1.5;
-    } else if (agent.anim === 'sit_study' || agent.anim === 'eat') {
-      bobY = 4; // seated lower
-    }
-
-    const footY = y;
-    const bodyBaseY = footY - 8 + bobY;
-    const headY = bodyBaseY - 14;
-    const hat = agent.isWizard ? resolveHat(agent.hat) : agent.hat;
-
-    // 1. Legs / Feet
-    g.rect(x - 3 * sign + legOffset * sign, footY - 5, 3, 5).fill({ color: 0x4a2e1c });
-    g.rect(x + 1 * sign - legOffset * sign, footY - 5, 3, 5).fill({ color: 0x4a2e1c });
-
-    // 2. Robe
-    if (agent.isWizard) {
-      // Wizard cape behind (a darker shade of the chosen robe)
-      g.poly([
-        x - 5 * sign, bodyBaseY - 10,
-        x - 8 * sign, footY - 2,
-        x - 2 * sign, footY - 2
-      ]).fill({ color: shade(robeColorHex, 0.6) });
-
-      // Long wizard robe
-      g.poly([
-        x - 4 * sign, bodyBaseY - 10,
-        x + 4 * sign, bodyBaseY - 10,
-        x + 6 * sign, footY - 4,
-        x - 6 * sign, footY - 4
-      ]).fill({ color: robeColorHex });
-
-      // Gold outline for wizard (Section 6.5)
-      g.poly([
-        x - 4 * sign, bodyBaseY - 10,
-        x + 4 * sign, bodyBaseY - 10,
-        x + 6 * sign, footY - 4,
-        x - 6 * sign, footY - 4
-      ]).stroke({ color: 0xf7e39a, width: 1 });
-    } else {
-      // Standard student / faculty robe
-      g.poly([
-        x - 4 * sign, bodyBaseY - 9,
-        x + 4 * sign, bodyBaseY - 9,
-        x + 5 * sign, footY - 4,
-        x - 5 * sign, footY - 4
-      ]).fill({ color: robeColorHex });
-    }
-
-    // 3. Hood back (behind the head)
-    if (hat === 'hood') {
-      g.circle(x - 1 * sign, headY - 1, 7).fill({ color: shade(robeColorHex, 0.8) });
-    }
-
-    // 4. Hair (back, behind the head), then Head & Face so the skin tone stays visible
-    if (hat !== 'hood') g.circle(x - 2 * sign, headY - 1, 5.5).fill({ color: hairColorHex });
-    g.circle(x, headY, 5).fill({ color: skinColorHex });
-    // Eye dot (if not climbing back view)
-    if (agent.anim !== 'climb') {
-      g.rect(x + 2 * sign, headY - 1, 1.5, 1.5).fill({ color: 0x1b1822 });
-    }
-
-    // 5. Hair fringe over the forehead (the back of the hair is drawn behind the head)
-    if (hat !== 'hood') g.rect(x - 4.5, headY - 5, 9, 2.5).fill({ color: hairColorHex });
-
-    // 6. Hat
-    const hatCol = robeColorHex;
-    const brim = 0x2a2533;
-    if (hat === 'pointed') {
-      g.poly([x - 7 * sign, headY - 4, x + 7 * sign, headY - 4, x - 1 * sign, headY - 18]).fill({ color: hatCol });
-      g.rect(Math.min(x - 7 * sign, x + 7 * sign), headY - 4, 14, 2).fill({ color: brim });
-    } else if (hat === 'wide') {
-      g.poly([x - 5 * sign, headY - 4, x + 5 * sign, headY - 4, x, headY - 14]).fill({ color: hatCol });
-      g.rect(x - 10, headY - 5, 20, 2).fill({ color: brim });
-    } else if (hat === 'crooked') {
-      g.poly([x - 6 * sign, headY - 4, x + 6 * sign, headY - 4, x - 2 * sign, headY - 12, x - 9 * sign, headY - 16, x - 3 * sign, headY - 11]).fill({ color: hatCol });
-      g.rect(Math.min(x - 7 * sign, x + 7 * sign), headY - 4, 14, 2).fill({ color: brim });
-    } else if (hat === 'hood') {
-      g.poly([x - 6 * sign, headY - 2, x + 5 * sign, headY - 6, x - 3 * sign, headY - 9]).fill({ color: hatCol });
-    } else if (hat === 'circlet') {
-      g.rect(x - 5, headY - 4, 10, 2).fill({ color: 0xf7e39a });
-      g.rect(x - 1, headY - 5, 2, 1).fill({ color: 0x9cd4ff });
-    } else if (hat === 'crown') {
-      g.poly([x - 5, headY - 4, x + 5, headY - 4, x + 5, headY - 10, x + 2.5, headY - 7, x, headY - 11, x - 2.5, headY - 7, x - 5, headY - 10]).fill({ color: 0xddb843 });
-      g.rect(x - 1, headY - 7, 2, 2).fill({ color: 0xd9472b });
-    } else if (hat === 'beret') {
-      g.ellipse(x - 1 * sign, headY - 5, 7, 3).fill({ color: hatCol });
-      g.rect(x - 1 * sign, headY - 9, 2, 2).fill({ color: shade(hatCol, 0.7) });
-    }
-    if (agent.isWizard && (hat === 'pointed' || hat === 'wide' || hat === 'crooked')) {
-      // Gold sigil star on hat
-      g.rect(x, headY - 10, 2, 2).fill({ color: 0xf7e39a });
-    }
-
-    // 7. Held Item: Wizard Staff
-    if (agent.isWizard) {
-      const staff = STAFFS.find(st => st.id === resolveStaff(agent.staff)) || STAFFS[0];
-      const staffX = x + 8 * sign;
-      g.rect(staffX, headY - 12, 2, 22).fill({ color: hexToNum(staff.shaft) });
-      const tip = hexToNum(staff.tip);
-      if (staff.id === 'crystal') {
-        g.poly([staffX + 1, headY - 19, staffX + 4, headY - 14, staffX + 1, headY - 10, staffX - 2, headY - 14]).fill({ color: tip });
-      } else if (staff.id === 'moon') {
-        g.circle(staffX + 1, headY - 14, 3.5).fill({ color: tip });
-        g.circle(staffX + 2.5, headY - 15, 3).fill({ color: 0x2a2533 });
-      } else if (staff.id === 'star') {
-        g.poly([staffX + 1, headY - 19, staffX + 2.5, headY - 15.5, staffX + 5, headY - 15, staffX + 2.5, headY - 13, staffX + 3.5, headY - 10, staffX + 1, headY - 12, staffX - 1.5, headY - 10, staffX - 0.5, headY - 13, staffX - 3, headY - 15, staffX - 0.5, headY - 15.5]).fill({ color: tip });
-      } else if (staff.id === 'willow') {
-        g.ellipse(staffX + 3, headY - 13, 3, 1.5).fill({ color: tip });
-        g.ellipse(staffX - 1, headY - 15, 3, 1.5).fill({ color: tip });
-      } else {
-        // Glowing orb top (oak) or ember flame
-        g.circle(staffX + 1, headY - 14, 3).fill({ color: tip });
-        if (staff.id === 'ember') g.circle(staffX + 1, headY - 16, 1.5).fill({ color: 0xf7e39a });
-      }
-    }
-
-    // 8. Activity prop (book, spoon)
-    if (agent.anim === 'sit_study') {
-      g.rect(x + 3 * sign, bodyBaseY - 4, 5, 4).fill({ color: 0xf4ebd9 });
-    } else if (agent.anim === 'eat') {
-      g.circle(x + 4 * sign, bodyBaseY - 3, 3).fill({ color: 0xc28e5c });
-    }
+    const char = agent.character;
+    const anim = (DOLL_ANIMS[agent.anim as DollAnim] ? agent.anim : 'idle') as DollAnim;
+    const look = appearanceToLayers({
+      id: char?.id ?? 'wizard',
+      isWizard: agent.isWizard,
+      status: char?.status,
+      career: char?.career,
+      careerState: char?.careerState,
+      masteredSchools: char?.masteredSchools,
+      currentSchool: char?.currentSchool,
+      appearance: char?.appearance,
+      anim,
+      needs: char?.needs,
+      morale: char?.morale,
+      injury: char?.injury?.type,
+      robeColor: agent.robeColor,
+      hair: agent.hair,
+      hairColor: agent.hairColor,
+      skin: agent.skin,
+      hat: agent.hat,
+      staff: agent.staff,
+      bodyShape: agent.bodyShape,
+      eyes: agent.eyes,
+      face: agent.face,
+      shoes: agent.shoes
+    });
+    drawCharacter(g, look, { x: agent.x, y: agent.y, facing: agent.facing, anim, frame: agent.animFrame });
   }
 
   /** Placement ghost: footprint tinted green (valid) or red (invalid), with a dashed outline. */
@@ -329,4 +212,12 @@ export interface PaperDollPainter {
   stroke(style: { color: number; width?: number; alpha?: number }): PaperDollPainter;
 }
 
-export type PaperDollAgent = Pick<VisualAgent, 'x' | 'y' | 'facing' | 'anim' | 'animTimer' | 'animFrame' | 'robeColor' | 'hairColor' | 'skin' | 'hat' | 'isWizard'> & { staff?: string };
+export type PaperDollAgent = Pick<VisualAgent, 'x' | 'y' | 'facing' | 'anim' | 'animTimer' | 'animFrame' | 'robeColor' | 'hairColor' | 'skin' | 'hat' | 'isWizard'> & {
+  staff?: string;
+  hair?: string;
+  bodyShape?: number;
+  eyes?: string;
+  face?: string;
+  shoes?: string;
+  character?: VisualAgent['character'];
+};

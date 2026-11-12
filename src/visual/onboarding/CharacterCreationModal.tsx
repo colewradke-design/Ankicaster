@@ -8,11 +8,12 @@
  * - Save without a look -> "Choose your look"
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { SchoolType } from '../../types/ankicaster';
 import { HeadmasterChoices, DEFAULT_HEADMASTER_CHOICES } from './freshStart';
 import { PALETTE } from '../sprites/forge/palettes';
-import { HATS, STAFFS, SKIN_TONES, HAIR_COLOURS, normalizeAppearance } from '../../utils/appearance';
+import { HATS, CREATION_HATS, STAFFS, SKIN_TONES, HAIR_COLOURS, HAIR_STYLES, BODY_SHAPES, EYE_COLOURS, FACE_SHAPES, SHOE_KINDS, NAME_SUGGESTIONS, normalizeAppearance } from '../../utils/appearance';
+import type { DollAnim } from '../agents/doll';
 import { WizardPortrait } from '../../components/WizardPortrait';
 import { Sparkles, Check, Wand2, BookOpen, ShieldCheck } from 'lucide-react';
 
@@ -20,7 +21,7 @@ interface CharacterCreationModalProps {
   isOpen: boolean;
   isExistingSave: boolean;
   initialValues?: Partial<HeadmasterChoices>;
-  onComplete: (choices: HeadmasterChoices) => void;
+  onComplete: (choices: HeadmasterChoices, opts?: { skipTutorial?: boolean }) => void;
   onClose?: () => void;
 }
 
@@ -42,6 +43,15 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
   });
   // Picking a founding school suggests its robe colour only until the player picks a robe
   const [robeTouched, setRobeTouched] = useState(false);
+  const [skipTutorial, setSkipTutorial] = useState(false);
+  const [customTitle, setCustomTitle] = useState('');
+  const [customPronouns, setCustomPronouns] = useState('');
+  const previewAnims: DollAnim[] = ['idle', 'walk', 'cast'];
+  const [previewFrame, setPreviewFrame] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setPreviewFrame(f => f + 1), 900);
+    return () => window.clearInterval(id);
+  }, []);
 
   if (!isOpen) return null;
 
@@ -59,7 +69,7 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!choices.name.trim()) return;
-    onComplete(choices);
+    onComplete({ ...choices, title: choices.title === 'custom' ? (customTitle.trim().slice(0, 16) || 'Wizard') : choices.title, pronouns: choices.pronouns === 'custom' ? (customPronouns.trim().slice(0, 24) || 'they/them') : choices.pronouns }, { skipTutorial });
   };
 
   return (
@@ -93,14 +103,14 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
             <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-3">
               <button
                 type="button"
-                onClick={() => setStep('create')}
+                onClick={() => { setSkipTutorial(false); setStep('create'); }}
                 className="w-full sm:w-auto px-10 py-3.5 rounded-xl bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold shadow-lg transition transform active:scale-95 text-sm"
               >
                 Begin
               </button>
               <button
                 type="button"
-                onClick={() => setStep('create')}
+                onClick={() => { setSkipTutorial(true); setStep('create'); }}
                 className="w-full sm:w-auto px-6 py-3.5 rounded-xl border border-slate-700 hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-xs font-semibold transition"
               >
                 Skip Tutorial
@@ -128,7 +138,7 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
               {/* Live preview: the same forge paper doll drawn on the castle */}
               <div className="flex items-center gap-4 bg-slate-950/70 border border-slate-800 rounded-2xl p-3" data-testid="look-preview">
                 <div className="rounded-xl bg-gradient-to-b from-sky-300/30 to-slate-800 border border-slate-700 p-1">
-                  <WizardPortrait appearance={choices} size={112} title="Preview" />
+                  <WizardPortrait appearance={choices} size={112} title="Preview" anim={previewAnims[previewFrame % previewAnims.length]} frame={previewFrame % 4} />
                 </div>
                 <div className="text-sm">
                   <div className="font-bold text-amber-200">{choices.title} {choices.name || '…'}</div>
@@ -145,15 +155,24 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
                   <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
                     Headmaster Name
                   </label>
-                  <input
-                    type="text"
-                    required
-                    maxLength={24}
-                    value={choices.name}
-                    onChange={e => setChoices(prev => ({ ...prev, name: e.target.value }))}
-                    placeholder="e.g. Morgan"
-                    className="w-full px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white font-medium focus:outline-none focus:border-amber-400 transition"
-                  />
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      required
+                      maxLength={24}
+                      value={choices.name}
+                      onChange={e => setChoices(prev => ({ ...prev, name: e.target.value }))}
+                      placeholder="e.g. Morgan"
+                      className="flex-1 px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white font-medium focus:outline-none focus:border-amber-400 transition"
+                    />
+                    <button
+                      type="button"
+                      className="px-3 rounded-xl border border-slate-700 text-xs text-slate-300"
+                      onClick={() => setChoices(prev => ({ ...prev, name: NAME_SUGGESTIONS[Math.floor(Math.random() * NAME_SUGGESTIONS.length)] }))}
+                    >
+                      Suggest
+                    </button>
+                  </div>
                 </div>
 
                 <div>
@@ -168,6 +187,7 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
                     {titles.map(t => (
                       <option key={t} value={t}>{t}</option>
                     ))}
+                    <option value="custom">Custom</option>
                   </select>
                 </div>
               </div>
@@ -192,6 +212,116 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
                       {p}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    onClick={() => setChoices(prev => ({ ...prev, pronouns: 'custom' }))}
+                    className={`flex-1 py-2 rounded-xl text-xs font-semibold border transition ${choices.pronouns === 'custom' ? 'bg-amber-500/20 border-amber-400 text-amber-300' : 'bg-slate-950 border-slate-800 text-slate-400'}`}
+                  >
+                    Custom
+                  </button>
+                </div>
+                {choices.pronouns === 'custom' && (
+                  <input value={customPronouns} maxLength={24} onChange={e => setCustomPronouns(e.target.value)} placeholder="pronouns" className="mt-2 w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm" />
+                )}
+                {choices.title === 'custom' && (
+                  <input value={customTitle} maxLength={16} onChange={e => setCustomTitle(e.target.value)} placeholder="Custom title" className="mt-2 w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm" />
+                )}
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Appearance</span>
+                <button
+                  type="button"
+                  data-testid="randomise-look"
+                  className="text-xs px-3 py-1 rounded-lg border border-slate-700 text-slate-300"
+                  onClick={() => {
+                    setRobeTouched(true);
+                    setChoices(prev => ({
+                      ...prev,
+                      bodyShape: BODY_SHAPES[Math.floor(Math.random() * BODY_SHAPES.length)].id,
+                      skin: SKIN_TONES[Math.floor(Math.random() * SKIN_TONES.length)],
+                      hair: HAIR_STYLES[Math.floor(Math.random() * HAIR_STYLES.length)].id,
+                      hairColor: HAIR_COLOURS[Math.floor(Math.random() * HAIR_COLOURS.length)].color,
+                      eyes: EYE_COLOURS[Math.floor(Math.random() * EYE_COLOURS.length)].color,
+                      face: FACE_SHAPES[Math.floor(Math.random() * FACE_SHAPES.length)],
+                      shoes: SHOE_KINDS[Math.floor(Math.random() * SHOE_KINDS.length)],
+                      hat: CREATION_HATS[Math.floor(Math.random() * CREATION_HATS.length)].id,
+                      staff: STAFFS[Math.floor(Math.random() * STAFFS.length)].id
+                    }));
+                  }}
+                >
+                  Randomise
+                </button>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Body shape</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {BODY_SHAPES.map(b => (
+                    <button
+                      type="button"
+                      key={b.id}
+                      data-body={b.id}
+                      aria-label={`Body ${b.name}`}
+                      aria-pressed={choices.bodyShape === b.id}
+                      onClick={() => setChoices(prev => ({ ...prev, bodyShape: b.id }))}
+                      className={`py-2 rounded-xl text-xs font-semibold border ${choices.bodyShape === b.id ? 'border-amber-400 text-amber-300 bg-amber-500/20' : 'border-slate-800 text-slate-400'}`}
+                    >
+                      {b.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Hair style</label>
+                <div className="flex items-center gap-2">
+                  <button type="button" aria-label="Previous hair" className="px-3 py-2 rounded-lg border border-slate-700" onClick={() => setChoices(prev => {
+                    const i = Math.max(0, HAIR_STYLES.findIndex(h => h.id === prev.hair));
+                    return { ...prev, hair: HAIR_STYLES[(i + HAIR_STYLES.length - 1) % HAIR_STYLES.length].id };
+                  })}>‹</button>
+                  <div className="flex-1 text-center text-sm text-amber-200" data-hair={choices.hair}>{HAIR_STYLES.find(h => h.id === choices.hair)?.name || choices.hair}</div>
+                  <button type="button" aria-label="Next hair" className="px-3 py-2 rounded-lg border border-slate-700" onClick={() => setChoices(prev => {
+                    const i = Math.max(0, HAIR_STYLES.findIndex(h => h.id === prev.hair));
+                    return { ...prev, hair: HAIR_STYLES[(i + 1) % HAIR_STYLES.length].id };
+                  })}>›</button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Eyes</label>
+                <div className="grid grid-cols-6 gap-1.5">
+                  {EYE_COLOURS.map((e, i) => (
+                    <button
+                      type="button"
+                      key={e.id}
+                      data-eye={e.id}
+                      aria-label={`Eyes ${e.name} ${i + 1} of ${EYE_COLOURS.length}`}
+                      aria-pressed={choices.eyes === e.color}
+                      onClick={() => setChoices(prev => ({ ...prev, eyes: e.color }))}
+                      style={{ backgroundColor: e.color }}
+                      className={`h-7 rounded-lg border-2 ${choices.eyes === e.color ? 'border-white' : 'border-transparent'}`}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Face</label>
+                  <div className="grid grid-cols-2 gap-1">
+                    {FACE_SHAPES.map(f => (
+                      <button type="button" key={f} data-face={f} aria-pressed={choices.face === f} onClick={() => setChoices(prev => ({ ...prev, face: f }))} className={`py-1.5 rounded-lg text-xs capitalize border ${choices.face === f ? 'border-amber-400 text-amber-200' : 'border-slate-800 text-slate-400'}`}>{f}</button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Shoes</label>
+                  <div className="grid grid-cols-1 gap-1">
+                    {SHOE_KINDS.map(s => (
+                      <button type="button" key={s} data-shoes={s} aria-pressed={choices.shoes === s} onClick={() => setChoices(prev => ({ ...prev, shoes: s }))} className={`py-1.5 rounded-lg text-xs capitalize border ${choices.shoes === s ? 'border-amber-400 text-amber-200' : 'border-slate-800 text-slate-400'}`}>{s}</button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -224,7 +354,7 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
                   Headwear
                 </label>
                 <div className="grid grid-cols-4 gap-2">
-                  {HATS.map(h => (
+                  {CREATION_HATS.map(h => (
                     <button
                       type="button"
                       key={h.id}
@@ -253,7 +383,7 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
                         type="button"
                         key={t}
                         title={`Tone ${i + 1}`}
-                        aria-label={`Skin tone ${i + 1}`}
+                        aria-label={`Skin tone ${i + 1} of ${SKIN_TONES.length}`}
                         aria-pressed={choices.skin === t}
                         onClick={() => setChoices(prev => ({ ...prev, skin: t }))}
                         style={{ backgroundColor: t }}
@@ -304,6 +434,25 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
                   ))}
                 </div>
               </div>
+
+              {!isExistingSave && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Academy name</label>
+                    <input value={choices.academyName} maxLength={40} onChange={e => setChoices(prev => ({ ...prev, academyName: e.target.value }))} className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Mode</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(['endless', 'timed'] as const).map(m => (
+                        <button type="button" key={m} data-mode={m} aria-pressed={choices.mode === m} onClick={() => setChoices(prev => ({ ...prev, mode: m }))} className={`py-2 rounded-xl text-xs border ${choices.mode === m ? 'border-amber-400 text-amber-200' : 'border-slate-800 text-slate-400'}`}>
+                          {m === 'endless' ? 'Endless School' : 'Timed Term'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Founding School (Fresh start only) */}
               {!isExistingSave && (

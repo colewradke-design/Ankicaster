@@ -10,6 +10,7 @@ import React, { useEffect, useRef } from 'react';
 import { ForgeRenderer } from '../visual/sprites/forge/ForgeRenderer';
 import { CanvasPainter } from '../visual/sprites/forge/CanvasPainter';
 import { normalizeAppearance, WizardAppearance } from '../utils/appearance';
+import type { DollAnim } from '../visual/agents/doll';
 
 export const WizardPortrait: React.FC<{
   appearance?: Partial<WizardAppearance> | null;
@@ -17,7 +18,9 @@ export const WizardPortrait: React.FC<{
   size?: number;
   className?: string;
   title?: string;
-}> = ({ appearance, size = 56, className = '', title }) => {
+  anim?: DollAnim;
+  frame?: number;
+}> = ({ appearance, size = 56, className = '', title, anim = 'idle', frame = 0 }) => {
   const ref = useRef<HTMLCanvasElement>(null);
   const look = normalizeAppearance(appearance);
   const key = JSON.stringify(look);
@@ -36,10 +39,11 @@ export const WizardPortrait: React.FC<{
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, 44, 44);
     ForgeRenderer.drawPaperDoll(new CanvasPainter(ctx), {
-      x: 22, y: 41, facing: 'R', anim: 'idle', animTimer: 0, animFrame: 0, isWizard: true,
-      robeColor: look.robeColor, hairColor: look.hairColor, skin: look.skin, hat: look.hat, staff: look.staff
+      x: 22, y: 41, facing: 'R', anim, animTimer: 0, animFrame: frame, isWizard: true,
+      robeColor: look.robeColor, hairColor: look.hairColor, skin: look.skin, hat: look.hat, staff: look.staff,
+      hair: look.hair, bodyShape: look.bodyShape, eyes: look.eyes, face: look.face, shoes: look.shoes
     });
-  }, [key, size]);
+  }, [key, size, anim, frame]);
 
   return (
     <canvas

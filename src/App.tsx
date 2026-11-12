@@ -19,6 +19,8 @@ import {
 import { createInitialGameState } from './data/initialState';
 import { createNewAcademy } from './visual/onboarding/freshStart';
 import { CharacterCreationModal } from './visual/onboarding/CharacterCreationModal';
+import { FoundingDay, GuidedTour, GoalBanner } from './visual/onboarding/FoundingTour';
+import { advanceTour, phaseAfterCreate } from './visual/onboarding/flow';
 import { AnkicasterEngine } from './utils/engine';
 import type { DraftDeckId } from './utils/decks';
 import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS } from './data/content';
@@ -88,6 +90,8 @@ export default function App() {
   const [isCreationModalOpen, setIsCreationModalOpen] = useState<boolean>(false);
   // Opened from "Change look": edit the look only, never re-found the Academy
   const [lookOnly, setLookOnly] = useState(false);
+  const [onboarding, setOnboarding] = useState<'founding' | 'tour' | 'goal' | null>(null);
+  const [tourStep, setTourStep] = useState(0);
 
   // Transient feedback toasts
   const [toasts, setToasts] = useState<Array<{ id: string; text: string; type: string }>>([]);
@@ -1395,6 +1399,22 @@ export default function App() {
         />
       )}
 
+      {onboarding === 'founding' && (
+        <FoundingDay reduceMotion={state.settings.reduceMotion} onDone={() => setOnboarding('tour')} />
+      )}
+      {onboarding === 'tour' && (
+        <GuidedTour
+          step={tourStep}
+          onNext={() => {
+            const next = advanceTour(tourStep);
+            setTourStep(next.step);
+            if (next.phase === 'goal') setOnboarding('goal');
+          }}
+          onSkip={() => setOnboarding(null)}
+        />
+      )}
+      {onboarding === 'goal' && <GoalBanner onDone={() => setOnboarding(null)} />}
+
       {isCreationModalOpen && <CharacterCreationModal
         isOpen={isCreationModalOpen}
         isExistingSave={lookOnly || state.reviewIndex > 0 || state.characters.length > 0 || state.mana > 0 || state.renown > 0}
@@ -1405,7 +1425,8 @@ export default function App() {
           ...(state.wizard.appearance ? normalizeAppearance(state.wizard.appearance) : {}),
           foundingSchool: state.wizard.foundingSchool
         }}
-        onComplete={choices => {
+        onComplete={(choices, opts) => {
+          const skip = !!opts?.skipTutorial;
           setState(prev => {
             // If already has progress, update wizard look only
             const hasProgress = lookOnly || prev.reviewIndex > 0 || prev.characters.length > 0 || prev.mana > 0 || prev.renown > 0;
@@ -1418,10 +1439,13 @@ export default function App() {
                   title: choices.title,
                   pronouns: choices.pronouns,
                   appearance: normalizeAppearance({
-                    bodyShape: choices.bodyShape,
+                    bodyShape: choices.bodyShape as 1 | 2 | 3 | 4,
                     skin: choices.skin,
                     hair: choices.hair,
                     hairColor: choices.hairColor,
+                    eyes: choices.eyes,
+                    face: choices.face,
+                    shoes: choices.shoes,
                     robeColor: choices.robeColor,
                     hat: choices.hat,
                     staff: choices.staff
@@ -1435,6 +1459,13 @@ export default function App() {
           });
           setIsCreationModalOpen(false);
           setLookOnly(false);
+          const fresh = !(lookOnly || state.reviewIndex > 0 || state.characters.length > 0 || state.mana > 0 || state.renown > 0);
+          if (fresh && phaseAfterCreate(skip) === 'founding') {
+            setTourStep(0);
+            setOnboarding('founding');
+          } else {
+            setOnboarding(null);
+          }
           addToast('Headmaster profile established!', 'success');
         }}
         onClose={() => { setIsCreationModalOpen(false); setLookOnly(false); }}

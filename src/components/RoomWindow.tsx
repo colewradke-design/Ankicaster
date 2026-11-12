@@ -20,6 +20,7 @@ import { reviewsToGo, reviewsToGoText } from '../utils/construction';
 import { requiredSlotStatus, requiredInstallOption, costText, unaffordable } from '../utils/requiredFurniture';
 import { AnkicasterEngine } from '../utils/engine';
 import { WizardPortrait } from './WizardPortrait';
+import { CharacterPortrait } from './CharacterPortrait';
 import { FullGameState, PlacedRoom } from '../types/ankicaster';
 import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS, SPELL_DEFINITIONS } from '../data/content';
 import { calculateRoomQuality, calculateFacultyLimit } from '../utils/formulas';
@@ -363,6 +364,22 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
           )}
 
           <RoomSummary state={state} room={room} onChangeLook={onChangeLook} />
+
+          {(() => {
+            const people = state.characters.filter(c => c.bedRoomId === room.id || c.seatRoomId === room.id || c.workplaceRoomId === room.id);
+            if (!people.length) return null;
+            return (
+              <div className="flex flex-wrap gap-2" data-testid="room-occupants">
+                {people.map(c => (
+                  <div key={c.id} className="flex items-center gap-2 bg-slate-950/60 border border-slate-800 rounded-full pr-3">
+                    <CharacterPortrait character={c} size={40} />
+                    <span className="text-[12px] text-slate-200">{c.name}</span>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+
 
           {/* 4. Primary actions */}
           {primary.length > 0 && (
