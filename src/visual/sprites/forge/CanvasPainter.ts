@@ -22,17 +22,31 @@ function css(color: number, alpha = 1): string {
 export class CanvasPainter implements PaperDollPainter {
   private shapes: Shape[] = [];
   private consumed = false;
-  constructor(private ctx: CanvasRenderingContext2D) {}
+  constructor(private ctx: CanvasRenderingContext2D) {
+    ctx.imageSmoothingEnabled = false;
+  }
+
+  /** Snap to whole art pixels so the ×N nearest-neighbour blit is not a resample of antialiased edges. */
+  private n(v: number) { return Math.round(v); }
+  private d(v: number) {
+    const r = Math.round(v);
+    if (r !== 0) return r;
+    return v < 0 ? -1 : 1;
+  }
 
   private add(s: Shape): this {
     if (this.consumed) { this.shapes = []; this.consumed = false; }
     this.shapes.push(s);
     return this;
   }
-  rect(x: number, y: number, w: number, h: number) { return this.add({ k: 'rect', x, y, w, h }); }
-  circle(x: number, y: number, r: number) { return this.add({ k: 'circle', x, y, r }); }
-  ellipse(x: number, y: number, rx: number, ry: number) { return this.add({ k: 'ellipse', x, y, rx, ry }); }
-  poly(p: number[]) { return this.add({ k: 'poly', p }); }
+  rect(x: number, y: number, w: number, h: number) { return this.add({ k: 'rect', x: this.n(x), y: this.n(y), w: this.d(w), h: this.d(h) }); }
+  circle(x: number, y: number, r: number) { return this.add({ k: 'circle', x: this.n(x), y: this.n(y), r: Math.max(1, Math.round(Math.abs(r))) }); }
+  ellipse(x: number, y: number, rx: number, ry: number) { return this.add({ k: 'ellipse', x: this.n(x), y: this.n(y), rx: Math.max(1, Math.round(Math.abs(rx))), ry: Math.max(1, Math.round(Math.abs(ry))) }); }
+  poly(p: number[]) {
+    const q: number[] = [];
+    for (let i = 0; i < p.length; i++) q.push(this.n(p[i]));
+    return this.add({ k: 'poly', p: q });
+  }
 
   private path() {
     const c = this.ctx;

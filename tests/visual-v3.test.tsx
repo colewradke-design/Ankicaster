@@ -9,13 +9,13 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { createNewAcademy } from '../src/visual/onboarding/freshStart.ts';
 import { CharacterCreationModal } from '../src/visual/onboarding/CharacterCreationModal.tsx';
 import { FoundingDay, GoalBanner, GuidedTour } from '../src/visual/onboarding/FoundingTour.tsx';
-import { FIRST_GOAL, TOUR_STEPS, advanceTour, applyTutorialAction, phaseAfterCreate, tourStepId, tourView } from '../src/visual/onboarding/flow.ts';
+import { FIRST_GOAL, TOUR_STEPS, advanceTour, applyTutorialAction, defaultTourTargets, DEFAULT_TOUR_VIEWPORT, phaseAfterCreate, placeTourBox, rectsIntersect, STUDY_PARTS, tourStepId, tourView } from '../src/visual/onboarding/flow.ts';
 import {
   BODY_SHAPES, CREATION_HATS, EYE_COLOURS, FACE_SHAPES, HAIR_COLOURS, HAIR_STYLES, SHOE_KINDS, SKIN_TONES, STAFFS
 } from '../src/utils/appearance.ts';
 import {
   DOLL_ANIMS, HELD_ITEMS, HEAD_R, LAYER_OPTIONS, MOVE_SPEED, appearanceToLayers, bubbleLabel, chooseBubble,
-  dollAnchors, dollFrame, drawBubble, drawCharacter, drawPortrait, healingPlaceFor, portraitBackgroundColor, portraitLayout
+  dollAnchors, dollFrame, drawBubble, drawCharacter, drawPortrait, hairPalette, healingPlaceFor, portraitBackgroundColor, portraitLayout
 } from '../src/visual/agents/doll.ts';
 import { Choreographer } from '../src/visual/agents/Choreographer.ts';
 import { NavGraph } from '../src/visual/layout/navGraph.ts';
@@ -33,6 +33,7 @@ class RecordingPainter {
     | { k: 'ellipse'; x: number; y: number; rx: number; ry: number }
     | { k: 'poly'; points: number[] }
   > = [];
+  paints: Array<{ color: number; op: RecordingPainter['ops'][number] }> = [];
   private num(label: string, ...v: number[]) {
     for (const n of v) if (!Number.isFinite(n)) this.problems.push(`${label} non-finite`);
     return this;
@@ -41,7 +42,11 @@ class RecordingPainter {
   circle(x: number, y: number, r: number) { this.ops.push({ k: 'circle', x, y, r }); this.pending++; if (r < 0) this.problems.push('r<0'); return this.num('circle', x, y, r); }
   ellipse(x: number, y: number, rx: number, ry: number) { this.ops.push({ k: 'ellipse', x, y, rx, ry }); this.pending++; return this.num('ellipse', x, y, rx, ry); }
   poly(points: number[]) { this.ops.push({ k: 'poly', points: points.slice() }); this.pending++; if (points.length < 4 || points.length % 2) this.problems.push(`poly ${points.length}`); return this.num('poly', ...points); }
-  fill(s: { color: number; alpha?: number }) { return this.style('fill', s); }
+  fill(s: { color: number; alpha?: number }) {
+    const start = this.ops.length - this.pending;
+    for (let i = Math.max(0, start); i < this.ops.length; i++) this.paints.push({ color: s.color, op: this.ops[i] });
+    return this.style('fill', s);
+  }
   stroke(s: { color: number; width?: number; alpha?: number }) { return this.style('stroke', s); }
   private style(kind: string, s: { color: number; alpha?: number; width?: number }) {
     if (!Number.isInteger(s.color) || s.color < 0 || s.color > 0xffffff) this.problems.push(`${kind} colour ${s.color}`);
@@ -394,5 +399,64 @@ test('extra ticker callbacks do not advance animation faster than the fixed rate
   const w2 = ch2.agents.get('wizard')!;
   assert.equal(w2.animFrame, dollFrame(w2.anim, ch2.clockMs - (w2.animBaseMs ?? ch2.clockMs)));
   assert.equal(w2.animFrame, 0);
+});
+
+test('every hair style meets the crown on all 4 bodies, and a hat hides hair that would poke through', () => {
+  const hair = 0x4a2e1e;
+  const pal = hairPalette(hair);
+  const tones = new Set([pal.outline, pal.mid, pal.hi]);
+  for (const style of HAIR_STYLES) {
+    for (const body of [1, 2, 3, 4]) {
+      const look = lookOf('wizard', body, style.id, 'none', 'round');
+      look.hairColor = '#4A2E1E';
+      const p = new RecordingPainter();
+      const res = drawCharacter(p, look, { x: 40, y: 90, facing: 'R', anim: 'idle', frame: 0 });
+      assert.deepEqual(p.problems, [], `${style.id} body ${body}`);
+      if (style.id === 'bald') continue;
+      const headTop = res.anchors.headY - HEAD_R;
+      const touching = p.paints.some(paint => {
+        if (!tones.has(paint.color) || paint.op.k !== 'rect') return false;
+        const top = paint.op.y;
+        const bottom = paint.op.y + paint.op.h;
+        const cx = paint.op.x + paint.op.w / 2;
+        return bottom > headTop - 0.01 && top < headTop + 1.01 && Math.abs(cx - 40) < 8;
+      });
+      assert.ok(touching, `${style.id} body ${body} leaves a gap above the head`);
+
+      const hatted = lookOf('wizard', body, style.id, 'pointed', 'round');
+      hatted.hairColor = '#4A2E1E';
+      const hp = new RecordingPainter();
+      const hr = drawCharacter(hp, hatted, { x: 40, y: 90, facing: 'L', anim: 'idle', frame: 0 });
+      const brim = hr.anchors.headY - 6;
+      for (const paint of hp.paints) {
+        if (!tones.has(paint.color) || paint.op.k !== 'rect') continue;
+        assert.ok(paint.op.y >= brim - 0.01, `${style.id} body ${body} pokes through the hat at ${paint.op.y}`);
+      }
+    }
+  }
+});
+
+test('tutorial box never intersects its target for every step at the default window size', () => {
+  const vp = DEFAULT_TOUR_VIEWPORT;
+  const box = { width: Math.min(576, vp.width - 32), height: 188 };
+  const steps = defaultTourTargets(vp);
+  assert.ok(steps.length >= STUDY_PARTS.length + 5);
+  for (const step of steps) {
+    const placed = placeTourBox(step.target, vp, box);
+    assert.equal(rectsIntersect(placed, step.target), false, step.step);
+    assert.ok(placed.left >= 7 && placed.top >= 7, `${step.step} off the top/left`);
+    assert.ok(placed.left + placed.width <= vp.width - 7, `${step.step} off the right`);
+    assert.ok(placed.top + placed.height <= vp.height - 7, `${step.step} off the bottom`);
+  }
+  const low = steps.find(s => s.step === 'study:renovate')!;
+  assert.equal(placeTourBox(low.target, vp, box).side, 'above');
+  const ponder = { phase: 'tour' as const, step: 2, part: STUDY_PARTS.findIndex(p => p.id === 'ponder') };
+  assert.equal(tourStepId(ponder), 'study-parts');
+  assert.equal(applyTutorialAction(ponder, 'next').part, ponder.part);
+  assert.equal(applyTutorialAction(ponder, 'start-ponder').part, ponder.part + 1);
+  const view = tourView(ponder, { studyOpen: true });
+  assert.equal(view.showNext, false);
+  assert.match(view.body, /25 honest reviews/);
+  assert.equal(view.selector, '[data-testid="free-ponder"]');
 });
 

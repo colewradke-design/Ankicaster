@@ -15,14 +15,14 @@ export const FOUNDING_MS = 6000;
 export const TOUR_STEP_IDS = ['welcome', 'study', 'study-parts', 'close', 'materials', 'academy', 'draw'] as const;
 export type TourStepId = (typeof TOUR_STEP_IDS)[number];
 
-export const STUDY_PARTS: Array<{ id: string; title: string; body: string; selector: string }> = [
+export const STUDY_PARTS: Array<{ id: string; title: string; body: string; selector: string; waits?: 'start-ponder' }> = [
   { id: 'header', title: 'Room window', body: 'Click a room and its window opens. The name, level and quality are up here.', selector: '[data-tour="room-header"]' },
   { id: 'stats', title: 'How the room is doing', body: 'These chips are efficiency, cleanliness, Veil upkeep and quality.', selector: '[data-tour="room-stats"]' },
   { id: 'efficiency', title: 'Efficiency', body: 'This line is the efficiency percent, and what makes it: level, quality, cleanliness, staff and neighbours.', selector: '[data-tour="efficiency"]' },
   { id: 'fixtures', title: 'Required fixtures', body: 'The Study needs its orb stand and lectern. Missing fixtures leave a room Unfinished, at 0%.', selector: '[data-testid="required-fixtures"]' },
   { id: 'orb', title: 'Pondering the Orb', body: 'Pondering the Orb happens here. Honest reviews fill the bar. Your founding school only suggests the first orb. It grants no level and no mana by itself.', selector: '[data-testid="study-summary"]' },
   { id: 'look', title: 'Your look', body: 'Change look opens the headmaster screen again, if you want a new hat, robe or staff.', selector: '[data-testid="change-look"]' },
-  { id: 'ponder', title: 'Ponder Orb', body: 'This button picks a school to study.', selector: '[data-room-window="wizard_study"] [data-screen="ponder"]' },
+  { id: 'ponder', title: 'Free first ponder', body: 'Start the free ponder in your founding school. It trains that school over the next 25 honest reviews. Again, Hard, Good and Easy all count the same, and taking a break never sets you back.', selector: '[data-testid="free-ponder"]', waits: 'start-ponder' },
   { id: 'grimoire', title: 'Grimoire', body: 'The Grimoire lists the spells you know.', selector: '[data-room-window="wizard_study"] [data-screen="grimoire"]' },
   { id: 'draft', title: 'Card Draft', body: 'Card Draft is where you draw room cards.', selector: '[data-room-window="wizard_study"] [data-screen="draft"]' },
   { id: 'move', title: 'Move', body: 'Move keeps the room’s level, furniture and progress, and lets you pick a new spot.', selector: '[data-tour="room-move"]' },
@@ -74,7 +74,7 @@ export function tourView(t: TutorialProgress, opts: { studyOpen: boolean; academ
       return { ...base, title: "Wizard's Study", body: 'Open the Wizard\'s Study again to keep looking around.', showNext: false, focusRoom: true };
     }
     const part = STUDY_PARTS[Math.max(0, Math.min(STUDY_PARTS.length - 1, t.part || 0))];
-    return { ...base, title: part.title, body: part.body, selector: part.selector };
+    return { ...base, title: part.title, body: part.body, selector: part.selector, showNext: !part.waits };
   }
   if (id === 'close') {
     if (!opts.studyOpen) {
@@ -91,7 +91,12 @@ export function tourView(t: TutorialProgress, opts: { studyOpen: boolean; academ
   return { ...base, title: 'First goal', body: 'Draw from the Foundation deck (50 mana) to find a Dormitory. A room card is one build, paid in materials, not mana.', selector: '[data-tour="deck-foundation"]', openDraft: true };
 }
 
-export type TutorialAction = 'next' | 'skip' | 'open-study' | 'close-study' | 'open-other';
+export type TutorialAction = 'next' | 'skip' | 'open-study' | 'close-study' | 'open-other' | 'start-ponder';
+
+function advanceStudyPart(cur: TutorialProgress): TutorialProgress {
+  if ((cur.part || 0) < STUDY_PARTS.length - 1) return { ...cur, part: (cur.part || 0) + 1 };
+  return { phase: 'tour', step: cur.step + 1, part: 0 };
+}
 
 /** Advance only on the action the current step is waiting for. Skip ends it from any step. */
 export function applyTutorialAction(t: TutorialProgress | undefined, action: TutorialAction): TutorialProgress {
@@ -110,11 +115,15 @@ export function applyTutorialAction(t: TutorialProgress | undefined, action: Tut
     if (id === 'close') return { phase: 'tour', step: cur.step + 1, part: 0 };
     return cur;
   }
+  if (action === 'start-ponder') {
+    if (id === 'study-parts' && STUDY_PARTS[cur.part || 0]?.waits === 'start-ponder') return advanceStudyPart(cur);
+    return cur;
+  }
   if (action !== 'next') return cur;
   if (id === 'study' || id === 'close') return cur;
   if (id === 'study-parts') {
-    if ((cur.part || 0) < STUDY_PARTS.length - 1) return { ...cur, part: (cur.part || 0) + 1 };
-    return { phase: 'tour', step: cur.step + 1, part: 0 };
+    if (STUDY_PARTS[cur.part || 0]?.waits) return cur;
+    return advanceStudyPart(cur);
   }
   if (cur.step >= TOUR_STEP_IDS.length - 1) return { phase: 'goal', step: cur.step, part: 0 };
   return { phase: 'tour', step: cur.step + 1, part: 0 };
@@ -139,4 +148,106 @@ export function phaseAfterFounding(): OnboardingPhase {
 export function advanceTour(step: number): { phase: 'tour' | 'goal'; step: number } {
   if (step >= TOUR_STEP_IDS.length - 1) return { phase: 'goal', step };
   return { phase: 'tour', step: step + 1 };
+}
+
+export const DEFAULT_TOUR_VIEWPORT = { width: 1280, height: 800 };
+
+export interface TourRect { left: number; top: number; width: number; height: number }
+export type TourSide = 'above' | 'below' | 'left' | 'right';
+
+export function rectsIntersect(a: TourRect, b: TourRect): boolean {
+  return a.left < b.left + b.width && a.left + a.width > b.left && a.top < b.top + b.height && a.top + a.height > b.top;
+}
+
+/**
+ * Put the tutorial text on the side of the spotlight with the most free space.
+ * The box stays fully on screen and never covers the target (or its 8px glow).
+ */
+export function placeTourBox(
+  target: TourRect,
+  viewport: { width: number; height: number },
+  box: { width: number; height: number },
+  margin = 8
+): TourRect & { side: TourSide } {
+  const vw = Math.max(1, viewport.width);
+  const vh = Math.max(1, viewport.height);
+  const bw = Math.min(Math.max(120, box.width), Math.max(120, vw - margin * 2));
+  const bh = Math.min(Math.max(72, box.height), Math.max(72, vh - margin * 2));
+  const gap = 48;
+  const spot: TourRect = {
+    left: target.left - 8,
+    top: target.top - 8,
+    width: target.width + 16,
+    height: target.height + 16
+  };
+  const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
+  const maxLeft = Math.max(margin, vw - bw - margin);
+  const maxTop = Math.max(margin, vh - bh - margin);
+  const space = {
+    above: spot.top - margin,
+    below: vh - (spot.top + spot.height) - margin,
+    left: spot.left - margin,
+    right: vw - (spot.left + spot.width) - margin
+  };
+  const candidates: Array<{ side: TourSide; left: number; top: number; space: number }> = [
+    { side: 'above', space: space.above, left: clamp(spot.left + spot.width / 2 - bw / 2, margin, maxLeft), top: spot.top - gap - bh },
+    { side: 'below', space: space.below, left: clamp(spot.left + spot.width / 2 - bw / 2, margin, maxLeft), top: spot.top + spot.height + gap },
+    { side: 'left', space: space.left, left: spot.left - gap - bw, top: clamp(spot.top + spot.height / 2 - bh / 2, margin, maxTop) },
+    { side: 'right', space: space.right, left: spot.left + spot.width + gap, top: clamp(spot.top + spot.height / 2 - bh / 2, margin, maxTop) }
+  ];
+  const fits = (c: { left: number; top: number }) => {
+    const r = { left: c.left, top: c.top, width: bw, height: bh };
+    const onScreen = r.left >= margin - 0.01 && r.top >= margin - 0.01 && r.left + bw <= vw - margin + 0.01 && r.top + bh <= vh - margin + 0.01;
+    return onScreen && !rectsIntersect(r, spot) && !rectsIntersect(r, target);
+  };
+  const usable = candidates.filter(fits).sort((a, b) => b.space - a.space);
+  const chosen = usable[0];
+  if (chosen) {
+    return { left: Math.round(chosen.left), top: Math.round(chosen.top), width: bw, height: bh, side: chosen.side };
+  }
+  const roomiest = [...candidates].sort((a, b) => b.space - a.space)[0];
+  let left = clamp(roomiest.left, margin, maxLeft);
+  let top = clamp(roomiest.top, margin, maxTop);
+  const pushed = { left, top, width: bw, height: bh };
+  if (rectsIntersect(pushed, target) || rectsIntersect(pushed, spot)) {
+    if (space.above >= space.below && space.above >= space.left && space.above >= space.right) top = clamp(spot.top - gap - bh, margin, maxTop);
+    else if (space.below >= space.left && space.below >= space.right) top = clamp(spot.top + spot.height + gap, margin, maxTop);
+    else if (space.left >= space.right) left = clamp(spot.left - gap - bw, margin, maxLeft);
+    else left = clamp(spot.left + spot.width + gap, margin, maxLeft);
+  }
+  return { left: Math.round(left), top: Math.round(top), width: bw, height: bh, side: roomiest.side };
+}
+
+/** Spotlight rectangles for every tour step at the default window, including the lower Study rows. */
+export function defaultTourTargets(viewport: { width: number; height: number } = DEFAULT_TOUR_VIEWPORT): Array<{ step: string; target: TourRect }> {
+  const W = viewport.width;
+  const H = viewport.height;
+  const dialogW = Math.min(512, W - 32);
+  const dialogLeft = (W - dialogW) / 2;
+  const dialogTop = Math.round(H * 0.05);
+  const dialogH = Math.min(Math.round(H * 0.9), H - dialogTop * 2);
+  const out: Array<{ step: string; target: TourRect }> = [
+    { step: 'welcome', target: { left: 12, top: 10, width: 140, height: 36 } },
+    { step: 'study', target: { left: W / 2 - 48, top: H * 0.42, width: 96, height: 72 } }
+  ];
+  for (const part of STUDY_PARTS) {
+    let target: TourRect;
+    if (part.id === 'move' || part.id === 'demolish') {
+      target = { left: dialogLeft + dialogW - (part.id === 'demolish' ? 76 : 112), top: dialogTop + 14, width: 32, height: 32 };
+    } else if (part.id === 'furnish' || part.id === 'renovate' || part.id === 'installed' || part.id === 'details') {
+      target = { left: dialogLeft + 20, top: dialogTop + dialogH - 56, width: dialogW - 40, height: 40 };
+    } else if (part.id === 'ponder') {
+      target = { left: W / 2 - 56, top: H / 2 - 18, width: 112, height: 44 };
+    } else {
+      const i = STUDY_PARTS.findIndex(p => p.id === part.id);
+      target = { left: dialogLeft + 20, top: dialogTop + 70 + (i % 8) * 46, width: Math.min(dialogW - 40, 360), height: 36 };
+    }
+    out.push({ step: `study:${part.id}`, target });
+  }
+  out.push({ step: 'close', target: { left: dialogLeft + dialogW - 44, top: dialogTop + 12, width: 32, height: 32 } });
+  out.push({ step: 'materials', target: { left: 160, top: 8, width: Math.min(720, W - 280), height: 40 } });
+  out.push({ step: 'academy', target: { left: W - 220, top: 48, width: 200, height: 280 } });
+  out.push({ step: 'draw', target: { left: W / 2 - 180, top: H / 2 + 80, width: 240, height: 140 } });
+  out.push({ step: 'study-bottom-edge', target: { left: 16, top: H - 56, width: W - 32, height: 40 } });
+  return out;
 }

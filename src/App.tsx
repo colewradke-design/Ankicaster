@@ -20,7 +20,7 @@ import { createInitialGameState } from './data/initialState';
 import { createNewAcademy } from './visual/onboarding/freshStart';
 import { CharacterCreationModal } from './visual/onboarding/CharacterCreationModal';
 import { FoundingDay, GuidedTour, GoalBanner } from './visual/onboarding/FoundingTour';
-import { applyTutorialAction, phaseAfterCreate, tourOpensDetails, tourStepId, tourView } from './visual/onboarding/flow';
+import { applyTutorialAction, phaseAfterCreate, STUDY_PARTS, tourOpensDetails, tourStepId, tourView } from './visual/onboarding/flow';
 import { AnkicasterEngine } from './utils/engine';
 import type { DraftDeckId } from './utils/decks';
 import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS } from './data/content';
@@ -36,6 +36,7 @@ import { CastleGrid } from './components/CastleGrid';
 import { DemolishConfirm } from './components/DemolishConfirm';
 import type { PlacementMode } from './visual/AcademyCanvas';
 import { normalizeAppearance } from './utils/appearance';
+import { wizardOrbQuote } from './utils/formulas';
 import { FlashcardReviewer } from './components/FlashcardReviewer';
 import {
   RosterPanel,
@@ -505,6 +506,14 @@ export default function App() {
     if (!res.success) {
       addToast(res.error || 'Failed to queue session', 'warning');
     } else {
+      const started = res.state.wizard.activeSession?.school === school
+        ? res.state.wizard.activeSession
+        : [...res.state.wizard.queuedSessions].reverse().find(s => s.school === school);
+      const freeStart = !isGrimoire
+        && school === res.state.wizard.foundingSchool
+        && started?.targetLevel === 1
+        && started.costPaid === 0;
+      if (freeStart) res.state.tutorial = applyTutorialAction(res.state.tutorial, 'start-ponder');
       setState(res.state);
       setOpenScreen(current => (current === 'ponder' ? null : current));
       addToast(`Orb session queued for ${school.toUpperCase()}!`, 'success');
@@ -841,6 +850,24 @@ export default function App() {
   useEffect(() => {
     if (tutorial?.phase === 'tour' && tourStepId(tutorial) === 'draw' && openScreen !== 'draft') setOpenScreen('draft');
   }, [tutorial, openScreen]);
+
+  useEffect(() => {
+    if (tutorial?.phase !== 'tour' || tourStepId(tutorial) !== 'study-parts') return;
+    if (STUDY_PARTS[tutorial.part || 0]?.id !== 'ponder') return;
+    const school = state.wizard.foundingSchool;
+    const free = !!school && wizardOrbQuote({
+      foundingSchool: school,
+      levels: state.wizard.levels,
+      active: state.wizard.activeSession,
+      queued: state.wizard.queuedSessions,
+      school
+    }).free;
+    if (!free) {
+      setState(prev => ({ ...prev, tutorial: applyTutorialAction(prev.tutorial, 'start-ponder') }));
+      return;
+    }
+    if (openScreen !== 'ponder') setOpenScreen('ponder');
+  }, [tutorial, openScreen, state.wizard]);
 
   useEffect(() => {
     if (tutorial?.phase !== 'goal') return;

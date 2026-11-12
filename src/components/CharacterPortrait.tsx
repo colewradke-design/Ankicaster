@@ -33,15 +33,23 @@ export const CharacterPortrait: React.FC<{
   look.mark = role === 'wizard' ? 'sigil' : role === 'faculty' ? 'stole' : role === 'resident' ? 'star' : role === 'adventurer' ? 'pack' : role === 'sabbatical' ? 'folded' : look.mark;
   const key = JSON.stringify({ look, role });
 
+  const scale = Math.max(1, Math.round(size / PORTRAIT_SRC));
+  const css = PORTRAIT_SRC * scale;
+
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    const ratio = dpr > 0 ? dpr : 1;
+    const device = Math.max(1, Math.round(scale * ratio));
+    const backing = PORTRAIT_SRC * device;
+    canvas.width = backing;
+    canvas.height = backing;
+    canvas.style.width = `${backing / ratio}px`;
+    canvas.style.height = `${backing / ratio}px`;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    canvas.width = PORTRAIT_PX;
-    canvas.height = PORTRAIT_PX;
     ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, PORTRAIT_PX, PORTRAIT_PX);
     const src = document.createElement('canvas');
     src.width = PORTRAIT_SRC;
     src.height = PORTRAIT_SRC;
@@ -50,19 +58,21 @@ export const CharacterPortrait: React.FC<{
     sctx.imageSmoothingEnabled = false;
     drawPortraitSource(new CanvasPainter(sctx), look);
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(src, 0, 0, PORTRAIT_PX, PORTRAIT_PX);
-  }, [key]);
+    ctx.clearRect(0, 0, backing, backing);
+    ctx.drawImage(src, 0, 0, backing, backing);
+  }, [key, scale]);
 
   return (
     <canvas
       ref={ref}
-      width={PORTRAIT_PX}
-      height={PORTRAIT_PX}
+      width={css}
+      height={css}
       data-testid="character-portrait"
       data-role={look.role}
+      data-scale={scale}
       title={character?.name || name || look.role}
-      style={{ width: size, height: size, imageRendering: 'pixelated', background: 'transparent' }}
-      className={`rounded-full overflow-hidden ${className}`}
+      style={{ width: css, height: css, imageRendering: 'pixelated', background: 'transparent', display: 'block' }}
+      className={className}
     />
   );
 };

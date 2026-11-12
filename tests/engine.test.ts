@@ -477,6 +477,37 @@ test('5. Wizard Cost & Queue: targetLevel accounts for active and queued session
   assert.ok(res6.error?.includes('Maximum of 5'));
 });
 
+test('founding school first ponder is free once, and every other ponder keeps the normal price', () => {
+  const fresh = createNewAcademy({
+    name: 'Ivy', foundingSchool: 'arcane', skin: '#F6D7C3', hair: 'bob', hairColor: '#4A2E1E', robeColor: '#6B4FBB', hat: 'pointed', staff: 'oak'
+  });
+  fresh.mana = 0;
+  const first = AnkicasterEngine.queueWizardSession(fresh, 'arcane', false);
+  assert.equal(first.success, true);
+  assert.equal(first.state.mana, 0);
+  assert.equal(first.state.wizard.activeSession?.targetLevel, 1);
+  assert.equal(first.state.wizard.activeSession?.costPaid, 0);
+  assert.equal(first.state.wizard.activeSession?.required, 25);
+
+  const blocked = AnkicasterEngine.queueWizardSession(fresh, 'nature', false);
+  assert.equal(blocked.success, false);
+  assert.match(blocked.error || '', /80/);
+
+  const second = AnkicasterEngine.queueWizardSession({ ...first.state, mana: 500 }, 'arcane', false);
+  assert.equal(second.success, true);
+  assert.equal(second.state.wizard.queuedSessions[0].targetLevel, 2);
+  assert.equal(second.state.wizard.queuedSessions[0].costPaid, 160);
+  assert.equal(second.state.wizard.queuedSessions[0].required, 50);
+  assert.equal(500 - second.state.mana, 160);
+
+  const other = AnkicasterEngine.queueWizardSession({ ...fresh, mana: 80 }, 'light', false);
+  assert.equal(other.success, true);
+  assert.equal(other.state.wizard.activeSession?.targetLevel, 1);
+  assert.equal(other.state.wizard.activeSession?.costPaid, 80);
+  assert.equal(other.state.wizard.activeSession?.required, 25);
+  assert.equal(other.state.mana, 0);
+});
+
 test('6. Day Rollover: 4:00 AM Anki boundary calculation and leftover hours carryover', () => {
   const eveningMs = new Date('2026-11-10T23:00:00').getTime();
   const earlyMorningMs = new Date('2026-11-11T03:30:00').getTime();

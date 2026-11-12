@@ -35,12 +35,12 @@ import {
   CREATURE_DEFINITIONS
 } from '../data/content';
 import {
-  getWizardLevelRequirements,
   calculateStudentSkill,
   isMasteryReady,
   calculateTeacherDelay,
   calculateRiftChance,
-  calculateFacultyLimit
+  calculateFacultyLimit,
+  wizardOrbQuote
 } from '../utils/formulas';
 import {
   Sparkles,
@@ -149,12 +149,17 @@ export const WizardStudyPanel: React.FC<{
         </h4>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {schools.map(sch => {
+            const quote = wizardOrbQuote({
+              foundingSchool: wizard.foundingSchool,
+              levels: wizard.levels,
+              active: wizard.activeSession,
+              queued: wizard.queuedSessions,
+              school: sch
+            });
             const currentLvl = wizard.levels[sch] || 0;
-            const activeForSchool = (wizard.activeSession && wizard.activeSession.school === sch && wizard.activeSession.kind === 'orb') ? 1 : 0;
-            const queuedForSchool = (wizard.queuedSessions || []).filter(s => s.school === sch && s.kind === 'orb').length;
-            const targetLvl = currentLvl + activeForSchool + queuedForSchool + 1;
-            const isMax = targetLvl > 10;
-            const req = getWizardLevelRequirements(Math.min(10, targetLvl));
+            const targetLvl = quote.targetLevel;
+            const isMax = quote.capped;
+            const req = { mana: quote.mana, reviews: quote.reviews };
             const totalSessions = (wizard.activeSession ? 1 : 0) + (wizard.queuedSessions ? wizard.queuedSessions.length : 0);
             const canAfford = mana >= req.mana;
             const canQueue = !isMax && canAfford && totalSessions < 5;
@@ -203,8 +208,8 @@ export const WizardStudyPanel: React.FC<{
                     className="w-full mt-2 py-2 px-3 bg-purple-600/20 hover:bg-purple-600/40 text-purple-200 border border-purple-500/40 rounded-xl text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed transition"
                   >
                     {totalSessions > 0
-                      ? `Queue Level ${targetLvl} (${req.mana}m · ${req.reviews} revs)`
-                      : `Ponder Level ${targetLvl} (${req.mana}m · ${req.reviews} revs)`}
+                      ? `Queue Level ${targetLvl} (${quote.free ? 'Free' : `${req.mana}m`} · ${req.reviews} revs)`
+                      : `Ponder Level ${targetLvl} (${quote.free ? 'Free' : `${req.mana}m`} · ${req.reviews} revs)`}
                   </button>
                 ) : (
                   <span className="text-center text-xs text-amber-400 font-bold py-1.5 bg-amber-500/10 rounded-lg border border-amber-500/20">

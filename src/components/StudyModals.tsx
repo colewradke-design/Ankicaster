@@ -12,7 +12,7 @@ import React from 'react';
 import { BookOpen, Leaf, Sun, Moon, FlaskConical, Sparkles, Lock, Clock } from 'lucide-react';
 import { FullGameState, SchoolType } from '../types/ankicaster';
 import { SPELL_DEFINITIONS } from '../data/content';
-import { getWizardLevelRequirements } from '../utils/formulas';
+import { wizardOrbQuote } from '../utils/formulas';
 
 export const SCHOOLS: SchoolType[] = ['arcane', 'nature', 'light', 'shadow', 'alchemy'];
 
@@ -32,21 +32,29 @@ function buffText(sch: SchoolType, lvl: number): string {
     `-${n * 3}% Build, +${n * 3}% Potions`;
 }
 
-/** Pure: the option row for one school, mirroring the old per-school button logic. */
+/** Pure: the option row for one school, mirroring the engine's queue cost. */
 export function orbOption(state: FullGameState, sch: SchoolType) {
   const { wizard, mana } = state;
+  const quote = wizardOrbQuote({
+    foundingSchool: wizard.foundingSchool,
+    levels: wizard.levels,
+    active: wizard.activeSession,
+    queued: wizard.queuedSessions,
+    school: sch
+  });
+  const { targetLvl, isMax, req, free } = {
+    targetLvl: quote.targetLevel,
+    isMax: quote.capped,
+    free: quote.free,
+    req: { mana: quote.mana, reviews: quote.reviews }
+  };
   const currentLvl = wizard.levels[sch] || 0;
-  const activeForSchool = wizard.activeSession && wizard.activeSession.school === sch && wizard.activeSession.kind === 'orb' ? 1 : 0;
-  const queuedForSchool = (wizard.queuedSessions || []).filter(s => s.school === sch && s.kind === 'orb').length;
-  const targetLvl = currentLvl + activeForSchool + queuedForSchool + 1;
-  const isMax = targetLvl > 10;
-  const req = getWizardLevelRequirements(Math.min(10, targetLvl));
   const totalSessions = (wizard.activeSession ? 1 : 0) + (wizard.queuedSessions ? wizard.queuedSessions.length : 0);
   const canAfford = mana >= req.mana;
   const queueFull = totalSessions >= 5;
   const canQueue = !isMax && canAfford && !queueFull;
   const reason = isMax ? 'Level 10 reached or queued' : queueFull ? 'Queue full (5 sessions)' : !canAfford ? `Needs ${req.mana} mana` : '';
-  return { currentLvl, targetLvl, isMax, req, canQueue, reason, verb: totalSessions > 0 ? 'Queue' : 'Ponder' };
+  return { currentLvl, targetLvl, isMax, req, free, canQueue, reason, verb: totalSessions > 0 ? 'Queue' : 'Ponder' };
 }
 
 const Backdrop: React.FC<{ onClose: () => void; children: React.ReactNode; label: string }> = ({ onClose, children, label }) => (
@@ -102,11 +110,15 @@ export const PonderOrbPicker: React.FC<{
                   <button
                     onClick={() => onPick(sch)}
                     disabled={!o.canQueue}
-                    title={o.reason || `${o.verb} level ${o.targetLvl}: ${o.req.mana} mana, ${o.req.reviews} reviews`}
+                    data-testid={o.free ? 'free-ponder' : undefined}
+                    data-mana={o.req.mana}
+                    title={o.reason || (o.free
+                      ? `Free ponder to level ${o.targetLvl}: ${o.req.reviews} honest reviews`
+                      : `${o.verb} level ${o.targetLvl}: ${o.req.mana} mana, ${o.req.reviews} reviews`)}
                     className="w-28 min-h-[36px] px-2 py-1 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/40 text-purple-100 text-[12px] font-bold disabled:opacity-40 disabled:cursor-not-allowed leading-tight"
                   >
                     {o.verb} Lv {o.targetLvl}
-                    <span className="block font-mono font-normal text-purple-300">{o.req.mana}m · {o.req.reviews}r</span>
+                    <span className="block font-mono font-normal text-purple-300">{o.free ? 'Free' : `${o.req.mana}m`} · {o.req.reviews}r</span>
                   </button>
                 )}
               </div>

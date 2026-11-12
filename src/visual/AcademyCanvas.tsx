@@ -11,7 +11,7 @@
  */
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Application } from 'pixi.js';
+import { Application, TextureStyle } from 'pixi.js';
 import { FullGameState, PlacedRoom } from '../types/ankicaster';
 import { VisualWorld } from './world/VisualWorld';
 import { castleCellToWorldX } from './layout/gridToWorld';
@@ -21,6 +21,8 @@ import { AnkicasterEngine } from '../utils/engine';
 import { validatePlacement, roomLimitStatus, getGridSize, findAutoPlacement, PlacementCheck } from '../utils/placement';
 import { reviewsToGoText } from '../utils/construction';
 import { formatMaterialCost } from '../utils/resourceReport';
+
+TextureStyle.defaultOptions.scaleMode = 'nearest';
 
 /** Build a new room, or move an existing one, with the ghost placement tool. */
 export type PlacementMode = { kind: 'build'; defId: string } | { kind: 'move'; roomId: number };

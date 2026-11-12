@@ -27,11 +27,51 @@ export function calculateReviewMana(arcaneLevel: number, additionalMults: number
 
 /**
  * F3 & F4: Reviews and mana required for Wizard level n (BR-07)
+ * The normal price is always 80 × level. The founding school's first orb
+ * session (to level 1) is the one exception: 0 mana, still 25 reviews.
  */
 export function getWizardLevelRequirements(level: number): { reviews: number; mana: number } {
   return {
     reviews: 25 * level,
     mana: 80 * level
+  };
+}
+
+export interface OrbQuote {
+  targetLevel: number;
+  reviews: number;
+  mana: number;
+  /** First Pondering the Orb in the headmaster's founding school, to level 1. Once. */
+  free: boolean;
+  capped: boolean;
+}
+
+/**
+ * Cost of the next orb session in one school.
+ * Free only when that school is the one picked at character creation,
+ * the session would reach level 1, and it has not been started or queued.
+ * Every other ponder, including the second in the founding school, is 80 × target level.
+ * Reviews stay 25 × target level either way.
+ */
+export function wizardOrbQuote(input: {
+  foundingSchool?: string;
+  levels: Partial<Record<string, number>>;
+  active?: { school?: string; kind?: string } | null;
+  queued?: Array<{ school?: string; kind?: string }>;
+  school: string;
+}): OrbQuote {
+  const cur = input.levels[input.school] || 0;
+  const active = input.active && input.active.school === input.school && input.active.kind === 'orb' ? 1 : 0;
+  const queued = (input.queued || []).filter(s => s.school === input.school && s.kind === 'orb').length;
+  const targetLevel = cur + active + queued + 1;
+  const capped = targetLevel > 10;
+  const free = !capped && !!input.foundingSchool && input.school === input.foundingSchool && targetLevel === 1;
+  return {
+    targetLevel,
+    reviews: 25 * targetLevel,
+    mana: free ? 0 : 80 * targetLevel,
+    free,
+    capped
   };
 }
 

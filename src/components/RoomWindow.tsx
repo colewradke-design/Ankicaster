@@ -23,7 +23,7 @@ import { WizardPortrait } from './WizardPortrait';
 import { CharacterPortrait } from './CharacterPortrait';
 import { FullGameState, PlacedRoom } from '../types/ankicaster';
 import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS, SPELL_DEFINITIONS } from '../data/content';
-import { calculateRoomQuality, calculateFacultyLimit } from '../utils/formulas';
+import { calculateRoomQuality, calculateFacultyLimit, wizardOrbQuote } from '../utils/formulas';
 import { HAZARD_DISPEL_MANA_COST } from '../utils/engine';
 import { ScreenId, SCREEN_DEFS, getRoomScreens } from '../ui/screens';
 import { ScreenIcon } from './ScreenIcon';
@@ -400,6 +400,15 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                 >
                   <ScreenIcon id={id} className="w-5 h-5" />
                   {SCREEN_DEFS[id].label}
+                  {id === 'ponder' && wizardOrbQuote({
+                    foundingSchool: state.wizard.foundingSchool,
+                    levels: state.wizard.levels,
+                    active: state.wizard.activeSession,
+                    queued: state.wizard.queuedSessions,
+                    school: state.wizard.foundingSchool || ''
+                  }).free && (
+                    <span className="font-mono text-[11px] leading-none" data-testid="study-ponder-free">Free</span>
+                  )}
                 </button>
               ))}
             </div>

@@ -2,8 +2,8 @@
  * Founding Day, then the guided tour. Each tour step waits for the player.
  * Skip is on every step. The arrow bounces unless reduceMotion is on.
  */
-import React, { useEffect, useState } from 'react';
-import { FIRST_GOAL, FOUNDING_MS } from './flow';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { DEFAULT_TOUR_VIEWPORT, FIRST_GOAL, FOUNDING_MS, placeTourBox, type TourRect, type TourSide } from './flow';
 import type { TourView } from './flow';
 
 const STAGES = ['The doors are shut.', 'The doors open.', 'Your crest unfurls.', 'You walk up to the Study.'];
@@ -59,6 +59,16 @@ function unionRect(selector: string): { left: number; top: number; width: number
   return { left, top, width: right - left, height: bottom - top };
 }
 
+function arrowFor(side: TourSide, target: TourRect, viewport: { width: number; height: number }) {
+  const cx = Math.round(target.left + target.width / 2 - 10);
+  const cy = Math.round(target.top + target.height / 2 - 10);
+  const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
+  if (side === 'above') return { left: clamp(cx, 4, viewport.width - 24), top: target.top - 30, rotate: 0 };
+  if (side === 'below') return { left: clamp(cx, 4, viewport.width - 24), top: target.top + target.height + 12, rotate: 180 };
+  if (side === 'left') return { left: target.left - 30, top: clamp(cy, 4, viewport.height - 24), rotate: -90 };
+  return { left: target.left + target.width + 12, top: clamp(cy, 4, viewport.height - 24), rotate: 90 };
+}
+
 export const GuidedTour: React.FC<{
   view: TourView;
   step: number;
@@ -95,7 +105,25 @@ export const GuidedTour: React.FC<{
 
   const rect = view.selector ? domBox : roomBox;
   const total = 7;
-  const arrowBelow = !!rect && rect.top < 72;
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState(DEFAULT_TOUR_VIEWPORT);
+  const [boxSize, setBoxSize] = useState({ width: 560, height: 188 });
+  const placed = rect ? placeTourBox(rect, viewport, boxSize) : null;
+  const arrow = rect && placed ? arrowFor(placed.side, rect, viewport) : null;
+
+  useLayoutEffect(() => {
+    const read = () => setViewport({ width: window.innerWidth || DEFAULT_TOUR_VIEWPORT.width, height: window.innerHeight || DEFAULT_TOUR_VIEWPORT.height });
+    read();
+    window.addEventListener('resize', read);
+    return () => window.removeEventListener('resize', read);
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setBoxSize(prev => (Math.abs(prev.width - r.width) < 1 && Math.abs(prev.height - r.height) < 1 ? prev : { width: r.width, height: r.height }));
+  }, [view.id, view.title, view.body, view.showNext, placed?.side, placed?.width]);
 
   return (
     <div className="fixed inset-0 z-[70] pointer-events-none" data-testid="guided-tour" data-tour-step={view.id} data-tour-part={part}>
@@ -106,23 +134,32 @@ export const GuidedTour: React.FC<{
           style={{ left: rect.left - 8, top: rect.top - 8, width: Math.max(8, rect.width + 16), height: Math.max(8, rect.height + 16), boxShadow: '0 0 0 9999px rgba(2, 6, 23, 0.72)' }}
         />
       )}
-      {rect && (
+      {rect && arrow && (
         <div
           data-testid="tour-arrow"
+          data-side={placed?.side}
           data-motion={reduceMotion ? 'off' : 'bounce'}
           className="fixed pointer-events-none text-amber-300"
           style={{
-            left: rect.left + rect.width / 2 - 10,
-            top: arrowBelow ? rect.top + rect.height + 6 : rect.top - 28,
+            left: arrow.left,
+            top: arrow.top,
             animation: reduceMotion ? undefined : 'tour-bob 0.7s ease-in-out infinite'
           }}
         >
-          <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden style={{ transform: arrowBelow ? 'rotate(180deg)' : undefined }}>
+          <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden style={{ transform: arrow.rotate ? `rotate(${arrow.rotate}deg)` : undefined }}>
             <path d="M10 16 L4 6 H16 Z" fill="#f5c451" stroke="#1b1822" strokeWidth="1" />
           </svg>
         </div>
       )}
-      <div className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[min(36rem,calc(100%-2rem))] pointer-events-auto">
+      <div
+        ref={boxRef}
+        data-testid="tour-callout"
+        data-side={placed?.side || 'bottom'}
+        className="fixed w-[min(36rem,calc(100%-2rem))] max-w-[36rem] pointer-events-auto"
+        style={placed
+          ? { left: placed.left, top: placed.top, width: placed.width }
+          : { left: '50%', bottom: 16, transform: 'translateX(-50%)' }}
+      >
         <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-4 shadow-2xl text-slate-100">
           <div className="text-xs text-amber-300 font-bold">{step + 1} / {total} · {view.title}</div>
           <p className="mt-2 text-sm leading-relaxed">{view.body}</p>

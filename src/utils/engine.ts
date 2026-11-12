@@ -56,7 +56,7 @@ import {
   calculateMorale,
   calculateRoomEfficiency,
   calculateRoomQuality,
-  getWizardLevelRequirements
+  wizardOrbQuote
 } from '../utils/formulas';
 import { computeReachability, ReachabilityInfo } from './reachability';
 import {
@@ -2684,22 +2684,26 @@ export class AnkicasterEngine {
       return { state, success: false, error: 'Maximum of 5 wizard training sessions (active + queued).' };
     }
 
-    const curLevel = next.wizard.levels[school] || 0;
     let targetLevel = 1;
     let cost = 250;
     let required = 50;
 
     if (!isGrimoire) {
-      const activeForSchool = (next.wizard.activeSession && next.wizard.activeSession.school === school && next.wizard.activeSession.kind === 'orb') ? 1 : 0;
-      const queuedForSchool = next.wizard.queuedSessions.filter(s => s.school === school && s.kind === 'orb').length;
-      targetLevel = curLevel + activeForSchool + queuedForSchool + 1;
+      const quote = wizardOrbQuote({
+        foundingSchool: next.wizard.foundingSchool,
+        levels: next.wizard.levels,
+        active: next.wizard.activeSession,
+        queued: next.wizard.queuedSessions,
+        school
+      });
+      targetLevel = quote.targetLevel;
 
-      if (targetLevel > 10) {
+      if (quote.capped) {
         return { state, success: false, error: `${school.toUpperCase()} training capped at Master Level 10.` };
       }
 
-      cost = 80 * targetLevel;
-      required = 25 * targetLevel;
+      cost = quote.mana;
+      required = quote.reviews;
     }
 
     if (next.mana < cost) {
@@ -2737,7 +2741,7 @@ export class AnkicasterEngine {
       id: `study-${Date.now()}`,
       time: Date.now(),
       type: 'wizard',
-      text: `Pondering the Orb: Training towards ${school.toUpperCase()} Level ${targetLevel} (${required} reviews, cost ${cost}m).`
+      text: `Pondering the Orb: Training towards ${school.toUpperCase()} Level ${targetLevel} (${required} reviews, cost ${cost === 0 ? 'free' : `${cost}m`}).`
     });
 
     return { state: next, success: true };

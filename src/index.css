@@ -1,6 +1,13 @@
 @import "tailwindcss";
 
+/* Pixel art: never let the browser resample a canvas or portrait. */
+canvas,
+img {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
 @keyframes tour-bob {
   0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-8px); }
+  50% { transform: translateY(-6px); }
 }
