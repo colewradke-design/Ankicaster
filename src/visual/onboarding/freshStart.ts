@@ -7,13 +7,11 @@
  * - 0 mana, 0 manaDebt, 0 bankAtLastReview
  * - 0 Renown
  * - All wizard levels 0, studyLevel 0
- * - Exactly the 6 starting rooms (GDD 15.2):
+ * - Exactly 3 starting rooms, already built:
  *   Entrance Hall (x 3, y 0, w 2, h 1)
  *   Wizard's Study (x 5, y 0, w 1, h 2)
- *   Spiral Stair (x 2, y 0, w 1, h 1)
- *   Storage Vault (x 1, y 0, w 1, h 1)
  *   Vegetable Patch (grounds index 8)
- *   Woodlot (grounds index 9)
+ * - Every other room is found in a card deck. Spiral Stair, Corridor and Support Pillar stay free.
  * - GDD 25.1 starting stock: 120 Timber, 60 Stone, 20 Glass, 20 Cloth, 40 Provisions, 10 Greens; everything else 0
  * - 0 creatures, 0 characters, 0 cardSets, 0 activeEvents, 0 pending events
  * - Empty achievements (doors_open earned on first enrolment)
@@ -103,62 +101,9 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
       ]
     },
     {
-      id: 3,
-      defId: 'spiral_stair',
-      x: 2,
-      y: 0,
-      w: 1,
-      h: 1,
-      area: 'castle',
-      level: 1,
-      state: 'built',
-      buildRequired: 0,
-      buildProgress: 0,
-      buildPaused: false,
-      cleanliness: 100,
-      settings: {},
-      furniture: []
-    },
-    {
-      id: 4,
-      defId: 'storage_vault',
-      x: 1,
-      y: 0,
-      w: 1,
-      h: 1,
-      area: 'castle',
-      level: 1,
-      state: 'built',
-      buildRequired: 0,
-      buildProgress: 0,
-      buildPaused: false,
-      cleanliness: 100,
-      settings: {},
-      furniture: [
-        { id: 104, defId: 'shelving', slotKind: 'required:shelving', damaged: false }
-      ]
-    },
-    {
       id: 5,
       defId: 'vegetable_patch',
       x: 8, // L0 (index 8)
-      y: 0,
-      w: 1,
-      h: 1,
-      area: 'grounds',
-      level: 1,
-      state: 'built',
-      buildRequired: 0,
-      buildProgress: 0,
-      buildPaused: false,
-      cleanliness: 100,
-      settings: {},
-      furniture: []
-    },
-    {
-      id: 6,
-      defId: 'woodlot',
-      x: 9, // R0 (index 9)
       y: 0,
       w: 1,
       h: 1,
@@ -279,10 +224,16 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
     expeditions: [],
     potions: POTION_RECIPES,
     hand: [], // Hand empty until tutorial draft
-    knownPlans: ['vegetable_patch', 'woodlot', 'quarry', 'dormitory', 'refectory', 'common_room'],
+    roomPlans: {},
+    knownPlans: [],
     knownPatterns: ['simple_cot', 'long_table', 'hearth', 'couch', 'potted_fern', 'bookshelf'],
     draftHistory: {},
     draftPity: {},
+    roomlessStreak: {},
+    foundingDraws: { foundation: 0, grounds: 0 },
+    draftsCompleted: 0,
+    riftGateGranted: false,
+    resourceLedger: { bells: [], recent: {} },
     activeEvents: [], // No pending events
     notices: [
       {

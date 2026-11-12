@@ -67,7 +67,10 @@ import {
   UserCheck
 } from 'lucide-react';
 import { reviewsToGoText } from '../utils/construction';
-import { blueprintLockHint, isRoomUnlocked } from '../utils/engine';
+import { blueprintLockHint, isRoomUnlocked, isStructure } from '../utils/engine';
+import { DECK_LIST, deckPrice, magicSchoolOdds } from '../utils/decks';
+import { canAffordMaterials, formatMaterialCost } from '../utils/resourceReport';
+import type { DraftDeckId } from '../utils/decks';
 
 // ==========================================
 // 1. WIZARD STUDY PANEL
@@ -738,11 +741,15 @@ export const BuildMenuPanel: React.FC<{
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[520px] overflow-y-auto pr-1">
         {filtered.map(room => {
-          const canAfford = state.mana >= room.cost.mana;
+          const canAfford = canAffordMaterials(state, room.cost);
           // Per-room limits come from the engine rules (content maxCount), sites included
           const limit = roomLimitStatus(state.rooms, room.id);
           const unlocked = isRoomUnlocked(state, room.id);
+          const structure = isStructure(room.id);
+          const founding = room.id === 'entrance_hall' || room.id === 'wizard_study';
+          const plans = state.roomPlans?.[room.id] || 0;
           const disabled = !canAfford || limit.capped || !unlocked;
+          const costLine = formatMaterialCost(room.cost);
           return (
             <div
               key={room.id}
@@ -760,12 +767,11 @@ export const BuildMenuPanel: React.FC<{
                   <span className="text-xs text-slate-400 capitalize">{room.area} ({room.size.join('x')})</span>
                 </div>
                 <p className="text-xs text-slate-300 mb-2 line-clamp-2 leading-relaxed">{room.description}</p>
+                {!structure && !founding && (
+                  <div className="text-xs font-mono text-amber-200/90 mb-1" data-testid="plan-count">{plans} plan{plans === 1 ? '' : 's'}</div>
+                )}
                 <div className="text-xs text-slate-400 font-mono mb-2">
-                  Cost: <strong className="text-amber-300">{room.cost.mana}m</strong>
-                  {room.cost.timber && ` · ${room.cost.timber}T`}
-                  {room.cost.stone && ` · ${room.cost.stone}S`}
-                  {room.cost.glass && ` · ${room.cost.glass}G`}
-                  {room.cost.cloth && ` · ${room.cost.cloth}C`}
+                  Cost: <strong className="text-amber-300">{costLine}</strong>
                   {' · '}Build: {room.buildReviews} revs
                 </div>
                 {!unlocked && (
@@ -780,7 +786,7 @@ export const BuildMenuPanel: React.FC<{
                 <button
                   onClick={() => onPlaceRoom(room.id, room.area)}
                   disabled={disabled}
-                  title={!unlocked ? blueprintLockHint(room.id) : limit.capped ? limit.reason : !canAfford ? `Need ${room.cost.mana} Mana` : 'Choose where to build it on the map'}
+                  title={!unlocked ? blueprintLockHint(room.id) : limit.capped ? limit.reason : !canAfford ? `Need ${costLine}` : 'Choose where to build it on the map'}
                   className="flex-1 py-2 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-200 border border-indigo-500/30 rounded-xl text-xs font-bold disabled:opacity-40 transition shadow"
                 >
                   {!unlocked ? 'Locked' : limit.capped ? 'Limit reached' : 'Place…'}
@@ -809,36 +815,35 @@ export const BuildMenuPanel: React.FC<{
 // ==========================================
 export const CardDraftPanel: React.FC<{
   state: FullGameState;
-  onDrawDeck: (deck: 'foundation' | SchoolType) => void;
+  onDrawDeck: (deck: DraftDeckId) => void;
 }> = ({ state, onDrawDeck }) => {
-  const decks: Array<{ id: 'foundation' | SchoolType; name: string; basePrice: number }> = [
-    { id: 'foundation', name: 'Foundation Deck', basePrice: 120 },
-    { id: 'arcane', name: 'Arcane Deck', basePrice: 150 },
-    { id: 'nature', name: 'Nature Deck', basePrice: 150 },
-    { id: 'light', name: 'Light Deck', basePrice: 150 },
-    { id: 'shadow', name: 'Shadow Deck', basePrice: 150 },
-    { id: 'alchemy', name: 'Alchemy Deck', basePrice: 150 }
-  ];
+  const odds = magicSchoolOdds(state.wizard.levels);
+  const oddsLine = (['arcane', 'nature', 'light', 'shadow', 'alchemy'] as const)
+    .map(s => `${s[0].toUpperCase()}${s.slice(1)} ${Math.round(odds[s])}%`)
+    .join(' · ');
 
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-sm font-bold text-amber-200" title="Rule BR-26: Draw rare room blueprints, creature lures, furniture patterns, and instant boons.">Draw 3, keep 1 ⓘ</h3>
+        <h3 className="text-sm font-bold text-amber-200" title="Draw 3, keep 1. Each room card is one build.">Draw 3, keep 1 ⓘ</h3>
+        <p className="text-[12px] text-slate-400 mt-1">Foundation and Grounds are the living academy and the grounds. Magic holds every school. A room card builds that room once.</p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {decks.map(d => {
-          const recentDraws = state.draftHistory[d.id] || 0;
-          const currentPrice = Math.round(d.basePrice * Math.pow(1.15, recentDraws));
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {DECK_LIST.map(d => {
+          const currentPrice = deckPrice(state, d.id);
           const canAfford = state.mana >= currentPrice;
 
           return (
-            <div key={d.id} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow">
+            <div key={d.id} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow" data-deck={d.id}>
               <div>
-                <h4 className="font-bold text-xs text-slate-100 mb-1">{d.name}</h4>
-                <div className="text-xs font-mono text-amber-300 mb-3" title="Price rises with recent draws and relaxes over 7 days.">
+                <h4 className="font-bold text-xs text-slate-100 mb-1">{d.name} deck</h4>
+                <div className="text-xs font-mono text-amber-300 mb-3" data-testid="deck-price" title="Each draw from this deck this term raises the price by 5%. Prices reset at the end of the term.">
                   Current Cost: <strong>{currentPrice} Mana</strong>
                 </div>
+                {d.id === 'magic' && (
+                  <p className="text-[11px] text-slate-400 mb-3 leading-relaxed" data-testid="magic-odds">{oddsLine}</p>
+                )}
               </div>
               <button
                 onClick={() => onDrawDeck(d.id)}

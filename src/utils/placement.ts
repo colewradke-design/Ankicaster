@@ -218,10 +218,27 @@ export function findAutoPlacement(
 
 export const REFUND_MATERIALS = ['timber', 'stone', 'glass', 'cloth'] as const;
 
-/** What placing `defId` actually charges (engine placeRoom charges mana + the four common materials). */
-export function placementCharge(defId: string): Required<NonNullable<PlacedRoom['spent']>> {
+/** Every material a room cost can list. Mana is not a build cost. */
+export const BUILD_MATERIALS = [
+  'timber', 'stone', 'glass', 'cloth', 'insight', 'herbs', 'radiance', 'umbra',
+  'reagents', 'crystal', 'heartwood', 'sunstone', 'void_pearl', 'ember_salt'
+] as const;
+
+/** What placing `defId` charges. Rooms cost materials only; mana is never charged. */
+export function placementCharge(defId: string): NonNullable<PlacedRoom['spent']> {
   const c = ROOM_DEFINITIONS[defId]?.cost || { mana: 0 };
-  return { mana: c.mana || 0, timber: c.timber || 0, stone: c.stone || 0, glass: c.glass || 0, cloth: c.cloth || 0 };
+  const out: NonNullable<PlacedRoom['spent']> = {
+    mana: 0,
+    timber: c.timber || 0,
+    stone: c.stone || 0,
+    glass: c.glass || 0,
+    cloth: c.cloth || 0
+  };
+  for (const k of BUILD_MATERIALS) {
+    const n = (c as unknown as Record<string, number | undefined>)[k] || 0;
+    if (n) (out as unknown as Record<string, number>)[k] = n;
+  }
+  return out;
 }
 
 /** Pre-built starter rooms (createNewAcademy ids 1-6) were never paid for. */
@@ -239,9 +256,11 @@ export function defaultSpent(room: PlacedRoom): NonNullable<PlacedRoom['spent']>
 export function demolishRefund(room: PlacedRoom) {
   const spent = room.spent || defaultSpent(room);
   const cancel = room.state === 'site' && (room.buildProgress || 0) === 0;
-  const out = { mana: cancel ? spent.mana : 0, timber: 0, stone: 0, glass: 0, cloth: 0, cancel };
-  for (const k of REFUND_MATERIALS) {
-    const paid = spent[k] || 0;
+  const out: { mana: number; timber: number; stone: number; glass: number; cloth: number; cancel: boolean } & Record<string, number | boolean> = {
+    mana: 0, timber: 0, stone: 0, glass: 0, cloth: 0, cancel
+  };
+  for (const k of BUILD_MATERIALS) {
+    const paid = (spent as unknown as Record<string, number | undefined>)[k] || 0;
     out[k] = cancel ? paid : Math.floor(paid * 0.5);
   }
   return out;

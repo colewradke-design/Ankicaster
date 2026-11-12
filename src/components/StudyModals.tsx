@@ -86,7 +86,7 @@ export const PonderOrbPicker: React.FC<{
                 key={sch}
                 data-school={sch}
                 className={`flex items-center gap-3 p-2.5 rounded-xl border ${founding === sch ? 'border-purple-500/60 bg-purple-950/30' : 'border-slate-800 bg-slate-950/50'}`}
-                title={o.currentLvl >= 6 ? `Passive buff: ${buffText(sch, o.currentLvl)}` : o.currentLvl >= 5 ? 'Classroom unlocked' : 'Level 5 unlocks its classroom'}
+                title={o.currentLvl >= 6 ? `Passive buff: ${buffText(sch, o.currentLvl)}` : o.currentLvl >= 5 ? 'You can enroll students in this school' : 'Level 5 lets you teach this school. Its rooms are found in the Magic deck.'}
               >
                 <SchoolGlyph school={sch} className="w-5 h-5" />
                 <div className="flex-1 min-w-0">

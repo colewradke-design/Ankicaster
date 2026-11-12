@@ -20,6 +20,7 @@ import { createInitialGameState } from './data/initialState';
 import { createNewAcademy } from './visual/onboarding/freshStart';
 import { CharacterCreationModal } from './visual/onboarding/CharacterCreationModal';
 import { AnkicasterEngine } from './utils/engine';
+import type { DraftDeckId } from './utils/decks';
 import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS } from './data/content';
 
 // Components
@@ -72,6 +73,7 @@ export default function App() {
   const [selectedRoom, setSelectedRoom] = useState<PlacedRoom | null>(null);
   const [isDraftModalOpen, setIsDraftModalOpen] = useState(false);
   const [draftChoices, setDraftChoices] = useState<DraftCard[]>([]);
+  const [draftTutorial, setDraftTutorial] = useState<string | undefined>();
   const [isDaySummaryOpen, setIsDaySummaryOpen] = useState(false);
   const [daySummaryItems, setDaySummaryItems] = useState<string[]>([]);
   const [activeEventModal, setActiveEventModal] = useState<SchoolEvent | null>(null);
@@ -637,13 +639,14 @@ export default function App() {
   };
 
   // Handler: Draw Draft Deck
-  const handleDrawDeck = (deck: 'foundation' | SchoolType) => {
+  const handleDrawDeck = (deck: DraftDeckId) => {
     const res = AnkicasterEngine.drawDraftCards(state, deck);
     if (res.error) {
       addToast(res.error, 'warning');
     } else {
       setState(res.state);
       setDraftChoices(res.cards);
+      setDraftTutorial(res.tutorial);
       setIsDraftModalOpen(true);
       playChime('review');
     }
@@ -957,6 +960,9 @@ export default function App() {
               <p className="text-xs text-slate-300">
                 Choose one card to keep. The other two return to the celestial archives.
               </p>
+              {draftTutorial && (
+                <p className="text-xs text-amber-100/90 mt-2" data-testid="draft-tutorial">{draftTutorial}</p>
+              )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

@@ -20,6 +20,7 @@ import { ROOM_DEFINITIONS } from '../data/content';
 import { AnkicasterEngine } from '../utils/engine';
 import { validatePlacement, roomLimitStatus, getGridSize, findAutoPlacement, PlacementCheck } from '../utils/placement';
 import { reviewsToGoText } from '../utils/construction';
+import { formatMaterialCost } from '../utils/resourceReport';
 
 /** Build a new room, or move an existing one, with the ghost placement tool. */
 export type PlacementMode = { kind: 'build'; defId: string } | { kind: 'move'; roomId: number };
@@ -402,7 +403,7 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
             <div className="min-w-0">
               <div className="font-bold text-amber-200">
                 {placement.kind === 'move' ? 'Moving' : 'Placing'} {def?.name}
-                {placement.kind === 'build' && def ? <span className="text-slate-400 font-normal"> · {def.cost.mana}m · {def.size.join('×')}</span> : null}
+                {placement.kind === 'build' && def ? <span className="text-slate-400 font-normal"> · {formatMaterialCost(def.cost)} · {def.size.join('×')}</span> : null}
               </div>
               <div className={ok ? (candidate?.check.warnings.length ? 'text-amber-300' : 'text-emerald-300') : 'text-rose-300'} data-testid="placement-status">
                 {ok ? '✓ ' : '✕ '}{msg}

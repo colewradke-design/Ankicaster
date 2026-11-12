@@ -67,22 +67,25 @@ test('UI-2: every screen is rendered by App (exhaustive switch) and the old tab 
   assert.ok(!/<nav[\s>]/.test(app), 'no tab <nav> left');
 });
 
-test('UI-3: fresh start: slim top bar has mana, day, Build, Academy, Settings; no resource strip', () => {
+test('UI-3: fresh start: slim top bar has mana, resources, day, Build, Academy, Settings', () => {
   const s = fresh();
   const html = renderToStaticMarkup(<TopBar state={s} onOpenScreen={noop} onOpenRoom={noop} />);
   assert.match(html, /data-testid="mana-chip"/);
+  assert.match(html, /data-testid="resource-strip"/);
+  assert.match(html, /data-resource="timber"/);
   assert.match(html, /data-testid="day-chip"/);
   assert.match(html, />Build</);
   assert.match(html, /Academy/);
   assert.match(html, /aria-label="Settings"/);
-  assert.ok(!/Insight|Timber|Renown|Codex/.test(html), 'resources/codex moved out of the top bar');
+  assert.ok(!/Renown|Codex/.test(html), 'renown and codex stay out of the top bar');
   assert.ok(!/hazard-chip/.test(html));
 });
 
 test('UI-4: fresh start: Academy menu lists only screens whose room is built', () => {
   const s = fresh();
   const menu = getAcademyMenuScreens(s);
-  for (const id of ['ponder', 'grimoire', 'admissions', 'draft', 'stores'] as ScreenId[]) assert.ok(menu.includes(id), id);
+  for (const id of ['ponder', 'grimoire', 'admissions', 'draft'] as ScreenId[]) assert.ok(menu.includes(id), id);
+  assert.ok(!menu.includes('stores'), 'stores waits for a Storage Vault');
   for (const id of ['students', 'faculty', 'alumni', 'bestiary', 'alchemy', 'rift', 'events'] as ScreenId[]) {
     assert.ok(!menu.includes(id), `${id} hidden at fresh start`);
   }
@@ -156,7 +159,7 @@ test('UI-6: room screens stay hidden until their room is BUILT (no data fallback
 
 test('UI-7: hazards stay reachable: top bar chip, Academy menu entry, room window dispel with engine cost', () => {
   const s0 = fresh();
-  const target = s0.rooms.find(r => r.defId === 'storage_vault')!;
+  const target = s0.rooms.find(r => r.defId === 'wizard_study')!;
   const hazard = { type: 'hex_fog', description: 'Fog', arrivedReviewIndex: 0 } as any;
   const s = { ...s0, rooms: s0.rooms.map(r => (r.id === target.id ? { ...r, hazard } : r)) };
   const bar = renderToStaticMarkup(<TopBar state={s} onOpenScreen={noop} onOpenRoom={noop} />);

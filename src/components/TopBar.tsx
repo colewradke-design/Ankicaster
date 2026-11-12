@@ -2,9 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * Slim Top Bar (UI declutter pass): mana, day/term, Veil, hazard alert, Build, Academy menu,
- * Settings. Resources moved to the Storage Vault's "Stores" screen; every former tab is
- * reached from a room window or from the Academy menu (see src/ui/screens.ts).
+ * Slim Top Bar: mana, resources, day/term, Veil, hazard alert, Build, Academy menu, Settings.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -17,6 +15,7 @@ import {
   ScreenId, SCREEN_DEFS, getAcademyMenuScreens, hazardRooms
 } from '../ui/screens';
 import { ScreenIcon } from './ScreenIcon';
+import { ResourceBar } from './ResourceBar';
 
 interface TopBarProps {
   state: FullGameState;
@@ -171,6 +170,8 @@ export const TopBar: React.FC<TopBarProps> = ({ state, onOpenScreen, onOpenRoom,
             <span className="text-[12px] text-rose-400 font-bold">-{Math.floor(state.manaDebt)}</span>
           )}
         </button>
+
+        <ResourceBar state={state} />
 
         <span
           className="flex items-center gap-1.5 text-slate-300 bg-slate-900/80 px-2.5 py-1 min-h-[32px] rounded-lg border border-slate-800 text-[13px]"

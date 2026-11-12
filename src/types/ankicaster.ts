@@ -117,6 +117,8 @@ export interface Character {
   // Card set ids
   studySetId?: number;
   careerSetIds: number[];
+  /** Hunger drifts toward this every bell. 100 seated, 50 standing, 25 no food. New characters start at 50. */
+  mealTarget?: number;
 }
 
 export interface RoomDefinition {
@@ -131,13 +133,16 @@ export interface RoomDefinition {
   /** Cannot be demolished (GDD 16.1: Entrance Hall, Wizard's Study). */
   noDemolish?: boolean;
   floorRule?: 'floor_0' | 'floors_0_1' | 'highest_floor';
+  /** Found by building, not by a school or a wizard level. Those never gate a room. */
   unlock: {
     type: 'start' | 'standard' | 'draft' | 'grant' | 'rift';
-    school?: SchoolType;
-    level?: number;
     rarity?: string;
   };
   cost: {
+    /**
+     * Not spent when the room is placed. Building costs the materials below only.
+     * Renovating still scales from this number, so it stays as the old build-mana figure.
+     */
     mana: number;
     timber?: number;
     stone?: number;
@@ -203,10 +208,28 @@ export interface PlacedRoom {
     glassworksActive?: boolean;
   };
   furniture: PlacedFurniture[];
-  /** What the player actually paid when placing this room (refund bounds; GDD 15.4). */
-  spent?: { mana: number; timber?: number; stone?: number; glass?: number; cloth?: number };
+  /** What the player actually paid when placing this room (refund bounds; GDD 15.4). Mana is always 0. */
+  spent?: {
+    mana: number;
+    timber?: number;
+    stone?: number;
+    glass?: number;
+    cloth?: number;
+    insight?: number;
+    herbs?: number;
+    radiance?: number;
+    umbra?: number;
+    reagents?: number;
+    crystal?: number;
+    heartwood?: number;
+    sunstone?: number;
+    void_pearl?: number;
+    ember_salt?: number;
+  };
   /** Renown granted by renovations of this room (taken back on demolish so loops gain nothing). */
   renownGranted?: number;
+  /** True when placing this room spent a room plan. Demolish gives the plan back. */
+  fromPlan?: boolean;
   hazard?: {
     type: 'spill_of_night' | 'hex_fog' | 'echo_loop' | 'cold_snap' | 'breach';
     name: string;
@@ -308,11 +331,13 @@ export interface PotionRecipe {
 
 export interface DraftCard {
   id: string;
-  deck: 'foundation' | SchoolType;
+  deck: 'foundation' | 'grounds' | 'magic';
   rarity: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
   name: string;
   type: 'blueprint' | 'furniture_pattern' | 'lure' | 'grimoire' | 'seed' | 'recipe_page' | 'boon' | 'deed';
   targetId?: string;
+  /** Magic-deck cards belong to a school so the draw can weight them. */
+  school?: SchoolType;
   description: string;
 }
 
@@ -503,10 +528,25 @@ export interface FullGameState {
   expeditions: ActiveExpedition[];
   potions: PotionRecipe[];
   hand: DraftCard[];
+  /** Unused room cards. Each count is one build of that room. */
+  roomPlans?: Record<string, number>;
   knownPlans: string[];
   knownPatterns: string[];
-  draftHistory: Record<string, number>; // deck -> count in last 7 days
+  draftHistory: Record<string, number>; // deck -> draws this term (price growth)
   draftPity: Record<string, number>; // deck -> draws without rare
+  /** Draws from one deck in a row that offered no room card. */
+  roomlessStreak?: Record<string, number>;
+  /** How many Foundation / Grounds draws this game has made (founding guarantees). Not reset at term end. */
+  foundingDraws?: { foundation: number; grounds: number };
+  /** Draws ever made. The first one shows the deck tutorial. */
+  draftsCompleted?: number;
+  /** The Rift Gate plan is granted once, at 3 masters. */
+  riftGateGranted?: boolean;
+  /** Display-only. Last 5 bells of production, and the last 20 one-off changes per resource. */
+  resourceLedger?: {
+    bells: Array<{ entries: Array<{ resource: string; amount: number; source: string }> }>;
+    recent: Record<string, Array<{ amount: number; label: string }>>;
+  };
   activeEvents: Array<{ eventId: string; dayArrived: number }>;
   notices: Array<{ id: string; time: number; text: string; type: string }>;
   achievements: string[];

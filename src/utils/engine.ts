@@ -38,6 +38,7 @@ import {
   defaultSpent,
   demolishRefund,
   REFUND_MATERIALS,
+  BUILD_MATERIALS,
   PlacementCheck
 } from './placement';
 import { normalizeAppearance } from './appearance';
@@ -58,6 +59,15 @@ import {
   getWizardLevelRequirements
 } from '../utils/formulas';
 import { computeReachability, ReachabilityInfo } from './reachability';
+import {
+  DraftDeckId, DRAFT_TUTORIAL, dealDraft, deckPrice, isRoomUnlocked, isStructure, planHint
+} from './decks';
+import {
+  BellNote, commitBell, ensureLedger, glassworksConversion, logResourceChange, logResourceDiff,
+  resourceSnapshot, weavingOutput
+} from './resourceReport';
+
+export { isRoomUnlocked, planHint as blueprintLockHint, isStructure };
 
 /**
  * Anki 4:00 AM Rollover Boundary calculation
@@ -74,25 +84,29 @@ export const HAZARD_DISPEL_MANA_COST = 30;
 
 const STAFF_CAREERS = new Set<string>(['teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist', 'builder']);
 
-/** start/standard rooms are always buildable. draft, rift and grant rooms need a blueprint in knownPlans. */
-export function isRoomUnlocked(state: { knownPlans?: string[] }, defId: string): boolean {
-  const unlock = ROOM_DEFINITIONS[defId]?.unlock;
-  if (!unlock) return false;
-  if (unlock.type === 'start' || unlock.type === 'standard') return true;
-  if (unlock.type === 'draft' || unlock.type === 'rift' || unlock.type === 'grant') {
-    return !!state.knownPlans?.includes(defId);
-  }
-  return false;
-}
-
-export function blueprintLockHint(defId: string): string {
-  const t = ROOM_DEFINITIONS[defId]?.unlock?.type;
-  if (t === 'rift') return 'Found on Rift expeditions';
-  if (t === 'grant') return 'Earned from a milestone';
-  return 'Find this blueprint in the card draws';
-}
-
 export class AnkicasterEngine {
+  /** One-off resource changes (builds, draws, events). Display only. */
+  static logResourceChange(state: FullGameState, resource: string, amount: number, label: string): void {
+    logResourceChange(state, resource, amount, label);
+  }
+
+  /** Grant the Rift Gate plan once the Academy has 3 masters, active or alumni. */
+  static grantRiftGate(state: FullGameState): void {
+    if (state.riftGateGranted) return;
+    const masters = state.characters.filter(c => (c.masteredSchools?.length || 0) > 0).length + (state.alumniGallery?.length || 0);
+    if (masters < 3) return;
+    state.roomPlans = state.roomPlans || {};
+    state.roomPlans.rift_gate = (state.roomPlans.rift_gate || 0) + 1;
+    state.riftGateGranted = true;
+    state.notices = state.notices || [];
+    state.notices.push({
+      id: `rift-plan-${Date.now()}`,
+      time: Date.now(),
+      type: 'blueprint',
+      text: 'Three masters now serve the Academy. A Rift Gate plan has been granted.'
+    });
+  }
+
   /**
    * Process one honest Anki review (BR-01, BR-03, BR-06, BR-07, Section 38.12)
    * Optimized: Performs localized shallow copying instead of structuredClone on entire state
@@ -589,6 +603,13 @@ export class AnkicasterEngine {
    */
   static ringBell(state: FullGameState, notifications: string[]) {
     const reach = computeReachability(state.rooms);
+    const bellNotes: BellNote[] = [];
+    const bag = state.resources as unknown as Record<string, number>;
+    const note = (resource: string, before: number, source: string) => {
+      const amount = (bag[resource] || 0) - before;
+      if (amount) bellNotes.push({ resource, amount, source });
+    };
+    const roomName = (defId: string) => ROOM_DEFINITIONS[defId]?.name || defId;
 
     // 1. Classroom Essence Production (influenced by room hazards)
     for (const char of state.characters) {
@@ -607,13 +628,15 @@ export class AnkicasterEngine {
 
           const moraleFactor = 0.6 + (0.6 * char.morale) / 100;
           const yieldAmount = 0.2 * moraleFactor * yieldMult;
-
-          switch (char.currentSchool) {
-            case 'arcane': state.resources.insight += yieldAmount; break;
-            case 'nature': state.resources.herbs += yieldAmount; break;
-            case 'light': state.resources.radiance += yieldAmount; break;
-            case 'shadow': state.resources.umbra += yieldAmount; break;
-            case 'alchemy': state.resources.reagents += yieldAmount; break;
+          const essence = char.currentSchool === 'arcane' ? 'insight'
+            : char.currentSchool === 'nature' ? 'herbs'
+            : char.currentSchool === 'light' ? 'radiance'
+            : char.currentSchool === 'shadow' ? 'umbra'
+            : char.currentSchool === 'alchemy' ? 'reagents' : '';
+          if (essence) {
+            const before = bag[essence] || 0;
+            bag[essence] = before + yieldAmount;
+            note(essence, before, roomName(room.defId));
           }
         }
       }
@@ -637,22 +660,69 @@ export class AnkicasterEngine {
       }
 
       if (room.defId === 'vegetable_patch') {
-        state.resources.provisions = Math.min(500, state.resources.provisions + 1.0 * harvestMult);
-        state.resources.greens = Math.min(500, state.resources.greens + 0.2 * harvestMult);
+        const src = roomName(room.defId);
+        let before = bag.provisions || 0;
+        bag.provisions = Math.min(500, before + 1.0 * harvestMult);
+        note('provisions', before, src);
+        before = bag.greens || 0;
+        bag.greens = Math.min(500, before + 0.2 * harvestMult);
+        note('greens', before, src);
       } else if (room.defId === 'herb_garden') {
-        state.resources.herbs += 0.6 * harvestMult;
+        const before = bag.herbs || 0;
+        bag.herbs = before + 0.6 * harvestMult;
+        note('herbs', before, roomName(room.defId));
       } else if (room.defId === 'woodlot') {
-        state.resources.timber = Math.min(500, state.resources.timber + 2 * harvestMult);
-        if (Math.random() < 0.02) state.resources.heartwood += 1;
+        const src = roomName(room.defId);
+        let before = bag.timber || 0;
+        bag.timber = Math.min(500, before + 2 * harvestMult);
+        note('timber', before, src);
+        if (Math.random() < 0.02) {
+          before = bag.heartwood || 0;
+          bag.heartwood = before + 1;
+          note('heartwood', before, src);
+        }
       } else if (room.defId === 'quarry') {
-        state.resources.stone = Math.min(500, state.resources.stone + 1 * harvestMult);
-        if (Math.random() < 0.04) state.resources.crystal += 1;
+        const src = roomName(room.defId);
+        let before = bag.stone || 0;
+        bag.stone = Math.min(500, before + 1 * harvestMult);
+        note('stone', before, src);
+        if (Math.random() < 0.04) {
+          before = bag.crystal || 0;
+          bag.crystal = before + 1;
+          note('crystal', before, src);
+        }
       } else if (room.defId === 'greenhouse') {
-        state.resources.provisions = Math.min(500, state.resources.provisions + 1.5 * harvestMult * greenhouseMult);
-        state.resources.herbs += 0.5 * harvestMult * greenhouseMult;
+        const src = roomName(room.defId);
+        let before = bag.provisions || 0;
+        bag.provisions = Math.min(500, before + 1.5 * harvestMult * greenhouseMult);
+        note('provisions', before, src);
+        before = bag.herbs || 0;
+        bag.herbs = before + 0.5 * harvestMult * greenhouseMult;
+        note('herbs', before, src);
       } else if (room.defId === 'orchard') {
-        state.resources.provisions = Math.min(500, state.resources.provisions + 0.8 * harvestMult);
-        state.resources.nectar = Math.min(500, state.resources.nectar + 0.3 * harvestMult);
+        const src = roomName(room.defId);
+        let before = bag.provisions || 0;
+        bag.provisions = Math.min(500, before + 0.8 * harvestMult);
+        note('provisions', before, src);
+        before = bag.nectar || 0;
+        bag.nectar = Math.min(500, before + 0.3 * harvestMult);
+        note('nectar', before, src);
+      } else if (room.defId === 'glassworks') {
+        const conv = glassworksConversion(bag.stone || 0, harvestMult, bag.glass || 0);
+        if (conv.stoneUsed > 0) {
+          const beforeS = bag.stone || 0;
+          bag.stone = beforeS - conv.stoneUsed;
+          note('stone', beforeS, 'Glassworks');
+          const beforeG = bag.glass || 0;
+          bag.glass = Math.min(500, beforeG + conv.glassGain);
+          note('glass', beforeG, 'Glassworks');
+        }
+      } else if (room.defId === 'weaving_room') {
+        const moonsheep = state.creatures.some(c => c.status === 'tamed' && c.defId === 'moonsheep');
+        const gain = weavingOutput(harvestMult, moonsheep);
+        const before = bag.cloth || 0;
+        bag.cloth = Math.min(500, before + gain);
+        note('cloth', before, moonsheep ? 'Weaving Room (Moonsheep)' : 'Weaving Room');
       }
     }
 
@@ -662,20 +732,40 @@ export class AnkicasterEngine {
 
     for (const c of state.creatures) {
       if (c.status !== 'tamed') continue;
-      if (c.defId === 'thistle_hare') state.resources.herbs += 0.1;
-      else if (c.defId === 'mistfeather_owl') state.resources.insight += 0.1;
-      else if (c.defId === 'night_lynx') state.resources.umbra += 0.1;
-      else if (c.defId === 'ember_phoenix') state.resources.radiance += 0.2;
-      else if (c.defId === 'alembic_salamander') state.resources.reagents += 0.1;
+      const bump = (resource: string, amount: number) => {
+        const before = bag[resource] || 0;
+        bag[resource] = before + amount;
+        note(resource, before, CREATURE_DEFINITIONS[c.defId]?.name || c.defId);
+      };
+      if (c.defId === 'thistle_hare') bump('herbs', 0.1);
+      else if (c.defId === 'mistfeather_owl') bump('insight', 0.1);
+      else if (c.defId === 'night_lynx') bump('umbra', 0.1);
+      else if (c.defId === 'ember_phoenix') bump('radiance', 0.2);
+      else if (c.defId === 'alembic_salamander') bump('reagents', 0.1);
       else if (c.defId === 'lantern_moth') lanternMoth = true;
     }
 
-    // 4. Needs (GDD 14.4). Hunger decays 4 every bell; meal targets are applied on the 5th bell below.
+    // 4. Meal targets are stored on the meal bell, then hunger drifts toward them every bell (GDD 14.4).
+    if (state.bellIndex % 5 === 0 && state.characters.length > 0) {
+      const plan = AnkicasterEngine.mealPlan(state, reach);
+      const served = plan.seated + plan.standing;
+      const before = bag.provisions || 0;
+      bag.provisions = before - served;
+      note('provisions', before, `Meals (${served} people)`);
+      state.characters.forEach((char, i) => {
+        char.mealTarget = i < plan.seated ? 100 : i < served ? 50 : 25;
+      });
+      if (plan.unfed > 0) {
+        notifications.push(`⚠️ Food shortage! ${plan.unfed} students went hungry.`);
+      }
+    }
+
+    // 5. Needs. Hunger uses the stored meal target (50 until the first meal).
     const headcount = state.characters.length;
     const leisureTarget = 30 + 70 * Math.min(1, headcount > 0 ? AnkicasterEngine.leisureCapacity(state, reach) / headcount : 0);
     const compTarget = AnkicasterEngine.composureTarget(state);
     for (const char of state.characters) {
-      char.needs.hunger = Math.min(100, Math.max(0, char.needs.hunger - 4));
+      char.needs.hunger = AnkicasterEngine.approachNeed(char.needs.hunger, char.mealTarget ?? 50, 4);
       char.needs.rest = AnkicasterEngine.approachNeed(char.needs.rest, AnkicasterEngine.restTarget(state, char, reach), 3);
       char.needs.leisure = AnkicasterEngine.approachNeed(char.needs.leisure, leisureTarget, 3);
       char.needs.composure = AnkicasterEngine.approachNeed(char.needs.composure, compTarget, 1);
@@ -706,7 +796,12 @@ export class AnkicasterEngine {
       // Student Misbehavior driven by low morale (<40) or low composure (<40)
       if (char.status === 'student' && (char.morale < 40 || char.needs.composure < 40) && Math.random() < 0.15) {
         const incidents = [
-          { text: `${char.name} skipped study hall to raid honey rolls from the refectory! (-5 Provisions, +10 Rest)`, apply: () => { state.resources.provisions = Math.max(0, state.resources.provisions - 5); char.needs.rest = Math.min(100, char.needs.rest + 10); } },
+          { text: `${char.name} skipped study hall to raid honey rolls from the refectory! (-5 Provisions, +10 Rest)`, apply: () => {
+            const before = bag.provisions || 0;
+            bag.provisions = Math.max(0, before - 5);
+            note('provisions', before, 'Misbehavior');
+            char.needs.rest = Math.min(100, char.needs.rest + 10);
+          } },
           { text: `${char.name} accidentally set off a sulfur spark in the corridor! (Cleanliness -10)`, apply: () => { for (const r of state.rooms) r.cleanliness = Math.max(0, r.cleanliness - 2); } },
           { text: `${char.name} fell soundly asleep with their quill in the inkpot! (+15 Rest, Composure -5)`, apply: () => { char.needs.rest = Math.min(100, char.needs.rest + 15); char.needs.composure = Math.max(0, char.needs.composure - 5); } },
           { text: `${char.name} got into an enchanted chalk duel in the dormitory cloisters!`, apply: () => { char.needs.leisure = Math.min(100, char.needs.leisure + 15); char.needs.composure = Math.max(0, char.needs.composure - 5); } }
@@ -723,21 +818,6 @@ export class AnkicasterEngine {
       }
     }
 
-    // 5. Mealtime every 5th bell. Two sittings (seats × 2 × efficiency). No Refectory means everyone with food eats standing.
-    // A Refectory never feeds fewer people than having none: anyone with food but no seat still eats, at target 50.
-    if (state.bellIndex % 5 === 0 && state.characters.length > 0) {
-      const plan = AnkicasterEngine.mealPlan(state, reach);
-      const served = plan.seated + plan.standing;
-      state.resources.provisions -= served;
-      state.characters.forEach((char, i) => {
-        const target = i < plan.seated ? 100 : i < served ? 50 : 25;
-        char.needs.hunger = AnkicasterEngine.approachNeed(char.needs.hunger, target, 0);
-      });
-      if (plan.unfed > 0) {
-        notifications.push(`⚠️ Food shortage! ${plan.unfed} students went hungry.`);
-      }
-    }
-
     // 6. Cleanliness & Mopslime
     let cleanBonus = 0;
     for (const c of state.creatures) {
@@ -746,6 +826,7 @@ export class AnkicasterEngine {
     for (const r of state.rooms) {
       r.cleanliness = Math.min(100, r.cleanliness - 0.5 + cleanBonus);
     }
+    commitBell(state, bellNotes);
   }
 
   /**
@@ -853,6 +934,7 @@ export class AnkicasterEngine {
                 char.status = 'resident';
                 next.renown += 10;
                 summary.push(`🎓 ${char.name} completed real-time mastery countdown and graduated as Master of ${sch.toUpperCase()}!`);
+                AnkicasterEngine.grantRiftGate(next);
               }
             }
           }
@@ -992,6 +1074,7 @@ export class AnkicasterEngine {
                 type: 'mastery',
                 text: `${char.name} graduated as Master of ${sch.toUpperCase()} (+10 Renown)!`
               });
+              AnkicasterEngine.grantRiftGate(next);
             }
           }
         }
@@ -1065,6 +1148,7 @@ export class AnkicasterEngine {
 
     next.renown += 10;
     next.characters.splice(charIndex, 1);
+    AnkicasterEngine.grantRiftGate(next);
 
     next.notices.push({
       id: `retire-${Date.now()}`,
@@ -1120,6 +1204,7 @@ export class AnkicasterEngine {
         next.renown += 10;
         next.characters.splice(i, 1);
         retired.push(char);
+        AnkicasterEngine.grantRiftGate(next);
 
         const msg = `🏛️ ${char.name} has automatically retired to the Alumni Gallery (+10 Renown) after all cards reached ${retirementThreshold}d retirement age!`;
         if (summary) summary.push(msg);
@@ -1218,9 +1303,9 @@ export class AnkicasterEngine {
    * Commence Next Term (GDD Item 41 / BR-30, BR-34, F36)
    * Resets students, faculty, and ALL creatures (next.creatures = []).
    * Frees card sets so real cards become unlinked.
-   * Resets Renown, Known Plans, patterns, draft history and research ranks.
+   * Resets Renown and furniture patterns. Room plans stay (found rooms are permanent).
    * Resets buildings and materials back to starting stock, sets unspent mana to 0.
-   * Preserved across terms: wizard levels, spellbooks, alumni gallery, and achievements.
+   * Preserved across terms: wizard levels, spellbooks, alumni gallery, achievements, and room plans.
    * Default term length: 120 days.
    */
   static startNextTerm(
@@ -1264,16 +1349,18 @@ export class AnkicasterEngine {
     next.rooms = fresh.rooms;
     next.resources = fresh.resources;
 
-    // 6. Reset unspent mana, renown, plans, patterns, and draft history (GDD Item 41)
+    // 6. Reset unspent mana, renown, patterns, and this term's draw prices. Room plans stay.
     next.mana = 0;
     next.bankAtLastReview = 0;
     next.manaDebt = 0;
     next.renown = 0;
-    next.knownPlans = ['vegetable_patch', 'woodlot', 'quarry', 'dormitory', 'refectory', 'common_room'];
     next.knownPatterns = ['simple_cot', 'long_table', 'hearth', 'couch', 'potted_fern', 'bookshelf'];
     next.draftHistory = {};
     next.draftPity = {};
+    next.roomlessStreak = {};
     next.hand = fresh.hand;
+    next.resourceLedger = { bells: [], recent: {} };
+    AnkicasterEngine.grantRiftGate(next);
 
     // 7. Clear expeditions & active events
     next.expeditions = [];
@@ -1578,10 +1665,12 @@ export class AnkicasterEngine {
 
     // Consume costs
     next.mana -= dest.cost;
+    const beforeRes = resourceSnapshot(next);
     next.resources.provisions -= provisionsNeeded;
     for (const s of suppliesTaken) {
       if (next.resources.potions[s]) next.resources.potions[s] = Math.max(0, next.resources.potions[s] - 1);
     }
+    logResourceDiff(next, beforeRes, `Expedition to ${dest.name}`);
 
     // Seeded outcome rolled at launch (Section 27.6)
     const roll = Math.floor(Math.random() * 100) + 1;
@@ -1624,6 +1713,7 @@ export class AnkicasterEngine {
    * Resolving expedition when review countdown finishes (All 5 Destinations Covered)
    */
   static resolveExpedition(state: FullGameState, exp: ActiveExpedition, notifications: string[]) {
+    const beforeRes = resourceSnapshot(state);
     const dest = RIFT_DESTINATIONS[exp.destinationId];
     exp.state = 'returned';
 
@@ -1729,6 +1819,7 @@ export class AnkicasterEngine {
     }
 
     exp.lootSummary = loot;
+    logResourceDiff(state, beforeRes, `Expedition to ${dest.name}`);
   }
 
   /**
@@ -1747,7 +1838,7 @@ export class AnkicasterEngine {
     const def = ROOM_DEFINITIONS[defId];
     if (!def) return { state, success: false, error: 'Unknown room definition.' };
     if (!isRoomUnlocked(state, defId)) {
-      return { state, success: false, error: `Blueprint locked. ${blueprintLockHint(defId)}.` };
+      return { state, success: false, error: `No plan. ${planHint(defId)}.` };
     }
     const placeArea = area ?? def.area;
 
@@ -1755,14 +1846,13 @@ export class AnkicasterEngine {
     const limit = roomLimitStatus(state.rooms, defId);
     if (limit.capped) return { state, success: false, error: `${limit.reason}.` };
 
-    // Check cost
-    if (state.mana < (def.cost.mana || 0)) {
-      return { state, success: false, error: `Need ${def.cost.mana} Mana.` };
-    }
-    for (const k of REFUND_MATERIALS) {
-      const need = def.cost[k] || 0;
-      if (need > state.resources[k]) {
-        return { state, success: false, error: `Need ${need} ${k[0].toUpperCase()}${k.slice(1)} (have ${state.resources[k]}).` };
+    // Materials only. Mana is not a build cost.
+    const charge = placementCharge(defId);
+    for (const k of BUILD_MATERIALS) {
+      const need = (charge as unknown as Record<string, number>)[k] || 0;
+      const have = (state.resources as unknown as Record<string, number>)[k] || 0;
+      if (need > have) {
+        return { state, success: false, error: `Need ${need} ${k} (have ${have}).` };
       }
     }
 
@@ -1787,11 +1877,12 @@ export class AnkicasterEngine {
     }
 
     const next = structuredClone(state);
-    const charge = placementCharge(defId);
-
-    // Deduct cost
-    next.mana -= charge.mana;
-    for (const k of REFUND_MATERIALS) next.resources[k] -= charge[k];
+    const beforeRes = resourceSnapshot(next);
+    for (const k of BUILD_MATERIALS) {
+      const n = (charge as unknown as Record<string, number>)[k] || 0;
+      if (n) (next.resources as unknown as Record<string, number>)[k] -= n;
+    }
+    logResourceDiff(next, beforeRes, `Built ${def.name}`);
 
     const roomId = Math.max(Date.now(), ...next.rooms.map(r => r.id + 1));
     const buildReq = def.buildReviews;
@@ -1813,11 +1904,17 @@ export class AnkicasterEngine {
       cleanliness: 100,
       settings: {},
       furniture: [],
-      spent: charge
+      spent: charge,
+      fromPlan: !isStructure(defId) && defId !== 'entrance_hall' && defId !== 'wizard_study'
     };
 
     // Auto-place required starter furniture if built instantly (sites finish with it empty, GDD 15.4)
     if (isInstant && def.requiredFurniture) fillRequiredFixtures(newRoom, allFurnitureIds(next.rooms));
+
+    if (newRoom.fromPlan) {
+      next.roomPlans = { ...(next.roomPlans || {}) };
+      next.roomPlans[defId] = (next.roomPlans[defId] || 0) - 1;
+    }
 
     next.rooms.push(newRoom);
     AnkicasterEngine.syncWorkplaces(next);
@@ -1954,8 +2051,13 @@ export class AnkicasterEngine {
     const def = ROOM_DEFINITIONS[room.defId];
     const refund = demolishRefund(room);
 
+    const beforeRes = resourceSnapshot(next);
     next.mana += refund.mana;
-    for (const k of REFUND_MATERIALS) next.resources[k] += refund[k];
+    for (const k of BUILD_MATERIALS) {
+      const n = (refund as unknown as Record<string, number>)[k] || 0;
+      if (n) (next.resources as unknown as Record<string, number>)[k] = ((next.resources as unknown as Record<string, number>)[k] || 0) + n;
+    }
+    logResourceDiff(next, beforeRes, `${refund.cancel ? 'Cancelled' : 'Demolished'} ${def?.name || 'room'}`);
 
     // Furniture -> inventory
     next.furnitureInventory = { ...(next.furnitureInventory || {}) };
@@ -1966,6 +2068,11 @@ export class AnkicasterEngine {
 
     // Undo renovation renown
     next.renown = Math.max(0, next.renown - (room.renownGranted || 0));
+
+    if (room.fromPlan) {
+      next.roomPlans = { ...(next.roomPlans || {}) };
+      next.roomPlans[room.defId] = (next.roomPlans[room.defId] || 0) + 1;
+    }
 
     next.rooms = next.rooms.filter(r => r.id !== roomId);
 
@@ -1987,7 +2094,7 @@ export class AnkicasterEngine {
     }
     AnkicasterEngine.syncWorkplaces(next);
 
-    const parts = REFUND_MATERIALS.filter(k => refund[k] > 0).map(k => `${refund[k]} ${k}`);
+    const parts = BUILD_MATERIALS.filter(k => ((refund as unknown as Record<string, number>)[k] || 0) > 0).map(k => `${(refund as unknown as Record<string, number>)[k]} ${k}`);
     if (refund.mana > 0) parts.unshift(`${refund.mana} mana`);
     next.notices.push({
       id: `demolish-${roomId}-${Date.now()}`,
@@ -2083,6 +2190,7 @@ export class AnkicasterEngine {
     if (slot.filled) return { state, success: false, error: `${slot.name} is already installed.` };
     const opt = requiredInstallOption(slot.role);
     const next = structuredClone(state);
+    const beforeRes = resourceSnapshot(next);
     const r = next.rooms.find(x => x.id === roomId)!;
     const stored = next.furnitureInventory?.[opt.defId] || 0;
     if (!opt.free && stored > 0) {
@@ -2107,6 +2215,7 @@ export class AnkicasterEngine {
       text: `Installed ${slot.name} in ${rDef?.name || 'room'} (${opt.free ? 'free' : costText(opt.cost)}).${left ? ` ${left} required fixture${left === 1 ? '' : 's'} still missing.` : ' The room is now open.'}`
     });
     AnkicasterEngine.syncWorkplaces(next);
+    logResourceDiff(next, beforeRes, `Installed ${slot.name}`);
     return { state: next, success: true };
   }
 
@@ -2152,6 +2261,7 @@ export class AnkicasterEngine {
     furnitureDefId: string
   ): { state: FullGameState; success: boolean; error?: string } {
     const next = structuredClone(state);
+    const beforeRes = resourceSnapshot(next);
     const room = next.rooms.find(r => r.id === roomId);
     if (!room) return { state, success: false, error: 'Room not found.' };
 
@@ -2206,6 +2316,7 @@ export class AnkicasterEngine {
       type: 'furniture',
       text: `Installed ${fDef.name} into ${roomDef?.name}.`
     });
+    logResourceDiff(next, beforeRes, `Installed ${fDef.name}`);
 
     return { state: next, success: true };
   }
@@ -2507,9 +2618,11 @@ export class AnkicasterEngine {
     }
 
     // Deduct food
+    const beforeRes = resourceSnapshot(next);
     for (const [food, amount] of Object.entries(def.diet)) {
       (next.resources as any)[food] -= amount;
     }
+    logResourceDiff(next, beforeRes, `Fed ${creature.nickname}`);
 
     creature.hungry = false;
     creature.bondProgress += 10;
@@ -2626,6 +2739,7 @@ export class AnkicasterEngine {
     spellId: string
   ): { state: FullGameState; success: boolean; error?: string; notice?: string } {
     const next = structuredClone(state);
+    const beforeRes = resourceSnapshot(next);
     const spell = SPELL_DEFINITIONS[spellId];
     if (!spell) return { state, success: false, error: 'Unknown spell.' };
 
@@ -2699,6 +2813,7 @@ export class AnkicasterEngine {
       type: 'spell',
       text: notice
     });
+    logResourceDiff(next, beforeRes, spell.name || 'Spell');
 
     return { state: next, success: true, notice };
   }
@@ -2732,67 +2847,37 @@ export class AnkicasterEngine {
   }
 
   /**
-   * Draw 3 cards from a Draft Deck (BR-26, Section 26)
+   * Draw 3 cards, keep 1 (BR-26). Foundation 50, Grounds 50, Magic 100.
+   * Each draw this term raises that deck's price by 5%.
    */
   static drawDraftCards(
     state: FullGameState,
-    deck: 'foundation' | SchoolType
-  ): { state: FullGameState; cards: DraftCard[]; cost: number; error?: string } {
+    deck: DraftDeckId,
+    rng: () => number = Math.random
+  ): { state: FullGameState; cards: DraftCard[]; cost: number; error?: string; tutorial?: string } {
     const next = structuredClone(state);
-    const basePrice = deck === 'foundation' ? 120 : 150;
-    const recent = next.draftHistory[deck] || 0;
-    const cost = Math.round(basePrice * Math.pow(1.15, recent));
+    const cost = deckPrice(next, deck);
 
     if (next.mana < cost) {
-      return { state, cards: [], cost, error: `Need ${cost} Mana to draft from the ${deck.toUpperCase()} deck.` };
+      return { state, cards: [], cost, error: `Need ${cost} Mana to draft from the ${deck} deck.` };
     }
 
+    const tutorial = (next.draftsCompleted || 0) === 0 ? DRAFT_TUTORIAL : undefined;
     next.mana -= cost;
-    next.draftHistory[deck] = recent + 1;
+    next.draftHistory = { ...(next.draftHistory || {}) };
+    next.draftHistory[deck] = (next.draftHistory[deck] || 0) + 1;
 
-    // Card pool definitions for deck
-    const pool: Record<string, DraftCard[]> = {
-      foundation: [
-        { id: `c-fd-1`, deck: 'foundation', rarity: 'common', name: 'Refectory Plan', type: 'blueprint', targetId: 'refectory', description: 'Unlock blueprint for Refectory (communal dining and Leisure).' },
-        { id: `c-fd-2`, deck: 'foundation', rarity: 'common', name: 'Bunk Bed Pattern', type: 'furniture_pattern', targetId: 'bunk_bed', description: 'Allows crafting space-saving Bunk Beds in Dormitories.' },
-        { id: `c-fd-3`, deck: 'foundation', rarity: 'uncommon', name: 'Infirmary Plan', type: 'blueprint', targetId: 'infirmary', description: 'Blueprint for dedicated Infirmary to treat Rift injuries.' },
-        { id: `c-fd-4`, deck: 'foundation', rarity: 'common', name: 'Supply Shipment Boon', type: 'boon', description: 'Instant crate of materials: +45 Timber, +30 Stone, +10 Glass.' },
-        { id: `c-fd-5`, deck: 'foundation', rarity: 'uncommon', name: 'Grand Dormitory Plan', type: 'blueprint', targetId: 'grand_dormitory', description: 'Expansive student sleeping quarters with 8 bed capacity.' }
-      ],
-      arcane: [
-        { id: `c-ar-1`, deck: 'arcane', rarity: 'common', name: 'Classroom of Arcane', type: 'blueprint', targetId: 'class_arcane', description: 'Blueprint for Arcane Lecture Hall (+5 student capacity).' },
-        { id: `c-ar-2`, deck: 'arcane', rarity: 'uncommon', name: 'Observatory Plan', type: 'blueprint', targetId: 'observatory', description: 'Rooftop observatory yielding high Insight and celestial fortune.' },
-        { id: `c-ar-3`, deck: 'arcane', rarity: 'rare', name: 'Astral Influx Boon', type: 'boon', description: 'Instant burst of knowledge: +35 Insight and +150 Mana.' },
-        { id: `c-ar-4`, deck: 'arcane', rarity: 'epic', name: 'Scriptorium Plan', type: 'blueprint', targetId: 'scriptorium', description: 'Architectural blueprint for an academy scriptorium to craft scrolls and study records.' }
-      ],
-      nature: [
-        { id: `c-na-1`, deck: 'nature', rarity: 'common', name: 'Classroom of Nature', type: 'blueprint', targetId: 'class_nature', description: 'Blueprint for Nature Conservatory classroom.' },
-        { id: `c-na-2`, deck: 'nature', rarity: 'uncommon', name: 'Greenhouse Plan', type: 'blueprint', targetId: 'greenhouse', description: 'Enclosed botanical greenhouse for year-round exotic herbs.' },
-        { id: `c-na-3`, deck: 'nature', rarity: 'rare', name: 'Bramblefox Lure', type: 'lure', targetId: 'bramblefox', description: 'Attracts an inquisitive Azure Bramblefox to your academy meadow habitat.' },
-        { id: `c-na-4`, deck: 'nature', rarity: 'uncommon', name: 'Luminescent Seed Packet', type: 'seed', targetId: 'moonglow_fern', description: 'Unlock Moonglow Fern crop in sacred plots.' }
-      ],
-      light: [
-        { id: `c-li-1`, deck: 'light', rarity: 'common', name: 'Classroom of Light', type: 'blueprint', targetId: 'class_light', description: 'Blueprint for luminous Hall of Radiance.' },
-        { id: `c-li-2`, deck: 'light', rarity: 'uncommon', name: 'Sanctuary Plan', type: 'blueprint', targetId: 'sanctuary', description: 'Peaceful sanctuary restoring composure and morale.' },
-        { id: `c-li-3`, deck: 'light', rarity: 'rare', name: 'Dawn Blessing Boon', type: 'boon', description: 'Radiant surge: +30 Radiance and fully cures one injured resident.' }
-      ],
-      shadow: [
-        { id: `c-sh-1`, deck: 'shadow', rarity: 'common', name: 'Classroom of Shadow', type: 'blueprint', targetId: 'class_shadow', description: 'Blueprint for Shadow Crypt study hall.' },
-        { id: `c-sh-2`, deck: 'shadow', rarity: 'uncommon', name: 'Ward Spire Plan', type: 'blueprint', targetId: 'ward_spire', description: 'Reinforces the Veil and reduces daily mana upkeep by 15%.' },
-        { id: `c-sh-3`, deck: 'shadow', rarity: 'rare', name: 'Veil Tether Boon', type: 'boon', description: 'Instant +35% Veil Strength and +25 Umbra.' }
-      ],
-      alchemy: [
-        { id: `c-al-1`, deck: 'alchemy', rarity: 'common', name: 'Classroom of Alchemy', type: 'blueprint', targetId: 'class_alchemy', description: 'Blueprint for Alchemy Lecture & Bench.' },
-        { id: `c-al-2`, deck: 'alchemy', rarity: 'uncommon', name: 'Apothecary Plan', type: 'blueprint', targetId: 'apothecary', description: 'Workstation for brewing restorative elixirs.' },
-        { id: `c-al-3`, deck: 'alchemy', rarity: 'rare', name: 'Elixir of Clarity Recipe', type: 'recipe_page', targetId: 'elixir_clarity', description: 'Recipe for clarity draft that speeds card review progress.' }
-      ]
-    };
+    const cards = dealDraft(next, deck, rng);
+    const hadRoom = cards.some(c => c.type === 'blueprint');
+    next.roomlessStreak = { ...(next.roomlessStreak || {}) };
+    next.roomlessStreak[deck] = hadRoom ? 0 : (next.roomlessStreak[deck] || 0) + 1;
 
-    const choices = pool[deck] || pool.foundation;
-    const shuffled = [...choices].sort(() => 0.5 - Math.random());
-    const drawn = shuffled.slice(0, 3);
+    next.foundingDraws = { foundation: 0, grounds: 0, ...(next.foundingDraws || {}) };
+    if (deck === 'foundation') next.foundingDraws.foundation += 1;
+    if (deck === 'grounds') next.foundingDraws.grounds += 1;
+    next.draftsCompleted = (next.draftsCompleted || 0) + 1;
 
-    return { state: next, cards: drawn, cost };
+    return { state: next, cards, cost, tutorial };
   }
 
   /**
@@ -2803,11 +2888,13 @@ export class AnkicasterEngine {
     card: DraftCard
   ): { state: FullGameState; message: string } {
     const next = structuredClone(state);
+    const beforeRes = resourceSnapshot(next);
     let message = `Selected ${card.name}!`;
 
     if (card.type === 'blueprint' && card.targetId) {
-      if (!next.knownPlans.includes(card.targetId)) next.knownPlans.push(card.targetId);
-      message = `Unlocked blueprint for ${card.name}! Available now in Build Menu.`;
+      next.roomPlans = { ...(next.roomPlans || {}) };
+      next.roomPlans[card.targetId] = (next.roomPlans[card.targetId] || 0) + 1;
+      message = `Kept a ${ROOM_DEFINITIONS[card.targetId]?.name || card.name} plan. It can be built once.`;
     } else if (card.type === 'furniture_pattern' && card.targetId) {
       if (!next.knownPatterns.includes(card.targetId)) next.knownPatterns.push(card.targetId);
       message = `Learned furniture pattern for ${card.name}!`;
@@ -2852,6 +2939,7 @@ export class AnkicasterEngine {
       type: 'draft',
       text: message
     });
+    logResourceDiff(next, beforeRes, card.name);
 
     return { state: next, message };
   }
@@ -2865,6 +2953,7 @@ export class AnkicasterEngine {
     action: string
   ): { state: FullGameState; summary: string } {
     const next = structuredClone(state);
+    const beforeRes = resourceSnapshot(next);
     next.activeEvents = next.activeEvents.filter(e => e.eventId !== eventId);
 
     let summary = 'Event resolved.';
@@ -3311,6 +3400,7 @@ export class AnkicasterEngine {
       type: 'event',
       text: summary
     });
+    logResourceDiff(next, beforeRes, 'Gate event');
 
     return { state: next, summary };
   }

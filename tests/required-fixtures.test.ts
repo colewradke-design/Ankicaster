@@ -183,8 +183,9 @@ test('RF-4 instant build and the fresh start keep auto-filled fixtures', () => {
   assert.equal(isRoomUnfinished(nr), false);
   assert.ok(calculateRoomEfficiency(nr) > 0);
 
-  // A non-instant room placed now is a site (fixtures come later)
-  const site = AnkicasterEngine.placeRoom(placed.state, 'library');
+  // A non-instant room placed now is a site (fixtures come later). It needs a kept plan.
+  const withPlan = { ...placed.state, roomPlans: { ...(placed.state.roomPlans || {}), library: 1 } };
+  const site = AnkicasterEngine.placeRoom(withPlan, 'library');
   assert.ok(site.success, site.error);
   assert.deepEqual(site.state.rooms.find(r => r.id === site.roomId)!.furniture, []);
 });

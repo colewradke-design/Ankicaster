@@ -13,11 +13,18 @@ import { normalizeAppearance, DEFAULT_APPEARANCE } from '../src/utils/appearance
 import { Choreographer } from '../src/visual/agents/Choreographer.ts';
 import { NavGraph } from '../src/visual/layout/navGraph.ts';
 import { FullGameState, PlacedRoom } from '../src/types/ankicaster.ts';
+import { ROOM_DEFINITIONS } from '../src/data/content.ts';
 
 function rich(): FullGameState {
   const s = createNewAcademy({ robeColor: '#9E2A3A', hat: 'crown' });
   s.mana = 100000;
-  Object.assign(s.resources, { timber: 5000, stone: 5000, glass: 5000, cloth: 5000 });
+  Object.assign(s.resources, {
+    timber: 5000, stone: 5000, glass: 5000, cloth: 5000,
+    insight: 5000, herbs: 5000, radiance: 5000, umbra: 5000, reagents: 5000,
+    crystal: 5000, heartwood: 5000
+  });
+  s.roomPlans = {};
+  for (const id of Object.keys(ROOM_DEFINITIONS)) s.roomPlans[id] = 40;
   return s;
 }
 
@@ -46,8 +53,6 @@ test('B1 uniqueness: a second Wizard\'s Study or Entrance Hall is rejected by th
     assert.equal(manual.state, s, 'state untouched');
   }
   // Rift Gate: one per Academy (GDD 16.9 duplicates level it up), sites count
-  // Rift Gate is a grant blueprint: the test holds the plan, then checks the one-per-Academy limit.
-  s.knownPlans.push('rift_gate');
   const r1 = AnkicasterEngine.placeRoom(s, 'rift_gate');
   assert.equal(r1.success, true);
   assert.equal(AnkicasterEngine.placeRoom(r1.state, 'rift_gate').success, false);
@@ -127,9 +132,9 @@ test('B4 auto placement prefers a connected free spot and reports no space', () 
   const made = { ...room, state: 'built' as const };
   const reach = computeReachability(res.state.rooms.map(r => (r.id === room.id ? made : r)));
   assert.equal(reach.get(room.id)?.reachable, true, 'auto spot is connected');
-  // Grounds: four free plots at the start, then no space
+  // Grounds: six plots, one already a Vegetable Patch, so five quarries fit and the sixth does not
   let cur = s;
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 5; i++) {
     const g = AnkicasterEngine.placeRoom(cur, 'quarry');
     assert.equal(g.success, true, g.error);
     cur = g.state;
@@ -217,8 +222,8 @@ test('B6 demolish refund bounds: cancel = 100%, demolish = 50% materials and 0 m
   assert.equal(dem.state.rooms.some(x => x.id === id), false);
 
   // Pre-built starter rooms were never paid for: no refund
-  const vault = s.rooms.find(x => x.defId === 'storage_vault')!;
-  const dv = AnkicasterEngine.demolishRoom(s, vault.id);
+  const patch = s.rooms.find(x => x.defId === 'vegetable_patch')!;
+  const dv = AnkicasterEngine.demolishRoom(s, patch.id);
   assert.equal(dv.success, true, dv.error);
   assert.equal(total(dv.state), total(s));
 });
@@ -272,14 +277,31 @@ test('B8 demolish/move guards: last Entrance Hall/Study, hazards, support and na
 
   // Hazard in the room blocks demolish and move (GDD 15.4)
   const hz = structuredClone(s);
+  hz.rooms.push({
+    id: 4, defId: 'storage_vault', x: 1, y: 0, w: 1, h: 1, area: 'castle', level: 1, state: 'built',
+    buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {}, furniture: []
+  });
+  hz.rooms.push({
+    id: 3, defId: 'spiral_stair', x: 2, y: 0, w: 1, h: 1, area: 'castle', level: 1, state: 'built',
+    buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {}, furniture: []
+  });
   const vault = hz.rooms.find(r => r.defId === 'storage_vault')!;
   vault.hazard = { type: 'hex_fog', name: 'Hex Fog', description: '', effect: '' };
   assert.match(AnkicasterEngine.demolishRoom(hz, vault.id).error || '', /hazard|Hex Fog/i);
   assert.equal(AnkicasterEngine.moveRoom(hz, vault.id, 0, 0).success, false);
 
-  // The stair links the vault to the hall: removing it would cut the vault off
-  const stair = s.rooms.find(r => r.defId === 'spiral_stair')!;
-  const cut = AnkicasterEngine.demolishRoom(s, stair.id);
+  // A stair between the hall and a vault: removing it would cut the vault off
+  const linked = structuredClone(s);
+  linked.rooms.push({
+    id: 4, defId: 'storage_vault', x: 1, y: 0, w: 1, h: 1, area: 'castle', level: 1, state: 'built',
+    buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {}, furniture: []
+  });
+  linked.rooms.push({
+    id: 3, defId: 'spiral_stair', x: 2, y: 0, w: 1, h: 1, area: 'castle', level: 1, state: 'built',
+    buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {}, furniture: []
+  });
+  const stair = linked.rooms.find(r => r.defId === 'spiral_stair')!;
+  const cut = AnkicasterEngine.demolishRoom(linked, stair.id);
   assert.equal(cut.success, false);
   assert.match(cut.error || '', /cut .* off/);
 

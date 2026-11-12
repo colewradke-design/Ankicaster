@@ -10,7 +10,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { BuildMenuPanel } from '../src/components/GamePanels.tsx';
 import { RoomWindow } from '../src/components/RoomWindow.tsx';
 import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS } from '../src/data/content.ts';
 import { Character, FullGameState, PlacedFurniture, PlacedRoom } from '../src/types/ankicaster.ts';
@@ -247,38 +246,5 @@ test('a Kitchen with no adjacent Refectory works at 50%, not clamped to 80%', ()
   assert.ok(beside > 0 && alone > 0);
   assert.ok(Math.abs(alone - beside * 0.5) < 0.001, `alone ${alone} should be half of beside ${beside}`);
   assert.ok(alone < beside * 0.8, 'the 50% penalty is not clamped up to 80%');
-});
-
-test('a draft room stays locked until its blueprint is drafted, and an old save keeps one it already has', () => {
-  const state = rich(createNewAcademy());
-  const blocked = AnkicasterEngine.placeRoom(state, 'faculty_lounge');
-  assert.equal(blocked.success, false);
-  assert.match(blocked.error || '', /Blueprint locked/);
-  assert.match(blocked.error || '', /card draws/);
-  const drafted = AnkicasterEngine.chooseDraftCard(state, {
-    id: 'lounge-plan',
-    deck: 'foundation',
-    rarity: 'common',
-    name: 'Faculty Lounge Plan',
-    type: 'blueprint',
-    targetId: 'faculty_lounge',
-    description: 'plan'
-  });
-  assert.ok(drafted.state.knownPlans.includes('faculty_lounge'));
-  const placed = AnkicasterEngine.placeRoom(drafted.state, 'faculty_lounge');
-  assert.equal(placed.success, true, placed.error);
-
-  const old = rich(createNewAcademy());
-  old.knownPlans = old.knownPlans.filter(id => id !== 'faculty_lounge');
-  delete (old as { knownPlansVersion?: number }).knownPlansVersion;
-  place(old, 'faculty_lounge', 77, 6, 0, []);
-  const loaded = AnkicasterEngine.normalizeLoadedState(old);
-  assert.ok(loaded.knownPlans.includes('faculty_lounge'), 'an existing draft room is remembered');
-  const another = AnkicasterEngine.placeRoom(loaded, 'faculty_lounge');
-  assert.equal(another.success, true, another.error);
-
-  const menu = renderToStaticMarkup(<BuildMenuPanel state={createNewAcademy()} onPlaceRoom={() => {}} />);
-  assert.ok(menu.includes('Find this blueprint in the card draws'));
-  assert.ok(menu.includes('Earned from a milestone'), 'grant rooms say where the plan comes from');
 });
 

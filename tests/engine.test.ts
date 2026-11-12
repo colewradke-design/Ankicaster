@@ -400,10 +400,11 @@ test('4. Creature Buffs: mopslime cleans, thistle_hare produces herbs, healing_f
   state.characters = [stagStudent];
   AnkicasterEngine.ringBell(state, []);
 
-  // Needs follow GDD 14.4. No bed (rest target 25), no leisure rooms (target 30),
-  // composure target 60 + charm/10 + 2 per tamed creature (4 here). Hunger only decays 4.
-  // calculateMorale of those needs rounds to 71; Glimmerhorn Stag adds +3.
-  assert.equal(stagStudent.morale, 74, 'Glimmerhorn Stag should give +3 morale on top of recalculated needs morale');
+  // Needs follow GDD 14.4, with hunger drifting toward the last meal.
+  // No Refectory: the meal target is standing (50), so hunger goes 80 + (50-80)*0.25 - 4 = 68.5.
+  // No bed (rest target 25), no leisure rooms (target 30), composure 60 + 2 per tamed creature (4 here).
+  // calculateMorale of those needs rounds to 69; Glimmerhorn Stag adds +3.
+  assert.equal(stagStudent.morale, 72, 'Glimmerhorn Stag should give +3 morale on top of recalculated needs morale');
 });
 
 test('Automated check: every creature id referenced in engine.ts exists in content.ts', () => {
@@ -504,7 +505,7 @@ test('7. Timed Terms reset: students, faculty and creatures reset; card links fr
   state.wizard.levels.arcane = 7;
   state.wizard.levels.nature = 6;
   state.wizard.knownSpells = ['foresight'];
-  state.knownPlans.push('scriptorium');
+  state.roomPlans = { ...(state.roomPlans || {}), library: 2, scriptorium: 1 };
   state.knownPatterns.push('canopy_bed');
 
   // Add characters, card sets, and extra creatures
@@ -557,7 +558,8 @@ test('7. Timed Terms reset: students, faculty and creatures reset; card links fr
   assert.equal(res.state.creatures.length, 0, 'All creatures must be removed on term reset (Item 41)');
   assert.equal(res.state.mana, 0, 'Unspent mana must reset to 0 (Rule BR-34)');
   assert.equal(res.state.renown, 0, 'Renown must reset to 0 (Item 41)');
-  assert.deepEqual(res.state.knownPlans, ['vegetable_patch', 'woodlot', 'quarry', 'dormitory', 'refectory', 'common_room'], 'Known plans reset to starting set');
+  assert.equal(res.state.roomPlans?.library, 2, 'Found room plans survive the term');
+  assert.equal(res.state.roomPlans?.scriptorium, 1, 'Found room plans survive the term');
   assert.deepEqual(res.state.knownPatterns, ['simple_cot', 'long_table', 'hearth', 'couch', 'potted_fern', 'bookshelf'], 'Known patterns reset to starting set');
   assert.deepEqual(res.state.draftHistory, {}, 'Draft history reset');
   assert.equal(res.state.settings.termLengthDays, 120, 'Default term length is 120 days');
@@ -793,7 +795,7 @@ test('computeReachability: unlinked upper room shows as unreachable', () => {
   assert.equal(reachability.get(888)?.reachable, false, 'Floor 1 room without stair connection must be unreachable');
 });
 
-test('Section 10.4: Fresh start creates clean slate with 0 mana, 0 renown, level 0 wizard, and 6 rooms', () => {
+test('Section 10.4: Fresh start creates clean slate with 0 mana, 0 renown, level 0 wizard, and 3 rooms', () => {
   const fresh = createNewAcademy({ name: 'Rowan', title: 'Mage', foundingSchool: 'arcane' });
 
   assert.equal(fresh.mana, 0);
@@ -802,7 +804,7 @@ test('Section 10.4: Fresh start creates clean slate with 0 mana, 0 renown, level
   assert.equal(fresh.wizard.levels.arcane, 0);
   assert.equal(fresh.wizard.levels.nature, 0);
   assert.equal(fresh.wizard.knownSpells.length, 0);
-  assert.equal(fresh.rooms.length, 6);
+  assert.deepEqual(fresh.rooms.map(r => r.defId).sort(), ['entrance_hall', 'vegetable_patch', 'wizard_study']);
   assert.equal(fresh.creatures.length, 0);
   assert.equal(fresh.characters.length, 0);
   assert.equal(fresh.achievements.length, 0);
