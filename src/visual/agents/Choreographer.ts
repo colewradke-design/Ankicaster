@@ -22,7 +22,7 @@ import { NavGraph, NavNode } from '../layout/navGraph';
 import { roomToWorldBox } from '../layout/gridToWorld';
 import { ReachabilityInfo } from '../../utils/reachability';
 import { normalizeAppearance } from '../../utils/appearance';
-import { DOLL_ANIMS, MOVE_SPEED, healingPlaceFor, DollAnim } from './doll';
+import { MOVE_SPEED, healingPlaceFor, DollAnim, dollFrame } from './doll';
 
 export type AgentAnimation = DollAnim;
 
@@ -40,6 +40,9 @@ export interface VisualAgent {
   anim: AgentAnimation;
   animFrame: number;
   animTimer: number;
+  /** Clock time when the current animation started. The frame is derived from this, not from tick count. */
+  animBaseMs?: number;
+  animPlaying?: string;
   activity: 'class' | 'work' | 'meal' | 'sleep' | 'free_time';
   currentRoomId?: number;
   targetRoomId?: number;
@@ -68,6 +71,9 @@ export class Choreographer {
   agents = new Map<string, VisualAgent>();
   schedulePhase: 'class_work' | 'free_time' | 'meal' | 'sleep' = 'class_work';
   cycleTimeMs: number = 0; // 0..600,000 (10 min)
+  /** Elapsed animation clock. Advances with real time, never with the number of callbacks. */
+  clockMs = 0;
+  private lastReal = -1;
   mealWindowRemainingMs: number = 0;
   lastMealBellIndex: number = -1;
   lastMealTriggerTimeMs: number = -300000;
@@ -343,11 +349,28 @@ export class Choreographer {
     this.mealWindowRemainingMs = 90000; // 90 seconds meal window
   }
 
-  tick(deltaMs: number, state: FullGameState, reduceMotion: boolean) {
-    this.cycleTimeMs = (this.cycleTimeMs + deltaMs) % 600000; // 10 min loop
+  /**
+   * Turn a callback into a real-time gap.
+   * Many callbacks that share one `now` (stacked tickers, a burst of state updates)
+   * add nothing. A tab that was hidden is clamped so the bob cannot fast-forward.
+   */
+  consumeTime(deltaMs: number, nowMs?: number): number {
+    let gap: number;
+    if (nowMs == null) gap = deltaMs;
+    else if (this.lastReal < 0) gap = Number.isFinite(deltaMs) ? deltaMs : 0;
+    else gap = nowMs - this.lastReal;
+    if (nowMs != null) this.lastReal = nowMs;
+    if (!Number.isFinite(gap) || gap < 0) gap = 0;
+    return Math.min(250, gap);
+  }
+
+  tick(deltaMs: number, state: FullGameState, reduceMotion: boolean, nowMs?: number) {
+    const gap = this.consumeTime(deltaMs, nowMs);
+    this.clockMs += gap;
+    this.cycleTimeMs = (this.cycleTimeMs + gap) % 600000; // 10 min loop
 
     if (this.mealWindowRemainingMs > 0) {
-      this.mealWindowRemainingMs -= deltaMs;
+      this.mealWindowRemainingMs -= gap;
     }
 
     // Determine lively schedule phase
@@ -384,7 +407,7 @@ export class Choreographer {
 
     // Update each agent
     for (const agent of this.agents.values()) {
-      this.updateAgent(agent, deltaMs, state, reduceMotion);
+      this.updateAgent(agent, gap, state, reduceMotion);
     }
   }
 
@@ -416,19 +439,11 @@ export class Choreographer {
           agent.anim = 'idle';
         }
       }
+      agent.animFrame = 0;
       return;
     }
 
-    // Normal motion animation frame progression
-    agent.animTimer += deltaMs;
-    const spec = DOLL_ANIMS[agent.anim] || DOLL_ANIMS.idle;
-    const frameMs = 1000 / spec.fps;
-    if (agent.animTimer >= frameMs) {
-      agent.animTimer -= frameMs;
-      agent.animFrame = (agent.animFrame + 1) % spec.frames;
-    }
-
-    // Wizard stays near Study
+    // Wizard stays near Study. The frame comes from elapsed time, after the anim is chosen.
     if (agent.isWizard) {
       const studyRoom = state.rooms.find(r => r.defId === 'wizard_study' && r.state === 'built');
       if (studyRoom) {
@@ -437,6 +452,7 @@ export class Choreographer {
         agent.targetY = box.floorLineY;
       }
       agent.anim = 'idle';
+      this.applyFrame(agent);
       return;
     }
 
@@ -494,6 +510,18 @@ export class Choreographer {
         agent.x += (dx / dist) * Math.min(speed, Math.abs(dx));
       }
     }
+    this.applyFrame(agent);
+  }
+
+  /** Frame = floor(elapsed / frameMs) % frames. Changing anim restarts the phase; extra ticks do not. */
+  private applyFrame(agent: VisualAgent) {
+    if (agent.animPlaying !== agent.anim) {
+      agent.animPlaying = agent.anim;
+      agent.animBaseMs = this.clockMs;
+    }
+    const elapsed = this.clockMs - (agent.animBaseMs ?? this.clockMs);
+    agent.animFrame = dollFrame(agent.anim, elapsed);
+    agent.animTimer = elapsed;
   }
 
   private setArrivedAnim(agent: VisualAgent) {

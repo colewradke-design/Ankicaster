@@ -23,6 +23,7 @@ interface TopBarProps {
   onOpenRoom: (roomId: number) => void;
   /** Optional dev-only controls (never shown in Anki). */
   devControls?: React.ReactNode;
+  forceAcademy?: boolean;
 }
 
 export function termLabel(state: FullGameState, now: number = Date.now()): string | null {
@@ -38,12 +39,14 @@ export const AcademyMenu: React.FC<{
   onOpenScreen: (id: ScreenId) => void;
   onOpenRoom: (roomId: number) => void;
   defaultOpen?: boolean;
-}> = ({ state, onOpenScreen, onOpenRoom, defaultOpen = false }) => {
-  const [open, setOpen] = useState(defaultOpen);
+  forceOpen?: boolean;
+}> = ({ state, onOpenScreen, onOpenRoom, defaultOpen = false, forceOpen = false }) => {
+  const [open, setOpen] = useState(defaultOpen || forceOpen);
+  const shown = forceOpen || open;
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!shown || forceOpen) return;
     const onDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
@@ -54,7 +57,7 @@ export const AcademyMenu: React.FC<{
       window.removeEventListener('mousedown', onDown);
       window.removeEventListener('keydown', onKey);
     };
-  }, [open]);
+  }, [shown, forceOpen]);
 
   const roomScreens = getAcademyMenuScreens(state);
   const general: ScreenId[] = ['reviewer', 'journal', 'codex', 'settings'];
@@ -77,13 +80,13 @@ export const AcademyMenu: React.FC<{
   );
 
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative" ref={ref} data-tour="academy-menu">
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={() => { if (!forceOpen) setOpen(o => !o); }}
         aria-haspopup="menu"
-        aria-expanded={open}
+        aria-expanded={shown}
         className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[32px] rounded-lg border text-[13px] font-bold transition ${
-          open ? 'bg-amber-500/20 border-amber-500/50 text-amber-200' : 'border-slate-700 text-slate-200 hover:bg-slate-800'
+          shown ? 'bg-amber-500/20 border-amber-500/50 text-amber-200' : 'border-slate-700 text-slate-200 hover:bg-slate-800'
         }`}
       >
         <Castle className="w-4 h-4 text-amber-400" />
@@ -91,10 +94,11 @@ export const AcademyMenu: React.FC<{
         <ChevronDown className="w-3.5 h-3.5 opacity-70" />
       </button>
 
-      {open && (
+      {shown && (
         <div
           role="menu"
           aria-label="Academy menu"
+          data-tour="academy-panel"
           className="absolute right-0 mt-2 w-64 max-h-[75vh] overflow-y-auto bg-slate-900 border border-amber-900/50 rounded-xl shadow-2xl p-1.5 z-50"
         >
           {hazards.length > 0 && (
@@ -138,7 +142,7 @@ export const AcademyMenu: React.FC<{
   );
 };
 
-export const TopBar: React.FC<TopBarProps> = ({ state, onOpenScreen, onOpenRoom, devControls }) => {
+export const TopBar: React.FC<TopBarProps> = ({ state, onOpenScreen, onOpenRoom, devControls, forceAcademy }) => {
   const { mana, veil } = state;
 
   const veilColor =
@@ -214,7 +218,7 @@ export const TopBar: React.FC<TopBarProps> = ({ state, onOpenScreen, onOpenRoom,
           <Hammer className="w-4 h-4" />
           Build
         </button>
-        <AcademyMenu state={state} onOpenScreen={onOpenScreen} onOpenRoom={onOpenRoom} />
+        <AcademyMenu state={state} onOpenScreen={onOpenScreen} onOpenRoom={onOpenRoom} forceOpen={forceAcademy} />
         <button
           onClick={() => onOpenScreen('settings')}
           className="p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center text-slate-300 hover:text-slate-100 hover:bg-slate-800 rounded-lg border border-slate-700 transition"

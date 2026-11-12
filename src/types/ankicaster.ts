@@ -497,6 +497,15 @@ export interface GameSettings {
   devMode?: boolean;
 }
 
+export interface TutorialProgress {
+  /** founding = Founding Day, tour = the guided steps, goal = the first-goal banner, done = finished or skipped. */
+  phase: 'founding' | 'tour' | 'goal' | 'done';
+  /** Index into the guided steps. Saved so a reload resumes here. */
+  step: number;
+  /** Sub-step inside the Study window tour. */
+  part: number;
+}
+
 export interface FullGameState {
   day: number;
   reviewIndex: number;
@@ -578,4 +587,6 @@ export interface FullGameState {
   staffingVersion?: number;
   /** One-time load migration: rooms already built or started stay in knownPlans. */
   knownPlansVersion?: number;
+  /** Guided tutorial. Missing on old saves means already done. */
+  tutorial?: TutorialProgress;
 }

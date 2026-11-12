@@ -33,6 +33,14 @@ export const DOLL_ANIMS = {
 
 export type DollAnim = keyof typeof DOLL_ANIMS;
 
+/** Frame index from elapsed real time. Extra ticks do not advance it. 2–8 fps, never review-scaled. */
+export function dollFrame(anim: DollAnim | string, elapsedMs: number): number {
+  const spec = DOLL_ANIMS[(DOLL_ANIMS[anim as DollAnim] ? anim : 'idle') as DollAnim];
+  const frameMs = 1000 / spec.fps;
+  if (!(frameMs > 0)) return 0;
+  return Math.floor(Math.max(0, elapsedMs) / frameMs) % spec.frames;
+}
+
 /** Art px per second. Fixed. Never a function of review rate (Addendum 6.4). */
 export const MOVE_SPEED: Record<string, number> = { walk: 28, limp: 16, carry: 24, climb: 24 };
 
@@ -257,23 +265,56 @@ function num(hex: string, fb = 0x888888): number {
   return n & 0xffffff;
 }
 
+/** Head radius in art px. The head's bottom row sits on the neck (1px overlap, no gap). */
+export const HEAD_R = 5;
+
+/**
+ * Per-body neck and head, as y offsets from the feet (negative is up).
+ * Tall (shape 4) has a longer torso; students sit a little shorter.
+ * Head, hair, face and hat all use `head`. The head bottom (head + HEAD_R) meets `neck`.
+ */
+export function dollAnchors(role: DollRole, bodyShape: number, bob = 0, seated = false): {
+  width: number;
+  hip: number;
+  neck: number;
+  head: number;
+  torso: number;
+} {
+  const shape = (bodyShape === 1 || bodyShape === 2 || bodyShape === 3 || bodyShape === 4 ? bodyShape : 2) as 1 | 2 | 3 | 4;
+  const specs = {
+    1: { width: 6, hipUp: 8, torso: 6 },
+    2: { width: 8, hipUp: 9, torso: 7 },
+    3: { width: 11, hipUp: 8, torso: 7 },
+    4: { width: 7, hipUp: 12, torso: 9 }
+  } as const;
+  const base = specs[shape];
+  const roleUp = role === 'wizard' ? 2 : role === 'student' ? -2 : 0;
+  const hipUp = Math.max(5, base.hipUp + roleUp);
+  const sit = seated ? 3 : 0;
+  const hip = -hipUp + bob + sit;
+  const neck = hip - base.torso;
+  const head = neck - (HEAD_R - 1);
+  return { width: base.width, hip, neck, head, torso: base.torso };
+}
+
 /** Draw one character. Returns the mark that was painted (never a missing texture). */
-export function drawCharacter(g: Painter, look: DollLook, pose: DollPose): { mark: DollLook['mark'] } {
+export function drawCharacter(g: Painter, look: DollLook, pose: DollPose): { mark: DollLook['mark']; anchors: { neckY: number; headY: number; headBottom: number } } {
   const anim = (DOLL_ANIMS[pose.anim] ? pose.anim : 'idle') as DollAnim;
   const p = poseOf(anim, pose.frame);
   const sign = pose.facing === 'L' ? -1 : 1;
   const x = pose.x;
   const y = pose.y;
+  const a = dollAnchors(look.role, look.bodyShape, p.bob, p.seated);
+  const anchors = { neckY: y + a.neck, headY: y + a.head, headBottom: y + a.head + HEAD_R };
   if (p.sleep) {
     drawSleep(g, look, x, y);
-    return { mark: look.mark };
+    return { mark: look.mark, anchors };
   }
-  const tall = (look.role === 'wizard' ? 2 : look.role === 'student' ? -2 : 0) + (look.bodyShape === 4 ? 2 : 0);
-  const width = [6, 8, 11, 7][look.bodyShape - 1] || 8;
+  const width = a.width;
   const footY = y;
-  const bob = p.bob;
-  const headY = footY - 20 - tall + bob + (p.seated ? 4 : 0);
-  const hip = footY - 8 + bob;
+  const headY = anchors.headY;
+  const hip = y + a.hip;
+  const neckY = anchors.neckY;
   const skin = num(look.skin, 0xf6d7c3);
   const hair = num(look.hairColor, 0x4a2e1e);
   const robe = num(look.robeColor, 0x4e8b3a);
@@ -300,8 +341,8 @@ export function drawCharacter(g: Painter, look: DollLook, pose: DollPose): { mar
     g.rect(x - 3, footY - 3, 3, 1.5).fill({ color: 0xf6f1e8 });
   }
 
-  // 5. Body
-  g.rect(x - width / 2, hip - 6, width, 7).fill({ color: skin });
+  // 5. Body. The neck row is the top of this rect; the head bottom overlaps it.
+  g.rect(x - width / 2, neckY, width, a.torso + 1).fill({ color: skin });
 
   // Robe length tells the roles apart: short (knee), long (floor), wizard (floor + cape), tunic (hip)
   const hem = look.role === 'student' ? footY - 7 : look.role === 'sabbatical' ? footY - 11 : footY - 3;
@@ -349,14 +390,14 @@ export function drawCharacter(g: Painter, look: DollLook, pose: DollPose): { mar
     const px = x - (Math.min(5, look.mastered.length) * 4) / 2 + i * 4;
     g.rect(px, footY + 2, 3, 3).fill({ color: num(SCHOOL_HEX[sch] || '#DDB843', 0xddb843) });
   });
-  return { mark: look.mark };
+  return { mark: look.mark, anchors };
 }
 
 function drawHead(g: Painter, face: string, x: number, y: number, skin: number) {
   if (face === 'square') g.rect(x - 5, y - 5, 10, 10).fill({ color: skin });
   else if (face === 'oval') g.ellipse(x, y, 4, 6).fill({ color: skin });
   else if (face === 'heart') {
-    g.circle(x, y - 1, 5).fill({ color: skin });
+    g.circle(x, y, 5).fill({ color: skin });
     g.poly([x - 4, y, x + 4, y, x, y + 6]).fill({ color: skin });
   } else g.circle(x, y, 5).fill({ color: skin });
 }
@@ -514,45 +555,73 @@ function drawSleep(g: Painter, look: DollLook, x: number, y: number) {
   else if (look.mark === 'stole') g.rect(x - 1, y - 6, 4, 1.2).fill({ color: 0xf6f1e8 });
 }
 
-/** 64×64 portrait: idle head-and-shoulders crop scaled ×4, school-coloured round frame. */
+/** 64×64 portrait: 16×16 head-and-shoulders crop, nearest-neighbour ×4. Face is ~60% of the frame. */
 export const PORTRAIT_PX = 64;
+export const PORTRAIT_SCALE = 4;
+export const PORTRAIT_SRC = 16;
 
-export function drawPortrait(g: Painter, look: DollLook): void {
+/** Solid school colour, slightly darkened, filling the round frame. */
+export function portraitBackgroundColor(look: DollLook): number {
   const frame = num(SCHOOL_HEX[look.school || ''] || look.robeColor, 0x6b4fbb);
-  g.circle(32, 32, 30).fill({ color: darken(frame, 0.45) });
-  g.circle(32, 32, 27).fill({ color: frame });
-  g.circle(32, 32, 24).fill({ color: 0x1b1822 });
-  // Head and shoulders of the idle frame, drawn at ×4 inside the frame.
-  const bake = appearanceToLayers({
-    isWizard: look.role === 'wizard',
-    status: look.role === 'student' ? 'student' : look.role === 'resident' ? 'resident' : look.role === 'faculty' || look.role === 'sabbatical' || look.role === 'adventurer' ? 'faculty' : 'student',
-    career: look.role === 'adventurer' ? 'adventurer' : look.role === 'faculty' ? (look.career || 'teacher') : undefined,
-    careerState: look.role === 'sabbatical' ? 'sabbatical' : undefined,
-    currentSchool: look.school,
-    masteredSchools: look.role === 'resident' ? ['nature'] : look.mastered,
-    appearance: {
-      skin: look.skin, hair: look.hair, hairColor: look.hairColor, robeColor: look.robeColor,
-      hat: look.hat, eyes: look.eyes, face: look.face, shoes: look.shoes, staff: look.staff, bodyShape: look.bodyShape
-    },
-    anim: 'idle'
-  });
-  // Scale by drawing the bust with enlarged parts centred in the circle.
-  drawBust(g, bake.role === look.role ? bake : { ...bake, role: look.role, mark: look.mark }, 32, 40);
+  return darken(frame, 0.82);
 }
 
-function drawBust(g: Painter, look: DollLook, x: number, y: number) {
+/** Where the face sits in the 64×64 frame. The crop follows the per-body head anchor, so every body centres. */
+export function portraitLayout(look: DollLook): { cx: number; cy: number; faceDiameter: number; headOffset: number } {
+  const a = dollAnchors(look.role, look.bodyShape);
+  return { cx: PORTRAIT_PX / 2, cy: PORTRAIT_PX / 2, faceDiameter: HEAD_R * 2 * PORTRAIT_SCALE, headOffset: a.head };
+}
+
+function zoomAbout(g: Painter, ox: number, oy: number, destX: number, destY: number, s: number): Painter {
+  const X = (x: number) => destX + (x - ox) * s;
+  const Y = (y: number) => destY + (y - oy) * s;
+  const self: Painter = {
+    rect(x, y, w, h) { g.rect(X(x), Y(y), w * s, h * s); return self; },
+    circle(x, y, r) { g.circle(X(x), Y(y), Math.abs(r) * s); return self; },
+    ellipse(x, y, rx, ry) { g.ellipse(X(x), Y(y), Math.abs(rx) * s, Math.abs(ry) * s); return self; },
+    poly(pts) {
+      const o: number[] = [];
+      for (let i = 0; i < pts.length; i += 2) o.push(X(pts[i]), Y(pts[i + 1]));
+      g.poly(o);
+      return self;
+    },
+    fill(style) { g.fill(style); return self; },
+    stroke(style) { g.stroke(style); return self; }
+  };
+  return self;
+}
+
+/** 16×16 bust. Head anchor is placed at the centre so a tall body crops the same as a short one. Hats may fall outside. */
+export function drawPortraitSource(g: Painter, look: DollLook): void {
+  const frame = num(SCHOOL_HEX[look.school || ''] || look.robeColor, 0x6b4fbb);
+  const bg = portraitBackgroundColor(look);
+  g.circle(8, 8, 8).fill({ color: bg });
+  g.circle(8, 8, 7.6).stroke({ color: frame, width: 0.5 });
+  const a = dollAnchors(look.role, look.bodyShape);
+  const sg = zoomAbout(g, 0, a.head, 8, 8, 1);
   const robe = num(look.robeColor);
   const skin = num(look.skin);
   const hair = num(look.hairColor);
-  g.poly([x - 16, y + 6, x + 16, y + 6, x + 12, y - 6, x - 12, y - 6]).fill({ color: look.role === 'sabbatical' ? mix(robe, 0x8a8994, 0.5) : robe });
-  if (look.role === 'wizard') g.poly([x - 18, y - 4, x - 12, y - 8, x - 14, y + 8]).fill({ color: shade(robe, 0.55) });
-  drawHead(g, look.face, x, y - 12, skin);
-  if (look.hair !== 'bald') drawHair(g, look.hair, x, y - 12, hair, 1, true);
-  drawFace(g, 'neutral', x, y - 12, num(look.eyes), 1, false);
-  if (look.hair !== 'bald') drawHair(g, look.hair, x, y - 12, hair, 1, false);
-  drawHat(g, look.hat, x, y - 12, robe, 1);
-  drawMark(g, look, x, y - 2, y + 6, 1, robe);
-  if (look.role === 'wizard') g.circle(x, y - 22, 2).fill({ color: 0xf7e39a });
+  const neck = a.neck;
+  sg.poly([
+    -10, neck + 8,
+    10, neck + 8,
+    7, neck - 1,
+    -7, neck - 1
+  ]).fill({ color: look.role === 'sabbatical' ? mix(robe, 0x8a8994, 0.55) : robe });
+  if (look.role === 'wizard') sg.poly([-12, neck, -8, neck - 3, -9, neck + 6]).fill({ color: shade(robe, 0.55) });
+  if (look.hair !== 'bald' && look.hat !== 'hood') drawHair(sg, look.hair, 0, a.head, hair, 1, true);
+  drawHead(sg, look.face, 0, a.head, skin);
+  drawFace(sg, 'neutral', 0, a.head, num(look.eyes), 1, false);
+  if (look.hair !== 'bald' && look.hat !== 'hood') drawHair(sg, look.hair, 0, a.head, hair, 1, false);
+  drawHat(sg, look.hat, 0, a.head, robe, 1);
+  drawMark(sg, look, 0, neck + 2, neck + 8, 1, robe);
+}
+
+/** Painter-space portrait (tests). The on-screen component blits the 16×16 source ×4, nearest-neighbour. */
+export function drawPortrait(g: Painter, look: DollLook): void {
+  const lay = portraitLayout(look);
+  drawPortraitSource(zoomAbout(g, 8, 8, lay.cx, lay.cy, PORTRAIT_SCALE), look);
 }
 
 export type BubbleKind =

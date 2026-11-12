@@ -2151,6 +2151,11 @@ export class AnkicasterEngine {
       out.knownPlans = [...plans];
       out.knownPlansVersion = 1;
     }
+    const phase = out.tutorial?.phase;
+    const phaseOk = phase === 'founding' || phase === 'tour' || phase === 'goal' || phase === 'done';
+    out.tutorial = phaseOk
+      ? { phase, step: Math.max(0, Math.floor(out.tutorial.step) || 0), part: Math.max(0, Math.floor(out.tutorial.part) || 0) }
+      : { phase: 'done', step: 0, part: 0 };
     return out;
   }
 

@@ -6,7 +6,7 @@
  */
 import React, { useEffect, useRef } from 'react';
 import { CanvasPainter } from '../visual/sprites/forge/CanvasPainter';
-import { appearanceToLayers, drawPortrait, DollRole, PORTRAIT_PX } from '../visual/agents/doll';
+import { appearanceToLayers, drawPortraitSource, DollRole, PORTRAIT_PX, PORTRAIT_SRC } from '../visual/agents/doll';
 import type { Character } from '../types/ankicaster';
 
 export const CharacterPortrait: React.FC<{
@@ -42,7 +42,15 @@ export const CharacterPortrait: React.FC<{
     canvas.height = PORTRAIT_PX;
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, PORTRAIT_PX, PORTRAIT_PX);
-    drawPortrait(new CanvasPainter(ctx), look);
+    const src = document.createElement('canvas');
+    src.width = PORTRAIT_SRC;
+    src.height = PORTRAIT_SRC;
+    const sctx = src.getContext('2d');
+    if (!sctx) return;
+    sctx.imageSmoothingEnabled = false;
+    drawPortraitSource(new CanvasPainter(sctx), look);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(src, 0, 0, PORTRAIT_PX, PORTRAIT_PX);
   }, [key]);
 
   return (
@@ -53,8 +61,8 @@ export const CharacterPortrait: React.FC<{
       data-testid="character-portrait"
       data-role={look.role}
       title={character?.name || name || look.role}
-      style={{ width: size, height: size, imageRendering: 'pixelated' }}
-      className={`rounded-full ${className}`}
+      style={{ width: size, height: size, imageRendering: 'pixelated', background: 'transparent' }}
+      className={`rounded-full overflow-hidden ${className}`}
     />
   );
 };

@@ -21,6 +21,8 @@ interface CastleGridProps {
   onPlacementConfirm?: (x: number, y: number) => void;
   onPlacementCancel?: () => void;
   onPlacementAuto?: () => void;
+  focusRoomDefId?: string | null;
+  onRoomScreenBox?: (box: { left: number; top: number; width: number; height: number } | null) => void;
 }
 
 export const CastleGrid: React.FC<CastleGridProps> = props => <AcademyCanvas {...props} />;

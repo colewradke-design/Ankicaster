@@ -64,6 +64,7 @@ export const DEFAULT_HEADMASTER_CHOICES: HeadmasterChoices = {
 
 export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): FullGameState {
   const c: HeadmasterChoices = { ...DEFAULT_HEADMASTER_CHOICES, ...choices };
+  const hasLook = !!(choices.skin || choices.hair || choices.hairColor || choices.robeColor || choices.hat || choices.staff);
   const mockCards = generateInitialCollection(350);
 
   const initialRooms: PlacedRoom[] = [
@@ -136,6 +137,7 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
     requiredFixturesVersion: 1, // new saves never need the old-save fixture back-fill
     staffingVersion: 1,
     knownPlansVersion: 1,
+    tutorial: hasLook ? { phase: 'founding', step: 0, part: 0 } : undefined,
     bankAtLastReview: 0,
     renown: 0, // GDD 32: 0 Renown at fresh start
     lastSessionTimeMs: now,
@@ -158,7 +160,7 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
       spellCooldowns: {},
       queuedSessions: [],
       // The chosen look lives on the player's character and is drawn by the forge renderer
-      appearance: choices.skin || choices.hair || choices.hairColor || choices.robeColor || choices.hat || choices.staff ? normalizeAppearance({
+      appearance: hasLook ? normalizeAppearance({
         bodyShape: c.bodyShape as 1 | 2 | 3 | 4,
         skin: c.skin,
         hair: c.hair,

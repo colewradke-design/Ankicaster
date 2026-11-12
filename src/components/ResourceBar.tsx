@@ -101,7 +101,7 @@ export const ResourceBar: React.FC<{ state: FullGameState }> = ({ state }) => {
   );
 
   return (
-    <div className="relative flex items-center gap-1" ref={ref} data-testid="resource-strip">
+    <div className="relative flex items-center gap-1" ref={ref} data-testid="resource-strip" data-tour="resources">
       {STRIP_RESOURCES.map(([key, label, icon]) => (
         <Chip key={key} state={state} resource={key} label={label} icon={icon} amount={amount(key)} atCap={full(key)} />
       ))}

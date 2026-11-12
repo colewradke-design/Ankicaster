@@ -205,7 +205,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
         className="bg-slate-900 border border-amber-900/50 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl"
       >
         {/* 1. Header */}
-        <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-slate-800 bg-gradient-to-r from-amber-900/30 to-transparent rounded-t-2xl">
+        <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-slate-800 bg-gradient-to-r from-amber-900/30 to-transparent rounded-t-2xl" data-tour="room-header">
           <div className="flex items-center gap-2 flex-wrap min-w-0">
             <h3 className="text-base font-bold text-amber-300 truncate">{def?.name || room.defId}</h3>
             <span className="text-[12px] bg-amber-500/20 border border-amber-500/40 text-amber-200 px-2 py-0.5 rounded-md font-bold">Lv {room.level}</span>
@@ -222,6 +222,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                 disabled={!!moveBlock}
                 aria-label="Move room"
                 data-action="move"
+                data-tour="room-move"
                 title={moveBlock ? `Can't move: ${moveBlock}` : 'Move this room (keeps level, furniture and progress)'}
                 className="p-1.5 min-w-[32px] min-h-[32px] text-slate-300 hover:text-amber-200 rounded-lg hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent"
               >
@@ -234,13 +235,14 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                 disabled={!!demolishBlock}
                 aria-label={isSite ? 'Cancel construction' : 'Demolish room'}
                 data-action="demolish"
+                data-tour="room-demolish"
                 title={demolishBlock ? `Can't demolish: ${demolishBlock}` : isSite ? 'Cancel or demolish this construction site' : 'Demolish this room'}
                 className="p-1.5 min-w-[32px] min-h-[32px] text-slate-300 hover:text-rose-300 rounded-lg hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent"
               >
                 <Trash2 className="w-4 h-4" />
               </button>
             )}
-            <button onClick={onClose} aria-label="Close" className="p-1.5 min-w-[32px] min-h-[32px] text-slate-400 hover:text-slate-100 rounded-lg hover:bg-slate-800">
+            <button onClick={onClose} aria-label="Close" data-tour="room-close" className="p-1.5 min-w-[32px] min-h-[32px] text-slate-400 hover:text-slate-100 rounded-lg hover:bg-slate-800">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -248,7 +250,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
 
         <div className="p-5 space-y-4">
           {/* 2. Key stats */}
-          <div className="flex flex-wrap gap-2" data-testid="room-stats">
+          <div className="flex flex-wrap gap-2" data-testid="room-stats" data-tour="room-stats">
             {isSite ? (
               <Chip icon={<Hammer className="w-3.5 h-3.5 text-amber-400" />} label="Building" value={`${room.buildProgress}/${room.buildRequired}`} title={reviewsToGoText(room)} />
             ) : (
@@ -259,7 +261,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
             <Chip label="Q" value={Math.round(q)} title="Quality score" tone="text-amber-300" />
           </div>
           {!isSite && (
-            <p className="text-[12px] text-slate-400 -mt-2" data-testid="efficiency-breakdown">
+            <p className="text-[12px] text-slate-400 -mt-2" data-testid="efficiency-breakdown" data-tour="efficiency">
               Efficiency {(eff * 100).toFixed(0)}%{detail.blocked ? ` (${detail.blocked})` : ''} · {factorLine}
               {bedRoom && <> · Rest target: {restTarget}</>}
             </p>
@@ -404,7 +406,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
           )}
 
           {/* 5. Secondary, collapsed by default */}
-          <details className="group bg-slate-950/40 border border-slate-800 rounded-xl" open={detailsOpen || undefined}>
+          <details className="group bg-slate-950/40 border border-slate-800 rounded-xl" open={detailsOpen || undefined} data-tour="room-details">
             <summary className="cursor-pointer list-none flex items-center justify-between px-3 py-2 min-h-[36px] text-[13px] font-bold text-slate-300">
               <span>Room details</span>
               <span className="flex items-center gap-1 text-slate-500 font-normal">
@@ -459,7 +461,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
               )}
 
               {room.level < 3 && (
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center justify-between gap-2" data-tour="room-renovate">
                   <span className="text-slate-300" title="+2 optional furniture slots, better efficiency; Level 3 unlocks the room perk">
                     Renovate → Lv {room.level + 1}
                   </span>
@@ -473,7 +475,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
               )}
 
               <div>
-                <div className="text-[12px] uppercase tracking-wider font-bold text-slate-500 mb-1.5">Installed</div>
+                <div className="text-[12px] uppercase tracking-wider font-bold text-slate-500 mb-1.5" data-tour="room-installed">Installed</div>
                 {room.furniture.length === 0 ? (
                   <div className="text-slate-500">Nothing yet.</div>
                 ) : (
@@ -496,7 +498,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                 )}
               </div>
 
-              <div>
+              <div data-tour="room-furnish">
                 <div className="text-[12px] uppercase tracking-wider font-bold text-slate-500 mb-1.5">Furnish</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1">
                   {compatible.map(fDef => {

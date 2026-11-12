@@ -34,6 +34,9 @@ interface AcademyCanvasProps {
   onPlacementConfirm?: (x: number, y: number) => void;
   onPlacementCancel?: () => void;
   onPlacementAuto?: () => void;
+  /** Tutorial: keep this room on screen, and report its page rect. */
+  focusRoomDefId?: string | null;
+  onRoomScreenBox?: (box: { left: number; top: number; width: number; height: number } | null) => void;
 }
 
 /** Validate a placement candidate exactly as the engine will (the engine re-checks on confirm). */
@@ -63,7 +66,9 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   placement,
   onPlacementConfirm,
   onPlacementCancel,
-  onPlacementAuto
+  onPlacementAuto,
+  focusRoomDefId,
+  onRoomScreenBox
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<Application | null>(null);
@@ -83,6 +88,10 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   // Latest props for the async Pixi init (the add-on hydrates the save while Pixi is starting)
   const latestRef = useRef({ state, selectedRoomId });
   latestRef.current = { state, selectedRoomId };
+  const focusRef = useRef<string | null>(null);
+  focusRef.current = focusRoomDefId || null;
+  const boxCbRef = useRef(onRoomScreenBox);
+  boxCbRef.current = onRoomScreenBox;
 
   /**
    * Size the canvas so its backing store maps 1:1 onto device pixels and sits on a whole
@@ -125,6 +134,8 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
 
     const app = new Application();
     appRef.current = app;
+    let tick: (() => void) | null = null;
+    let onVis: (() => void) | null = null;
 
     async function initPixi() {
       if (!container) return;
@@ -156,23 +167,63 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
       // Use the LATEST state: an add-on save may have loaded while Pixi was initialising
       world.setSnapshot(latestRef.current.state, latestRef.current.selectedRoomId);
 
-      // Animation ticker loop
-      let lastTime = performance.now();
-      app.ticker.add(() => {
+      // One ticker. The listener is removed on unmount so a re-mount cannot stack another.
+      // The frame is derived from performance.now() inside VisualWorld, and a focus return is clamped.
+      let lastNow = performance.now();
+      let focusedId: string | null = null;
+      let lastBoxKey = '';
+      onVis = () => {
         const now = performance.now();
-        const deltaMs = now - lastTime;
-        lastTime = now;
-        // Follow DPR changes (moving the Anki window between monitors, page zoom)
+        lastNow = now;
+        world.consumeTime(0, now);
+        world.choreographer.consumeTime(0, now);
+      };
+      document.addEventListener('visibilitychange', onVis);
+      tick = () => {
+        const now = performance.now();
+        let delta = now - lastNow;
+        lastNow = now;
+        if (document.visibilityState === 'hidden') return;
+        if (!Number.isFinite(delta) || delta < 0) delta = 0;
+        if (delta > 250) delta = 250;
         if ((window.devicePixelRatio || 1) !== app.renderer.resolution) fitCanvasToDevicePixels();
-        world.update(deltaMs);
-      });
+        world.update(delta, now);
+        const id = focusRef.current;
+        if (id !== focusedId) {
+          const ready = !id || world.ensureRoomVisible(id);
+          if (ready) {
+            focusedId = id;
+            if (!id) {
+              lastBoxKey = '';
+              boxCbRef.current?.(null);
+            }
+          }
+        }
+        if (id && focusedId === id) {
+          const b = world.roomScreenBox(id);
+          const canvas = app.canvas as HTMLCanvasElement;
+          const r = canvas.getBoundingClientRect();
+          const box = b ? { left: r.left + b.left, top: r.top + b.top, width: b.width, height: b.height } : null;
+          const key = box ? `${Math.round(box.left)}:${Math.round(box.top)}:${Math.round(box.width)}:${Math.round(box.height)}` : '';
+          if (key !== lastBoxKey) {
+            lastBoxKey = key;
+            boxCbRef.current?.(box);
+          }
+        }
+      };
+      app.ticker.add(tick);
     }
 
     initPixi();
 
     return () => {
       isMounted = false;
-      app.destroy(true);
+      if (tick) {
+        try { app.ticker.remove(tick); } catch { /* app already destroyed */ }
+        tick = null;
+      }
+      if (onVis) document.removeEventListener('visibilitychange', onVis);
+      try { app.destroy(true); } catch { /* not initialised yet */ }
       appRef.current = null;
       worldRef.current = null;
     };

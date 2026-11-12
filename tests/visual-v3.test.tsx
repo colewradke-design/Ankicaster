@@ -8,31 +8,39 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { createNewAcademy } from '../src/visual/onboarding/freshStart.ts';
 import { CharacterCreationModal } from '../src/visual/onboarding/CharacterCreationModal.tsx';
-import { FoundingDay, GuidedTour } from '../src/visual/onboarding/FoundingTour.tsx';
-import { FIRST_GOAL, TOUR_STEPS, advanceTour, phaseAfterCreate } from '../src/visual/onboarding/flow.ts';
+import { FoundingDay, GoalBanner, GuidedTour } from '../src/visual/onboarding/FoundingTour.tsx';
+import { FIRST_GOAL, TOUR_STEPS, advanceTour, applyTutorialAction, phaseAfterCreate, tourStepId, tourView } from '../src/visual/onboarding/flow.ts';
 import {
   BODY_SHAPES, CREATION_HATS, EYE_COLOURS, FACE_SHAPES, HAIR_COLOURS, HAIR_STYLES, SHOE_KINDS, SKIN_TONES, STAFFS
 } from '../src/utils/appearance.ts';
 import {
-  DOLL_ANIMS, HELD_ITEMS, LAYER_OPTIONS, MOVE_SPEED, appearanceToLayers, bubbleLabel, chooseBubble,
-  drawBubble, drawCharacter, drawPortrait, healingPlaceFor
+  DOLL_ANIMS, HELD_ITEMS, HEAD_R, LAYER_OPTIONS, MOVE_SPEED, appearanceToLayers, bubbleLabel, chooseBubble,
+  dollAnchors, dollFrame, drawBubble, drawCharacter, drawPortrait, healingPlaceFor, portraitBackgroundColor, portraitLayout
 } from '../src/visual/agents/doll.ts';
 import { Choreographer } from '../src/visual/agents/Choreographer.ts';
 import { NavGraph } from '../src/visual/layout/navGraph.ts';
+import { VisualWorld } from '../src/visual/world/VisualWorld.ts';
+import { AnkicasterEngine } from '../src/utils/engine.ts';
 import type { Character, InjuryType } from '../src/types/ankicaster.ts';
 
 class RecordingPainter {
   shapes = 0;
   pending = 0;
   problems: string[] = [];
+  ops: Array<
+    | { k: 'rect'; x: number; y: number; w: number; h: number }
+    | { k: 'circle'; x: number; y: number; r: number }
+    | { k: 'ellipse'; x: number; y: number; rx: number; ry: number }
+    | { k: 'poly'; points: number[] }
+  > = [];
   private num(label: string, ...v: number[]) {
     for (const n of v) if (!Number.isFinite(n)) this.problems.push(`${label} non-finite`);
     return this;
   }
-  rect(x: number, y: number, w: number, h: number) { this.pending++; return this.num('rect', x, y, w, h); }
-  circle(x: number, y: number, r: number) { this.pending++; if (r < 0) this.problems.push('r<0'); return this.num('circle', x, y, r); }
-  ellipse(x: number, y: number, rx: number, ry: number) { this.pending++; return this.num('ellipse', x, y, rx, ry); }
-  poly(points: number[]) { this.pending++; if (points.length < 4 || points.length % 2) this.problems.push(`poly ${points.length}`); return this.num('poly', ...points); }
+  rect(x: number, y: number, w: number, h: number) { this.ops.push({ k: 'rect', x, y, w, h }); this.pending++; return this.num('rect', x, y, w, h); }
+  circle(x: number, y: number, r: number) { this.ops.push({ k: 'circle', x, y, r }); this.pending++; if (r < 0) this.problems.push('r<0'); return this.num('circle', x, y, r); }
+  ellipse(x: number, y: number, rx: number, ry: number) { this.ops.push({ k: 'ellipse', x, y, rx, ry }); this.pending++; return this.num('ellipse', x, y, rx, ry); }
+  poly(points: number[]) { this.ops.push({ k: 'poly', points: points.slice() }); this.pending++; if (points.length < 4 || points.length % 2) this.problems.push(`poly ${points.length}`); return this.num('poly', ...points); }
   fill(s: { color: number; alpha?: number }) { return this.style('fill', s); }
   stroke(s: { color: number; width?: number; alpha?: number }) { return this.style('stroke', s); }
   private style(kind: string, s: { color: number; alpha?: number; width?: number }) {
@@ -160,6 +168,10 @@ test('a new game runs creation, then Founding Day, and lands on the three starti
   for (const s of STAFFS) assert.match(create, new RegExp(`data-staff="${s.id}"`));
   assert.match(create, /data-hair="short_messy"/);
   assert.match(create, /Skin tone 1 of 8/);
+  assert.match(create, /data-testid="headmaster-preview"/);
+  assert.match(create, /data-scale="4"/);
+  assert.match(create, /width="192"/);
+  assert.match(create, /height="256"/);
 
   assert.equal(phaseAfterCreate(false), 'founding');
   assert.equal(phaseAfterCreate(true), 'play');
@@ -174,14 +186,21 @@ test('a new game runs creation, then Founding Day, and lands on the three starti
   const founding = renderToStaticMarkup(<FoundingDay onDone={() => {}} />);
   assert.match(founding, /data-testid="founding-day"/);
   assert.match(founding, /Entrance Hall/);
-  const tour = renderToStaticMarkup(<GuidedTour step={2} onNext={() => {}} onSkip={() => {}} />);
-  assert.match(tour, /Vegetable Patch/);
-  assert.match(tour, /50 mana/);
-  assert.match(tour, /Magic for 100/);
-  assert.match(tour, /materials, not mana/);
-  const top = renderToStaticMarkup(<GuidedTour step={3} onNext={() => {}} onSkip={() => {}} />);
-  assert.match(top, /resources/);
-  assert.match(top, new RegExp(FIRST_GOAL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(founding, /Wizard(?:'|&#x27;)s Study/);
+  assert.match(founding, /Vegetable Patch/);
+  const studyView = tourView({ phase: 'tour', step: 1, part: 0 }, { studyOpen: false });
+  const studyHtml = renderToStaticMarkup(<GuidedTour view={studyView} step={1} onNext={() => {}} onSkip={() => {}} />);
+  assert.match(studyHtml, /Skip tutorial/);
+  assert.match(studyHtml, /Wizard/);
+  assert.equal(studyHtml.includes('data-testid="tour-next"'), false);
+  const drawView = tourView({ phase: 'tour', step: 6, part: 0 }, { studyOpen: false });
+  const drawHtml = renderToStaticMarkup(<GuidedTour view={drawView} step={6} onNext={() => {}} onSkip={() => {}} />);
+  assert.match(drawHtml, /Foundation/);
+  assert.match(drawHtml, /50 mana/);
+  assert.match(drawHtml, /materials/);
+  assert.match(drawHtml, /Skip tutorial/);
+  const goal = renderToStaticMarkup(<GoalBanner onDone={() => {}} />);
+  assert.match(goal, new RegExp(FIRST_GOAL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 
   const state = createNewAcademy({
     name: 'Ivy', title: 'Witch', pronouns: 'she/her', bodyShape: 2, skin: '#C08560', hair: 'braid',
@@ -194,4 +213,186 @@ test('a new game runs creation, then Founding Day, and lands on the three starti
   assert.equal(state.wizard.appearance?.hair, 'braid');
   assert.equal(state.wizard.appearance?.eyes, '#3A6A9A');
   assert.equal(state.rooms.length, 3);
+  assert.equal(state.tutorial?.phase, 'founding');
 });
+
+const ROLES = ['wizard', 'faculty', 'resident', 'student', 'adventurer', 'sabbatical'] as const;
+
+function headShape(ops: RecordingPainter['ops'], headY: number, x = 40) {
+  const near = (y: number) => Math.abs(y - headY) <= 1.6;
+  for (const o of ops) {
+    if (o.k === 'circle' && Math.abs(o.x - x) < 0.2 && Math.abs(o.r - HEAD_R) < 0.2 && near(o.y)) return o;
+    if (o.k === 'ellipse' && Math.abs(o.x - x) < 0.2 && o.ry >= 5 && near(o.y)) return o;
+    if (o.k === 'rect' && Math.abs(o.x + o.w / 2 - x) < 0.2 && o.h >= 9 && near(o.y + o.h / 2)) return o;
+  }
+  return undefined;
+}
+
+function portraitHead(ops: RecordingPainter['ops']) {
+  for (const o of ops) {
+    if (o.k === 'circle' && Math.abs(o.r - HEAD_R * 4) < 0.2) return o;
+    if (o.k === 'ellipse' && o.ry >= HEAD_R * 4) return o;
+    if (o.k === 'rect' && o.h >= HEAD_R * 2 * 4 - 1) return o;
+  }
+  return undefined;
+}
+
+function lookOf(role: (typeof ROLES)[number], body: number, hair: string, hat: string, face: string) {
+  return appearanceToLayers({
+    id: `${role}-${body}-${hair}-${hat}-${face}`,
+    isWizard: role === 'wizard',
+    status: role === 'student' ? 'student' : role === 'resident' ? 'resident' : 'faculty',
+    career: role === 'adventurer' ? 'adventurer' : role === 'faculty' ? 'teacher' : undefined,
+    careerState: role === 'sabbatical' ? 'sabbatical' : undefined,
+    masteredSchools: role === 'resident' ? ['nature'] : [],
+    currentSchool: 'nature',
+    bodyShape: body,
+    face,
+    hat,
+    hair,
+    appearance: {
+      skin: '#F6D7C3', hair, hairColor: '#4A2E1E', robeColor: '#4E8B3A', hat,
+      face, eyes: '#4A2E1E', shoes: 'boots', bodyShape: body, staff: 'oak'
+    }
+  });
+}
+
+test('head layer meets the neck for every body, hat, hair and role', () => {
+  const faces = ['round', 'oval', 'square', 'heart'];
+  for (const role of ROLES) {
+    for (const body of [1, 2, 3, 4]) {
+      for (const hair of HAIR_STYLES) {
+        for (const hat of CREATION_HATS) {
+          const look = lookOf(role, body, hair.id, hat.id, 'round');
+          const p = new RecordingPainter();
+          const res = drawCharacter(p, look, { x: 40, y: 90, facing: 'R', anim: 'idle', frame: 0 });
+          assert.deepEqual(p.problems, [], `${role} body ${body} ${hair.id} ${hat.id}`);
+          const neckY = res.anchors.neckY;
+          const headY = res.anchors.headY;
+          assert.ok(Math.abs(headY - (90 + dollAnchors(look.role, look.bodyShape).head)) < 0.01);
+          const head = headShape(p.ops, headY);
+          assert.ok(head, `missing head ${role} ${body}`);
+          const center = head.k === 'rect' ? head.y + head.h / 2 : head.y;
+          const bottom = head.k === 'circle' ? head.y + head.r : head.k === 'ellipse' ? head.y + head.ry : head.y + head.h;
+          assert.ok(Math.abs(center - headY) < 0.2, `head drifted ${role} body ${body} ${center} vs ${headY}`);
+          assert.ok(bottom + 0.05 >= neckY, `gap under head ${role} body ${body} bottom ${bottom} neck ${neckY}`);
+          const neck = p.ops.find(o => o.k === 'rect' && Math.abs(o.y - neckY) < 0.05 && o.h >= 6 && Math.abs(o.x + o.w / 2 - 40) < 1);
+          assert.ok(neck, `neck row missing ${role} body ${body}`);
+        }
+      }
+      for (const face of faces) {
+        const look = lookOf(role, body, 'short', 'pointed', face);
+        const p = new RecordingPainter();
+        const res = drawCharacter(p, look, { x: 40, y: 90, facing: 'L', anim: 'idle', frame: 1 });
+        const head = headShape(p.ops, res.anchors.headY);
+        assert.ok(head, `face ${face} body ${body}`);
+        const bottom = head.k === 'circle' ? head.y + head.r : head.k === 'ellipse' ? head.y + head.ry : head.y + head.h;
+        assert.ok(bottom + 0.05 >= res.anchors.neckY, `${face} body ${body} floats`);
+      }
+    }
+  }
+});
+
+test('portrait crop is centred on the face for every body', () => {
+  const centers: Array<[number, number]> = [];
+  for (const role of ROLES) {
+    for (const body of [1, 2, 3, 4]) {
+      for (const face of ['round', 'oval', 'square', 'heart']) {
+        const look = lookOf(role, body, 'bob', 'cap', face);
+        const lay = portraitLayout(look);
+        assert.equal(lay.cx, 32);
+        assert.equal(lay.cy, 32);
+        assert.ok(lay.faceDiameter / 64 >= 0.55 && lay.faceDiameter / 64 <= 0.7, `face share ${lay.faceDiameter}`);
+        centers.push([lay.headOffset, body]);
+        const p = new RecordingPainter();
+        drawPortrait(p, look);
+        assert.deepEqual(p.problems, [], `${role} ${body} ${face}`);
+        const head = portraitHead(p.ops);
+        assert.ok(head, `portrait head ${role} ${body} ${face}`);
+        const cx = head.k === 'rect' ? head.x + head.w / 2 : head.x;
+        const cy = head.k === 'rect' ? head.y + head.h / 2 : head.y;
+        assert.ok(Math.abs(cx - 32) < 0.2 && Math.abs(cy - 32) < 0.2, `off centre ${role} ${body} ${face} ${cx},${cy}`);
+      }
+    }
+  }
+  const offsets = new Set(centers.map(([off]) => off));
+  assert.ok(offsets.size > 1, 'tall and short bodies should not share a head anchor');
+  const nature = lookOf('student', 4, 'bob', 'none', 'round');
+  const raw = 0x4e8b3a;
+  const bg = portraitBackgroundColor(nature);
+  assert.ok(bg < raw, 'portrait background is a darkened school colour');
+});
+
+test('tutorial advances only on the right action, resumes after reload, and skip ends it', () => {
+  const study = { phase: 'tour' as const, step: 1, part: 0 };
+  assert.equal(tourStepId(study), 'study');
+  assert.deepEqual(applyTutorialAction(study, 'next'), study);
+  assert.deepEqual(applyTutorialAction(study, 'open-other'), study);
+  assert.deepEqual(applyTutorialAction(study, 'close-study'), study);
+  assert.equal(applyTutorialAction(study, 'open-study').step, 2);
+
+  const close = { phase: 'tour' as const, step: 3, part: 4 };
+  assert.equal(tourStepId(close), 'close');
+  assert.equal(applyTutorialAction(close, 'next').step, 3);
+  assert.equal(applyTutorialAction(close, 'open-study').step, 3);
+  assert.equal(applyTutorialAction(close, 'open-other').step, 3);
+  assert.equal(applyTutorialAction(close, 'close-study').step, 4);
+
+  for (const step of [0, 1, 2, 3, 4, 5, 6]) {
+    const done = applyTutorialAction({ phase: 'tour', step, part: 2 }, 'skip');
+    assert.equal(done.phase, 'done');
+  }
+  assert.equal(applyTutorialAction({ phase: 'founding', step: 0, part: 0 }, 'skip').phase, 'done');
+
+  const mid = { phase: 'tour' as const, step: 3, part: 2 };
+  const loaded = AnkicasterEngine.normalizeLoadedState(JSON.parse(JSON.stringify({ tutorial: mid, rooms: [], characters: [] })));
+  assert.deepEqual(loaded.tutorial, mid);
+  const legacy = AnkicasterEngine.normalizeLoadedState({ rooms: [], characters: [] }) as { tutorial?: { phase: string } };
+  assert.equal(legacy.tutorial?.phase, 'done');
+});
+
+test('extra ticker callbacks do not advance animation faster than the fixed rate', () => {
+  const state = createNewAcademy({
+    skin: '#F6D7C3', hair: 'bob', hairColor: '#4A2E1E', robeColor: '#4E8B3A', hat: 'pointed', staff: 'oak'
+  });
+  const world = new VisualWorld();
+  world.setSnapshot(state);
+  const t0 = 20_000;
+  world.update(16, t0);
+  const ch = world.choreographer;
+  const wiz = ch.agents.get('wizard');
+  assert.ok(wiz);
+  const clock = ch.clockMs;
+  const frame = wiz!.animFrame;
+  const x = wiz!.x;
+  for (let i = 0; i < 100; i++) {
+    world.setSnapshot(state);
+    world.update(16, t0);
+  }
+  assert.equal(ch.clockMs, clock, '100 callbacks at one timestamp must not add time');
+  assert.equal(wiz!.animFrame, frame);
+  assert.equal(wiz!.x, x, 'walking speed is not driven by callback count');
+  assert.equal(wiz!.animFrame, dollFrame('idle', ch.clockMs - (wiz!.animBaseMs ?? ch.clockMs)));
+
+  for (let i = 1; i <= 100; i++) world.update(16, t0 + i * 10);
+  const gained = ch.clockMs - clock;
+  assert.ok(gained <= 1000 + 1 && gained >= 900, `gained ${gained}`);
+  assert.equal(wiz!.animFrame, dollFrame('idle', ch.clockMs - (wiz!.animBaseMs ?? ch.clockMs)));
+  const steps = Math.floor(gained / (1000 / DOLL_ANIMS.idle.fps));
+  assert.ok(steps <= DOLL_ANIMS.idle.fps, `idle advanced ${steps} frames in one second`);
+
+  const before = ch.clockMs;
+  world.update(60_000, t0 + 1000 + 60_000);
+  assert.ok(ch.clockMs - before <= 250, 'focus return is clamped');
+
+  const ch2 = new Choreographer(new NavGraph(state.rooms, 400), 400);
+  ch2.syncState(state);
+  ch2.tick(16, state, false, 8000);
+  const c2 = ch2.clockMs;
+  for (let i = 0; i < 100; i++) ch2.tick(50, state, false, 8000);
+  assert.equal(ch2.clockMs, c2);
+  const w2 = ch2.agents.get('wizard')!;
+  assert.equal(w2.animFrame, dollFrame(w2.anim, ch2.clockMs - (w2.animBaseMs ?? ch2.clockMs)));
+  assert.equal(w2.animFrame, 0);
+});
+

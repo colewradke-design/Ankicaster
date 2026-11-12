@@ -20,7 +20,7 @@ import { createInitialGameState } from './data/initialState';
 import { createNewAcademy } from './visual/onboarding/freshStart';
 import { CharacterCreationModal } from './visual/onboarding/CharacterCreationModal';
 import { FoundingDay, GuidedTour, GoalBanner } from './visual/onboarding/FoundingTour';
-import { advanceTour, phaseAfterCreate } from './visual/onboarding/flow';
+import { applyTutorialAction, phaseAfterCreate, tourOpensDetails, tourStepId, tourView } from './visual/onboarding/flow';
 import { AnkicasterEngine } from './utils/engine';
 import type { DraftDeckId } from './utils/decks';
 import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS } from './data/content';
@@ -31,7 +31,7 @@ import { RoomWindow } from './components/RoomWindow';
 import { ScreenWindow } from './components/ScreenWindow';
 import { PonderOrbPicker, GrimoireBook } from './components/StudyModals';
 import { StoresPanel, JournalPanel, VisitorsPanel } from './components/AcademyPanels';
-import { ScreenId } from './ui/screens';
+import { ScreenId, SCREEN_DEFS, getAcademyMenuScreens } from './ui/screens';
 import { CastleGrid } from './components/CastleGrid';
 import { DemolishConfirm } from './components/DemolishConfirm';
 import type { PlacementMode } from './visual/AcademyCanvas';
@@ -90,8 +90,7 @@ export default function App() {
   const [isCreationModalOpen, setIsCreationModalOpen] = useState<boolean>(false);
   // Opened from "Change look": edit the look only, never re-found the Academy
   const [lookOnly, setLookOnly] = useState(false);
-  const [onboarding, setOnboarding] = useState<'founding' | 'tour' | 'goal' | null>(null);
-  const [tourStep, setTourStep] = useState(0);
+  const [roomBox, setRoomBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
 
   // Transient feedback toasts
   const [toasts, setToasts] = useState<Array<{ id: string; text: string; type: string }>>([]);
@@ -759,6 +758,7 @@ export default function App() {
     if (room) {
       setOpenScreen(null);
       setSelectedRoom(room);
+      setState(prev => ({ ...prev, tutorial: applyTutorialAction(prev.tutorial, room.defId === 'wizard_study' ? 'open-study' : 'open-other') }));
     }
   };
 
@@ -828,6 +828,25 @@ export default function App() {
     ? state.rooms.find(r => r.id === selectedRoom.id) || null
     : null;
 
+  const tutorial = state.tutorial;
+  const studyOpen = currentSelectedRoom?.defId === 'wizard_study';
+  const view = tutorial?.phase === 'tour' ? tourView(tutorial, {
+    studyOpen,
+    academyLabels: [
+      ...getAcademyMenuScreens(state).map(id => SCREEN_DEFS[id].label),
+      ...(['reviewer', 'journal', 'codex', 'settings'] as ScreenId[]).map(id => SCREEN_DEFS[id].label)
+    ]
+  }) : null;
+
+  useEffect(() => {
+    if (tutorial?.phase === 'tour' && tourStepId(tutorial) === 'draw' && openScreen !== 'draft') setOpenScreen('draft');
+  }, [tutorial, openScreen]);
+
+  useEffect(() => {
+    if (tutorial?.phase !== 'goal') return;
+    setOpenScreen(s => (s === 'draft' ? null : s));
+  }, [tutorial?.phase]);
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans select-none antialiased">
       {/* Slim top bar: mana, day/term, Veil, hazards, Build, Academy menu, Settings */}
@@ -836,6 +855,7 @@ export default function App() {
           state={state}
           onOpenScreen={handleOpenScreen}
           onOpenRoom={handleOpenRoomById}
+          forceAcademy={!!view?.forceAcademy}
           devControls={IS_DEV_MODE ? (
             <div className="hidden md:flex items-center gap-1.5">
               <button onClick={() => handleSimulateBatch(1)} className="px-2.5 py-1.5 min-h-[32px] bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-[12px] font-bold" title="Dev: one simulated review">+1 Rev</button>
@@ -852,13 +872,18 @@ export default function App() {
       <main className="flex-1 p-3 md:p-5 max-w-7xl mx-auto w-full">
         <CastleGrid
           state={state}
-          onSelectRoom={room => setSelectedRoom(room)}
+          onSelectRoom={room => {
+            setSelectedRoom(room);
+            setState(prev => ({ ...prev, tutorial: applyTutorialAction(prev.tutorial, room.defId === 'wizard_study' ? 'open-study' : 'open-other') }));
+          }}
           selectedRoomId={selectedRoom?.id}
           onResolveHazard={handleResolveHazard}
           placement={placement}
           onPlacementConfirm={handlePlacementConfirm}
           onPlacementCancel={() => setPlacement(null)}
           onPlacementAuto={placement?.kind === 'build' ? () => handleAutoPlaceRoom(placement.defId) : undefined}
+          focusRoomDefId={view?.focusRoom ? 'wizard_study' : null}
+          onRoomScreenBox={setRoomBox}
         />
         {state.rooms.length === 0 && (
           <div className="mt-3 text-center text-[13px] text-slate-400">No rooms yet. Use <strong className="text-amber-300">Build</strong> to plan one.</div>
@@ -905,7 +930,11 @@ export default function App() {
         <RoomWindow
           state={state}
           room={currentSelectedRoom}
-          onClose={() => setSelectedRoom(null)}
+          onClose={() => {
+            const wasStudy = currentSelectedRoom?.defId === 'wizard_study';
+            setSelectedRoom(null);
+            if (wasStudy) setState(prev => ({ ...prev, tutorial: applyTutorialAction(prev.tutorial, 'close-study') }));
+          }}
           onOpenScreen={handleOpenScreen}
           onResolveHazard={handleResolveHazard}
           onUpgrade={roomId => {
@@ -950,6 +979,7 @@ export default function App() {
             const res = AnkicasterEngine.removeFurniture(state, roomId, fId);
             if (res.success) setState(res.state);
           }}
+          detailsOpen={!!tutorial && tutorial.phase === 'tour' && studyOpen && tourOpensDetails(tutorial)}
         />
       )}
 
@@ -1399,25 +1429,32 @@ export default function App() {
         />
       )}
 
-      {onboarding === 'founding' && (
-        <FoundingDay reduceMotion={state.settings.reduceMotion} onDone={() => setOnboarding('tour')} />
-      )}
-      {onboarding === 'tour' && (
-        <GuidedTour
-          step={tourStep}
-          onNext={() => {
-            const next = advanceTour(tourStep);
-            setTourStep(next.step);
-            if (next.phase === 'goal') setOnboarding('goal');
-          }}
-          onSkip={() => setOnboarding(null)}
+      {state.wizard.appearance && state.tutorial?.phase === 'founding' && !isCreationModalOpen && (
+        <FoundingDay
+          reduceMotion={state.settings.reduceMotion}
+          onDone={() => setState(prev => ({ ...prev, tutorial: { phase: 'tour', step: 0, part: 0 } }))}
+          onSkip={() => setState(prev => ({ ...prev, tutorial: applyTutorialAction(prev.tutorial, 'skip') }))}
         />
       )}
-      {onboarding === 'goal' && <GoalBanner onDone={() => setOnboarding(null)} />}
+      {state.tutorial?.phase === 'tour' && view && !isCreationModalOpen && (
+        <GuidedTour
+          view={view}
+          step={state.tutorial.step || 0}
+          part={state.tutorial.part || 0}
+          reduceMotion={state.settings.reduceMotion}
+          roomBox={roomBox}
+          onNext={() => setState(prev => ({ ...prev, tutorial: applyTutorialAction(prev.tutorial, 'next') }))}
+          onSkip={() => setState(prev => ({ ...prev, tutorial: applyTutorialAction(prev.tutorial, 'skip') }))}
+        />
+      )}
+      {state.tutorial?.phase === 'goal' && !isCreationModalOpen && (
+        <GoalBanner onDone={() => setState(prev => ({ ...prev, tutorial: { phase: 'done', step: prev.tutorial?.step || 0, part: 0 } }))} />
+      )}
 
       {isCreationModalOpen && <CharacterCreationModal
         isOpen={isCreationModalOpen}
         isExistingSave={lookOnly || state.reviewIndex > 0 || state.characters.length > 0 || state.mana > 0 || state.renown > 0}
+        reduceMotion={state.settings.reduceMotion}
         initialValues={{
           name: state.wizard.name,
           title: state.wizard.title,
@@ -1452,20 +1489,15 @@ export default function App() {
                   })
                 }
               };
-            } else {
-              // Fresh start: initialize with choices
-              return createNewAcademy(choices);
             }
+            const next = createNewAcademy(choices);
+            next.tutorial = skip || phaseAfterCreate(skip) !== 'founding'
+              ? { phase: 'done', step: 0, part: 0 }
+              : { phase: 'founding', step: 0, part: 0 };
+            return next;
           });
           setIsCreationModalOpen(false);
           setLookOnly(false);
-          const fresh = !(lookOnly || state.reviewIndex > 0 || state.characters.length > 0 || state.mana > 0 || state.renown > 0);
-          if (fresh && phaseAfterCreate(skip) === 'founding') {
-            setTourStep(0);
-            setOnboarding('founding');
-          } else {
-            setOnboarding(null);
-          }
           addToast('Headmaster profile established!', 'success');
         }}
         onClose={() => { setIsCreationModalOpen(false); setLookOnly(false); }}

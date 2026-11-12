@@ -8,14 +8,13 @@
  * - Save without a look -> "Choose your look"
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { SchoolType } from '../../types/ankicaster';
 import { HeadmasterChoices, DEFAULT_HEADMASTER_CHOICES } from './freshStart';
 import { PALETTE } from '../sprites/forge/palettes';
 import { HATS, CREATION_HATS, STAFFS, SKIN_TONES, HAIR_COLOURS, HAIR_STYLES, BODY_SHAPES, EYE_COLOURS, FACE_SHAPES, SHOE_KINDS, NAME_SUGGESTIONS, normalizeAppearance } from '../../utils/appearance';
-import type { DollAnim } from '../agents/doll';
-import { WizardPortrait } from '../../components/WizardPortrait';
-import { Sparkles, Check, Wand2, BookOpen, ShieldCheck } from 'lucide-react';
+import { HeadmasterPreview } from '../../components/WizardPortrait';
+import { Sparkles, Check, ShieldCheck } from 'lucide-react';
 
 interface CharacterCreationModalProps {
   isOpen: boolean;
@@ -23,6 +22,7 @@ interface CharacterCreationModalProps {
   initialValues?: Partial<HeadmasterChoices>;
   onComplete: (choices: HeadmasterChoices, opts?: { skipTutorial?: boolean }) => void;
   onClose?: () => void;
+  reduceMotion?: boolean;
 }
 
 export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
@@ -30,7 +30,8 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
   isExistingSave,
   initialValues,
   onComplete,
-  onClose
+  onClose,
+  reduceMotion
 }) => {
   // Step 0 welcome page for fresh saves; existing saves go straight to creation/look customization
   const [step, setStep] = useState<'welcome' | 'create'>(isExistingSave ? 'create' : 'welcome');
@@ -46,12 +47,6 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
   const [skipTutorial, setSkipTutorial] = useState(false);
   const [customTitle, setCustomTitle] = useState('');
   const [customPronouns, setCustomPronouns] = useState('');
-  const previewAnims: DollAnim[] = ['idle', 'walk', 'cast'];
-  const [previewFrame, setPreviewFrame] = useState(0);
-  useEffect(() => {
-    const id = window.setInterval(() => setPreviewFrame(f => f + 1), 900);
-    return () => window.clearInterval(id);
-  }, []);
 
   if (!isOpen) return null;
 
@@ -73,8 +68,8 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 overflow-y-auto">
-      <div className="relative w-full max-w-2xl bg-slate-900 border-2 border-amber-500/40 rounded-3xl p-6 md:p-8 shadow-2xl text-slate-100 my-8">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-3">
+      <div className={`relative w-full bg-slate-900 border-2 border-amber-500/40 rounded-3xl shadow-2xl text-slate-100 flex flex-col overflow-hidden ${step === 'welcome' && !isExistingSave ? 'max-w-2xl p-6 md:p-8' : 'max-w-3xl max-h-[100dvh] h-[min(920px,100dvh)]'}`}>
         
         {/* VIEW 1: WELCOME PAGE (GDD 35.2 Step 0 Honesty Promise) */}
         {!isExistingSave && step === 'welcome' ? (
@@ -119,12 +114,18 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
           </div>
         ) : (
           /* VIEW 2: CREATE YOUR HEADMASTER / CHOOSE YOUR LOOK */
-          <div>
-            <div className="text-center mb-6">
-              <div className="inline-flex p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-400 mb-3">
-                <Wand2 className="w-8 h-8" />
+          <>
+            <div className="shrink-0 flex flex-col items-center gap-2 px-4 pt-4 pb-3 bg-slate-950 border-b border-slate-800" data-testid="look-preview">
+              <HeadmasterPreview appearance={choices} reduceMotion={reduceMotion} />
+              <div className="text-sm text-center">
+                <div className="font-bold text-amber-200">{choices.title} {choices.name || '…'}</div>
+                <div className="text-slate-400 text-xs mt-0.5">
+                  {HATS.find(h => h.id === choices.hat)?.name} · {PALETTE.robes.find(r => r.color.toUpperCase() === (choices.robeColor || '').toUpperCase())?.name || 'Custom'} robe · {STAFFS.find(st => st.id === choices.staff)?.name} staff
+                </div>
               </div>
-              <h2 className="text-2xl font-bold tracking-wide text-amber-300">
+            </div>
+            <div className="px-4 md:px-6 pt-4 text-center">
+              <h2 className="text-xl font-bold tracking-wide text-amber-300">
                 {isExistingSave ? 'Choose Your Headmaster Look' : 'Create Your Headmaster'}
               </h2>
               <p className="text-sm text-slate-400 mt-1">
@@ -133,21 +134,7 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
                   : 'Establish your identity as founder and headmaster of the Academy.'}
               </p>
             </div>
-
-            <form onSubmit={handleSubmit} className="space-y-6">
-              {/* Live preview: the same forge paper doll drawn on the castle */}
-              <div className="flex items-center gap-4 bg-slate-950/70 border border-slate-800 rounded-2xl p-3" data-testid="look-preview">
-                <div className="rounded-xl bg-gradient-to-b from-sky-300/30 to-slate-800 border border-slate-700 p-1">
-                  <WizardPortrait appearance={choices} size={112} title="Preview" anim={previewAnims[previewFrame % previewAnims.length]} frame={previewFrame % 4} />
-                </div>
-                <div className="text-sm">
-                  <div className="font-bold text-amber-200">{choices.title} {choices.name || '…'}</div>
-                  <div className="text-slate-400 text-xs mt-1">
-                    {HATS.find(h => h.id === choices.hat)?.name} · {PALETTE.robes.find(r => r.color.toUpperCase() === (choices.robeColor || '').toUpperCase())?.name || 'Custom'} robe · {STAFFS.find(st => st.id === choices.staff)?.name} staff
-                  </div>
-                  <div className="text-slate-500 text-[11px] mt-1">This is how you appear in the castle.</div>
-                </div>
-              </div>
+            <form onSubmit={handleSubmit} className="flex-1 min-h-0 overflow-y-auto px-4 md:px-6 pb-6 pt-4 space-y-6">
 
               {/* Name & Title */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -511,7 +498,7 @@ export const CharacterCreationModal: React.FC<CharacterCreationModalProps> = ({
                 </button>
               </div>
             </form>
-          </div>
+          </>
         )}
       </div>
     </div>

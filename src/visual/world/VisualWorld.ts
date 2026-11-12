@@ -675,14 +675,53 @@ export class VisualWorld {
     }
   }
 
-  update(deltaMs: number) {
+  private lastReal = -1;
+
+  /** Real-time gap. Repeated callbacks with the same `now` add nothing. Hidden-tab jumps clamp to 250ms. */
+  consumeTime(deltaMs: number, nowMs?: number): number {
+    let gap: number;
+    if (nowMs == null) gap = deltaMs;
+    else if (this.lastReal < 0) gap = Number.isFinite(deltaMs) ? deltaMs : 0;
+    else gap = nowMs - this.lastReal;
+    if (nowMs != null) this.lastReal = nowMs;
+    if (!Number.isFinite(gap) || gap < 0) gap = 0;
+    return Math.min(250, gap);
+  }
+
+  /** Screen-space box of a built room, relative to the canvas. Null if it isn't placed. */
+  roomScreenBox(defId: string): { left: number; top: number; width: number; height: number } | null {
+    const room = this.state?.rooms.find(r => r.defId === defId && r.state === 'built');
+    if (!room) return null;
+    const box = roomToWorldBox(room, this.groundY);
+    const z = this.camera.zoom;
+    const ox = this.camera.viewportWidth / 2 - this.camera.x * z;
+    const oy = this.camera.viewportHeight / 2 - this.camera.y * z;
+    return { left: ox + box.left * z, top: oy + box.top * z, width: box.width * z, height: box.height * z };
+  }
+
+  /** Pan the camera onto the room when it sits off the canvas. Returns false if the viewport isn't ready. */
+  ensureRoomVisible(defId: string): boolean {
+    if (this.camera.viewportWidth < 20 || this.camera.viewportHeight < 20) return false;
+    const room = this.state?.rooms.find(r => r.defId === defId && r.state === 'built');
+    if (!room) return false;
+    const box = roomToWorldBox(room, this.groundY);
+    const screen = this.roomScreenBox(defId);
+    const pad = 32;
+    const vw = this.camera.viewportWidth;
+    const vh = this.camera.viewportHeight;
+    const off = !screen || screen.left < pad || screen.top < pad || screen.left + screen.width > vw - pad || screen.top + screen.height > vh - pad;
+    if (off) this.camera.centerOn(box.left + box.width / 2, box.top + box.height / 2);
+    return true;
+  }
+
+  update(deltaMs: number, nowMs?: number) {
     if (!this.state) return;
     const reduceMotion = !!this.state.settings.reduceMotion;
+    const gap = this.consumeTime(deltaMs, nowMs);
+    this.clockMs += gap;
 
-    this.clockMs += Math.max(0, Math.min(deltaMs, 250));
-
-    // Tick Choreographer
-    this.choreographer.tick(deltaMs, this.state, reduceMotion);
+    // One clock. A second callback with the same `now` adds nothing (stacked tickers, re-renders).
+    this.choreographer.tick(gap, this.state, reduceMotion, nowMs);
 
     // Fixed-rate ambience + one-shot effects (cosmetic only)
     this.renderAmbient(this.ambientFrameFor(reduceMotion));

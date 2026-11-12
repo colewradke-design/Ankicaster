@@ -866,7 +866,7 @@ export const CardDraftPanel: React.FC<{
           const canAfford = state.mana >= currentPrice;
 
           return (
-            <div key={d.id} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow" data-deck={d.id}>
+            <div key={d.id} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow" data-deck={d.id} data-tour={d.id === 'foundation' ? 'deck-foundation' : undefined}>
               <div>
                 <h4 className="font-bold text-xs text-slate-100 mb-1">{d.name} deck</h4>
                 <div className="text-xs font-mono text-amber-300 mb-3" data-testid="deck-price" title="Each draw from this deck this term raises the price by 5%. Prices reset at the end of the term.">
