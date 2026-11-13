@@ -3,12 +3,54 @@
  * Rarity weights are fixed (the old draft shuffled a flat list). Wizard level only
  * changes the Magic deck, via the school multiplier.
  */
-import { DraftCard, FullGameState, SchoolType } from '../types/ankicaster';
-import { ROOM_DEFINITIONS } from '../data/content';
+import { DraftCard, FullGameState, FurnitureDefinition, SchoolType } from '../types/ankicaster';
+import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS } from '../data/content';
 
 export type DraftDeckId = 'foundation' | 'grounds' | 'magic';
 
 export const STRUCTURE_ROOMS = new Set(['spiral_stair', 'corridor', 'support_pillar']);
+
+const BASE_STARTER_PATTERNS = [
+  'simple_cot',
+  'long_table',
+  'hearth',
+  'couch',
+  'potted_fern',
+  'bookshelf'
+];
+
+/** Required fixture furniture IDs for a given room definition. */
+export function requiredFixturesForRoom(roomDefId: string): string[] {
+  const room = ROOM_DEFINITIONS[roomDefId];
+  if (!room?.requiredFurniture?.length) return [];
+  const out: string[] = [];
+  for (const rf of room.requiredFurniture) {
+    const parts = rf.role.includes('_or_') ? rf.role.split('_or_') : [rf.role];
+    for (const p of parts) {
+      if (FURNITURE_DEFINITIONS[p]) out.push(p);
+      else if (p === 'bed') out.push('simple_cot');
+    }
+  }
+  return out;
+}
+
+function computeStarterPatterns(): string[] {
+  const set = new Set<string>(BASE_STARTER_PATTERNS);
+  for (const r of Object.values(ROOM_DEFINITIONS)) {
+    if (r.unlock.type === 'start' || r.unlock.type === 'standard' || r.unlock.type === 'grant') {
+      for (const fid of requiredFixturesForRoom(r.id)) set.add(fid);
+    }
+  }
+  return [...set];
+}
+
+export const STARTER_PATTERNS: string[] = computeStarterPatterns();
+const STARTER_PATTERN_SET = new Set<string>(STARTER_PATTERNS);
+
+export function isPatternKnown(state: { knownPatterns?: string[] } | undefined, furnitureDefId: string): boolean {
+  if (STARTER_PATTERN_SET.has(furnitureDefId)) return true;
+  return !!state?.knownPatterns?.includes(furnitureDefId);
+}
 
 export const DECK_LIST: Array<{ id: DraftDeckId; name: string; basePrice: number }> = [
   { id: 'foundation', name: 'Foundation', basePrice: 50 },
@@ -84,18 +126,17 @@ const MAGIC_ROOMS: RoomSpec[] = [
 
 /** Non-room cards kept from the old foundation list. Foundation and Grounds both use them. */
 const FOUNDATION_EXTRAS: DraftCard[] = [
-  { id: 'extra-bunk', deck: 'foundation', rarity: 'common', name: 'Bunk Bed Pattern', type: 'furniture_pattern', targetId: 'bunk_bed', description: 'Allows crafting space-saving Bunk Beds in Dormitories.' },
   { id: 'extra-supply', deck: 'foundation', rarity: 'common', name: 'Supply Shipment Boon', type: 'boon', description: 'Instant crate of materials: +45 Timber, +30 Stone, +10 Glass.' }
 ];
 
-/** Non-room cards kept from the old school lists. Sanctuary, Ward Spire and Apothecary pointed at rooms that do not exist. */
+/** Non-room cards kept from the old school lists. */
 const MAGIC_EXTRAS: DraftCard[] = [
   { id: 'extra-astral', deck: 'magic', rarity: 'rare', name: 'Astral Influx Boon', type: 'boon', school: 'arcane', description: 'Instant burst of knowledge: +35 Insight and +150 Mana.' },
   { id: 'extra-bramble', deck: 'magic', rarity: 'rare', name: 'Bramblefox Lure', type: 'lure', targetId: 'bramblefox', school: 'nature', description: 'Attracts an inquisitive Azure Bramblefox to your academy meadow habitat.' },
   { id: 'extra-seed', deck: 'magic', rarity: 'uncommon', name: 'Luminescent Seed Packet', type: 'seed', targetId: 'moonglow_fern', school: 'nature', description: 'Unlock Moonglow Fern crop in sacred plots.' },
   { id: 'extra-dawn', deck: 'magic', rarity: 'rare', name: 'Dawn Blessing Boon', type: 'boon', school: 'light', description: 'Radiant surge: +30 Radiance and fully cures one injured resident.' },
   { id: 'extra-veil', deck: 'magic', rarity: 'rare', name: 'Veil Tether Boon', type: 'boon', school: 'shadow', description: 'Instant +35% Veil Strength and +25 Umbra.' },
-  { id: 'extra-elixir', deck: 'magic', rarity: 'rare', name: 'Elixir of Clarity Recipe', type: 'recipe_page', targetId: 'elixir_clarity', school: 'alchemy', description: 'Recipe for clarity draft that speeds card review progress.' }
+  { id: 'extra-elixir', deck: 'magic', rarity: 'rare', name: 'Elixir of Fellowship Recipe', type: 'recipe_page', targetId: 'elixir_of_fellowship', school: 'alchemy', description: 'Learn to brew Elixir of Fellowship (+15 morale to all students and faculty).' }
 ];
 
 const ROOM_DECK = new Map<string, DraftDeckId>();
@@ -156,14 +197,47 @@ function roomCard(spec: RoomSpec, deck: DraftDeckId): DraftCard {
   };
 }
 
-export function deckPool(deck: DraftDeckId): DraftCard[] {
-  if (deck === 'foundation') {
-    return [...FOUNDATION_ROOMS.map(r => roomCard(r, deck)), ...FOUNDATION_EXTRAS.map(c => ({ ...c, deck }))];
+function patternRarity(f: FurnitureDefinition): DraftCard['rarity'] {
+  if (f.unlock.rarity) {
+    const r = f.unlock.rarity as DraftCard['rarity'];
+    if (r === 'common' || r === 'uncommon' || r === 'rare' || r === 'epic' || r === 'legendary') return r;
   }
-  if (deck === 'grounds') {
-    return [...GROUNDS_ROOMS.map(r => roomCard(r, deck)), ...FOUNDATION_EXTRAS.map(c => ({ ...c, deck, id: `grounds-${c.id}` }))];
-  }
-  return [...MAGIC_ROOMS.map(r => roomCard(r, deck)), ...MAGIC_EXTRAS.map(c => ({ ...c }))];
+  if (f.unlock.type === 'rift') return 'epic';
+  const m = f.cost.mana || 0;
+  if (m >= 400) return 'epic';
+  if (m >= 220) return 'rare';
+  if (m >= 100) return 'uncommon';
+  return 'common';
+}
+
+function patternCard(f: FurnitureDefinition): DraftCard {
+  return {
+    id: `pattern:${f.id}`,
+    deck: f.deck,
+    rarity: patternRarity(f),
+    name: `${f.name} Pattern`,
+    type: 'furniture_pattern',
+    targetId: f.id,
+    school: f.unlock.school,
+    description: f.specialEffect
+      ? `Pattern for ${f.name}: ${f.specialEffect}.`
+      : `Pattern to craft ${f.name}.`
+  };
+}
+
+export function deckPool(deck: DraftDeckId, state?: { knownPatterns?: string[] }): DraftCard[] {
+  const base =
+    deck === 'foundation'
+      ? [...FOUNDATION_ROOMS.map(r => roomCard(r, deck)), ...FOUNDATION_EXTRAS.map(c => ({ ...c, deck }))]
+      : deck === 'grounds'
+      ? [...GROUNDS_ROOMS.map(r => roomCard(r, deck)), ...FOUNDATION_EXTRAS.map(c => ({ ...c, deck, id: `grounds-${c.id}` }))]
+      : [...MAGIC_ROOMS.map(r => roomCard(r, deck)), ...MAGIC_EXTRAS.map(c => ({ ...c }))];
+
+  const patterns = Object.values(FURNITURE_DEFINITIONS)
+    .filter(f => f.deck === deck && !STARTER_PATTERN_SET.has(f.id) && (!state || !isPatternKnown(state, f.id)))
+    .map(patternCard);
+
+  return [...base, ...patterns];
 }
 
 export function cardWeight(card: DraftCard, levels?: Partial<Record<SchoolType, number>>): number {
@@ -202,10 +276,11 @@ export const DRAFT_TUTORIAL = 'Three decks: Foundation (rooms of the living acad
 
 /**
  * Three different cards. Founding draws and bad-luck protection reserve a slot first.
+ * Known patterns are excluded, and at most 1 pattern card is offered per draw unless nothing else remains.
  */
 export function dealDraft(state: FullGameState, deck: DraftDeckId, rng: () => number = Math.random): DraftCard[] {
   const levels = state.wizard?.levels;
-  const pool = deckPool(deck);
+  const pool = deckPool(deck, state);
   const chosen: DraftCard[] = [];
   const take = (card: DraftCard | undefined) => {
     if (!card || chosen.some(c => c.id === card.id)) return;
@@ -231,7 +306,10 @@ export function dealDraft(state: FullGameState, deck: DraftDeckId, rng: () => nu
     guard++;
     const left = pool.filter(c => !chosen.some(k => k.id === c.id));
     if (!left.length) break;
-    take(pickWeighted(left, levels, rng));
+    const hasPattern = chosen.some(c => c.type === 'furniture_pattern');
+    const nonPatterns = left.filter(c => c.type !== 'furniture_pattern');
+    const candidates = (hasPattern && nonPatterns.length > 0) ? nonPatterns : left;
+    take(pickWeighted(candidates, levels, rng));
   }
   return chosen;
 }

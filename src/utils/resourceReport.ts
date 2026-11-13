@@ -4,6 +4,7 @@
  * above it is left alone.
  */
 import { FullGameState, PlacedRoom, ResourceInventory } from '../types/ankicaster';
+import { academyFurnitureEffect } from './formulas';
 import { isRoomUnfinished } from './requiredFurniture';
 
 export const CAPPED_RESOURCES = new Set(['timber', 'stone', 'glass', 'cloth', 'provisions', 'greens', 'fish', 'nectar']);
@@ -55,10 +56,11 @@ export function resourceLabel(resource: string): string {
   return RESOURCE_LABEL.get(resource) || resource;
 }
 
-/** 200, plus 100 for every Storage Vault that is built and not Unfinished. */
+/** 200, plus 100 for every Storage Vault that is built and not Unfinished, plus furniture storage bonuses. */
 export function storageCap(state: { rooms?: PlacedRoom[] }): number {
   const vaults = (state.rooms || []).filter(r => r.defId === 'storage_vault' && r.state === 'built' && !isRoomUnfinished(r)).length;
-  return 200 + 100 * vaults;
+  const bonus = academyFurnitureEffect(state.rooms || [], 'storage_bonus');
+  return 200 + 100 * vaults + bonus;
 }
 
 /**

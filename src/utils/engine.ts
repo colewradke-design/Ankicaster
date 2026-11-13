@@ -43,10 +43,11 @@ import {
 } from './placement';
 import { normalizeAppearance } from './appearance';
 import {
-  allFurnitureIds, fillRequiredFixtures, isRoomUnfinished, missingRequiredSlots, requiredInstallOption,
-  requiredSlotStatus, costText, unaffordable
+  allFurnitureIds, Cost, fillRequiredFixtures, isRoomUnfinished, missingRequiredSlots, requiredInstallOption,
+  requiredSlotStatus, costText, unaffordable, uniqueFurnitureId
 } from './requiredFurniture';
 import {
+  academyFurnitureEffect,
   calculateReviewMana,
   calculateDailyVeilCost,
   calculateStudentSkill,
@@ -60,7 +61,7 @@ import {
 } from '../utils/formulas';
 import { computeReachability, ReachabilityInfo } from './reachability';
 import {
-  DraftDeckId, DRAFT_TUTORIAL, dealDraft, deckPrice, isRoomUnlocked, isStructure, planHint
+  DraftDeckId, DRAFT_TUTORIAL, STARTER_PATTERNS, dealDraft, deckPrice, isPatternKnown, isRoomUnlocked, isStructure, planHint, requiredFixturesForRoom
 } from './decks';
 import {
   BellNote, commitBell, ensureLedger, glassworksConversion, logResourceChange, logResourceDiff,
@@ -299,15 +300,18 @@ export class AnkicasterEngine {
 
     // 5. Advance Active Creature Taming & Hatching
     for (const c of next.creatures) {
+      const cRoom = c.roomId != null ? next.rooms.find(r => r.id === c.roomId) : undefined;
       if (c.status === 'wary' && c.tamerId) {
-        c.tamingProgress += 1;
+        const tamingBonus = academyFurnitureEffect(next.rooms, 'taming_pct', cRoom);
+        c.tamingProgress += 1 + tamingBonus / 100;
         const cDef = CREATURE_DEFINITIONS[c.defId];
         if (cDef && c.tamingProgress >= cDef.tamingReviews) {
           c.status = 'tamed';
           notifications.push(`🐾 Tamed ${c.nickname} (${cDef.name})!`);
         }
       } else if (c.status === 'tamed') {
-        c.bondProgress += 1;
+        const bondBonus = academyFurnitureEffect(next.rooms, 'creature_bond_pct', cRoom);
+        c.bondProgress += 1 + bondBonus / 100;
         if (c.bondLevel === 1 && c.bondProgress >= 150) {
           c.bondLevel = 2;
           notifications.push(`❤️ Bond Level 2 reached with ${c.nickname}!`);
@@ -331,9 +335,14 @@ export class AnkicasterEngine {
 
     // 7. Healing Injuries in Infirmary (the infirmary's own bonus scales with its efficiency)
     let infirmaryBonus = 0;
+    let infirmaryRoom: PlacedRoom | undefined;
     for (const r of next.rooms) {
       if (r.defId !== 'infirmary' || r.state !== 'built' || isRoomUnfinished(r)) continue;
-      infirmaryBonus = Math.max(infirmaryBonus, 1.5 * AnkicasterEngine.roomEfficiency(next, r));
+      const effBonus = 1.5 * AnkicasterEngine.roomEfficiency(next, r);
+      if (effBonus > infirmaryBonus) {
+        infirmaryBonus = effBonus;
+        infirmaryRoom = r;
+      }
     }
     const activeHealers = next.characters.filter(c => c.career === 'healer' && c.careerState === 'active').length;
     const hasHealingCreature = next.creatures.some(c => c.status === 'tamed' && (c.defId === 'halo_lamb' || c.defId === 'fen_sprite' || c.defId === 'ember_phoenix'));
@@ -344,6 +353,11 @@ export class AnkicasterEngine {
         if (infirmaryBonus > 0) healRate += infirmaryBonus;
         healRate += activeHealers * 1.5;
         if (hasHealingCreature) healRate += 1.5;
+        const bedRoom = char.bedRoomId != null ? next.rooms.find(r => r.id === char.bedRoomId) : undefined;
+        const healPct =
+          academyFurnitureEffect(next.rooms, 'heal_pct', bedRoom) +
+          (infirmaryRoom && infirmaryRoom.id !== bedRoom?.id ? academyFurnitureEffect(next.rooms, 'heal_pct', infirmaryRoom) : 0);
+        if (healPct > 0) healRate *= 1 + healPct / 100;
 
         char.injury.points += healRate;
         if (char.injury.points >= char.injury.required) {
@@ -535,7 +549,8 @@ export class AnkicasterEngine {
     if (!room || room.state !== 'built') return 25;
     const eff = AnkicasterEngine.roomEfficiency(state, room, reach);
     if (eff <= 0) return 25;
-    return AnkicasterEngine.restTargetFromEfficiency(eff);
+    const bonus = academyFurnitureEffect(state.rooms, 'rest_bonus', room);
+    return Math.min(100, AnkicasterEngine.restTargetFromEfficiency(eff) + bonus);
   }
 
   static restTarget(state: FullGameState, char: Character, reach?: Map<number, ReachabilityInfo>): number {
@@ -557,7 +572,7 @@ export class AnkicasterEngine {
       const seats = listed ?? 8;
       cap += seats * AnkicasterEngine.roomEfficiency(state, room, reach);
     }
-    return cap;
+    return cap + academyFurnitureEffect(state.rooms, 'leisure_bonus');
   }
 
   private static charmBonus(state: FullGameState): number {
@@ -582,7 +597,8 @@ export class AnkicasterEngine {
   private static composureTarget(state: FullGameState): number {
     const creatures = state.creatures.filter(c => c.status === 'tamed').length;
     const creatureBonus = Math.min(10, creatures * 2);
-    return 60 + AnkicasterEngine.charmBonus(state) + creatureBonus + AnkicasterEngine.veilModifier(state.veil.strength);
+    const furnBonus = academyFurnitureEffect(state.rooms, 'composure_bonus');
+    return 60 + AnkicasterEngine.charmBonus(state) + creatureBonus + furnBonus + AnkicasterEngine.veilModifier(state.veil.strength);
   }
 
   private static approachNeed(current: number, target: number, decay: number): number {
@@ -632,6 +648,8 @@ export class AnkicasterEngine {
 
           let yieldMult = eff;
           if (room.hazard?.type === 'spill_of_night') yieldMult = eff * 0.5; // efficiency halved
+          const outPct = academyFurnitureEffect(state.rooms, 'output_pct', room);
+          if (outPct !== 0) yieldMult *= 1 + outPct / 100;
 
           const moraleFactor = 0.6 + (0.6 * char.morale) / 100;
           const yieldAmount = 0.2 * moraleFactor * yieldMult;
@@ -666,6 +684,21 @@ export class AnkicasterEngine {
       if (room.hazard?.type === 'spill_of_night') {
         harvestMult = eff * 0.5;
         room.cleanliness = 0; // soot residue
+      }
+      const outPct = academyFurnitureEffect(state.rooms, 'output_pct', room);
+      if (outPct !== 0) harvestMult *= 1 + outPct / 100;
+
+      const insightBell = academyFurnitureEffect(state.rooms, 'insight_per_bell', room);
+      if (insightBell > 0) {
+        const beforeI = bag.insight || 0;
+        bag.insight = beforeI + insightBell;
+        note('insight', beforeI, roomName(room.defId));
+      }
+      const nectarBell = academyFurnitureEffect(state.rooms, 'nectar_per_bell', room);
+      if (nectarBell > 0) {
+        const beforeN = bag.nectar || 0;
+        bag.nectar = store(beforeN, nectarBell);
+        note('nectar', beforeN, roomName(room.defId));
       }
 
       if (room.defId === 'vegetable_patch') {
@@ -801,6 +834,10 @@ export class AnkicasterEngine {
       if (hasGlimmerhornStag) {
         char.morale = Math.min(100, char.morale + 3);
       }
+      const moraleFurn = academyFurnitureEffect(state.rooms, 'morale_bonus');
+      if (moraleFurn !== 0) {
+        char.morale = Math.min(100, Math.max(0, char.morale + moraleFurn));
+      }
 
       // Student Misbehavior driven by low morale (<40) or low composure (<40)
       if (char.status === 'student' && (char.morale < 40 || char.needs.composure < 40) && Math.random() < 0.15) {
@@ -833,7 +870,8 @@ export class AnkicasterEngine {
       if (c.status === 'tamed' && c.defId === 'mopslime') cleanBonus += 3;
     }
     for (const r of state.rooms) {
-      r.cleanliness = Math.min(100, r.cleanliness - 0.5 + cleanBonus);
+      const roomClean = academyFurnitureEffect(state.rooms, 'cleanliness_per_bell', r);
+      r.cleanliness = Math.min(100, r.cleanliness - 0.5 + cleanBonus + roomClean);
     }
     commitBell(state, bellNotes);
   }
@@ -963,20 +1001,24 @@ export class AnkicasterEngine {
       // Check thin Veil hazard spawn if Veil < 50%
       // Rule BR-25: While the player is away and the bank has hit the 10% floor, skip hazard rolls
       if (!floorReached && next.mana > bankFloor) {
-        const hazardChance = Math.max(0.02, 0.25 * Math.pow(0.7, warders));
-        if (next.veil.strength < 50 && Math.random() < hazardChance) {
+        const baseHazardChance = Math.max(0.02, 0.25 * Math.pow(0.7, warders));
+        if (next.veil.strength < 50) {
           const eligibleRooms = next.rooms.filter(r => r.state === 'built' && !r.hazard);
           if (eligibleRooms.length > 0) {
             const target = eligibleRooms[Math.floor(Math.random() * eligibleRooms.length)];
-            const hazards = [
-              { type: 'spill_of_night' as const, name: 'Spill of Night', description: 'Gloom residue seeped through the thinning Veil.', effect: 'Halves room efficiency until dispelled.' },
-              { type: 'hex_fog' as const, name: 'Hex Fog', description: 'Corrosive mist clinging to the floorboards.', effect: 'Students in this room lose composure faster.' },
-              { type: 'echo_loop' as const, name: 'Echo Loop', description: 'A temporal chime repeating indefinitely.', effect: 'Suppresses classroom essence generation.' },
-              { type: 'cold_snap' as const, name: 'Cold Snap', description: 'Sub-zero frost crystallizing across furnishings.', effect: 'Room unusable until thawed.' }
-            ];
-            const chosenHazard = hazards[Math.floor(Math.random() * hazards.length)];
-            target.hazard = chosenHazard;
-            summary.push(`⚠️ Thin Veil hazard emerged: ${chosenHazard.name} in ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}!`);
+            const furnPct = academyFurnitureEffect(next.rooms, 'hazard_chance_pct', target);
+            const effectiveChance = Math.max(0.01, baseHazardChance * Math.max(0.1, 1 + furnPct / 100));
+            if (Math.random() < effectiveChance) {
+              const hazards = [
+                { type: 'spill_of_night' as const, name: 'Spill of Night', description: 'Gloom residue seeped through the thinning Veil.', effect: 'Halves room efficiency until dispelled.' },
+                { type: 'hex_fog' as const, name: 'Hex Fog', description: 'Corrosive mist clinging to the floorboards.', effect: 'Students in this room lose composure faster.' },
+                { type: 'echo_loop' as const, name: 'Echo Loop', description: 'A temporal chime repeating indefinitely.', effect: 'Suppresses classroom essence generation.' },
+                { type: 'cold_snap' as const, name: 'Cold Snap', description: 'Sub-zero frost crystallizing across furnishings.', effect: 'Room unusable until thawed.' }
+              ];
+              const chosenHazard = hazards[Math.floor(Math.random() * hazards.length)];
+              target.hazard = chosenHazard;
+              summary.push(`⚠️ Thin Veil hazard emerged: ${chosenHazard.name} in ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}!`);
+            }
           }
         }
       }
@@ -1364,7 +1406,7 @@ export class AnkicasterEngine {
     next.bankAtLastReview = 0;
     next.manaDebt = 0;
     next.renown = 0;
-    next.knownPatterns = ['simple_cot', 'long_table', 'hearth', 'couch', 'potted_fern', 'bookshelf'];
+    next.knownPatterns = [...STARTER_PATTERNS];
     next.draftHistory = {};
     next.draftPity = {};
     next.roomlessStreak = {};
@@ -1701,7 +1743,7 @@ export class AnkicasterEngine {
       suppliesTaken,
       partySkillDays,
       chance,
-      fortune: 1,
+      fortune: 1 + academyFurnitureEffect(next.rooms, 'rift_fortune'),
       roll,
       wrongRoll,
       requiredReviews: dest.reviews,
@@ -2285,6 +2327,11 @@ export class AnkicasterEngine {
     const fDef = FURNITURE_DEFINITIONS[furnitureDefId];
     if (!fDef) return { state, success: false, error: 'Unknown furniture item.' };
 
+    if (!isPatternKnown(next, furnitureDefId)) {
+      const deckLabel = fDef.deck[0].toUpperCase() + fDef.deck.slice(1);
+      return { state, success: false, error: `Pattern needed (${deckLabel} deck).` };
+    }
+
     const roomDef = ROOM_DEFINITIONS[room.defId];
     const maxSlots = (roomDef?.optionalSlots || 2) + (room.level - 1) * 2;
     const currentSlots = room.furniture.filter(f => !f.slotKind.startsWith('required:')).reduce((acc, f) => {
@@ -2301,27 +2348,20 @@ export class AnkicasterEngine {
     if (stored > 0) {
       next.furnitureInventory = { ...next.furnitureInventory, [furnitureDefId]: stored - 1 };
     } else {
-    if (next.mana < fDef.cost.mana) {
-      return { state, success: false, error: `Need ${fDef.cost.mana} Mana.` };
-    }
-    if ((fDef.cost.timber || 0) > next.resources.timber) {
-      return { state, success: false, error: `Need ${fDef.cost.timber} Timber.` };
-    }
-    if ((fDef.cost.stone || 0) > next.resources.stone) {
-      return { state, success: false, error: `Need ${fDef.cost.stone} Stone.` };
-    }
-    if ((fDef.cost.cloth || 0) > next.resources.cloth) {
-      return { state, success: false, error: `Need ${fDef.cost.cloth} Cloth.` };
+      const cost = fDef.cost as Cost;
+      const bad = unaffordable(next, cost);
+      if (bad) return { state, success: false, error: bad };
+
+      next.mana -= cost.mana || 0;
+      const res = next.resources as unknown as Record<string, number>;
+      for (const [k, v] of Object.entries(cost)) {
+        if (k !== 'mana' && v) res[k] = (res[k] || 0) - v;
+      }
     }
 
-    next.mana -= fDef.cost.mana;
-    if (fDef.cost.timber) next.resources.timber -= fDef.cost.timber;
-    if (fDef.cost.stone) next.resources.stone -= fDef.cost.stone;
-    if (fDef.cost.cloth) next.resources.cloth -= fDef.cost.cloth;
-    }
-
+    const ids = allFurnitureIds(next.rooms);
     room.furniture.push({
-      id: Date.now(),
+      id: uniqueFurnitureId(ids, room.id * 100 + room.furniture.length + 1),
       defId: furnitureDefId,
       slotKind: fDef.role === 'bed' ? 'bed' : 'optional',
       damaged: false
@@ -2872,11 +2912,13 @@ export class AnkicasterEngine {
     const potion = next.potions.find(p => p.id === potionId);
     if (!potion) return { state, success: false, error: 'Potion recipe not found.' };
 
-    if (next.mana < 30) {
-      return { state, success: false, error: 'Need 30 Mana for alchemical reagent catalyst.' };
+    const brewBonus = academyFurnitureEffect(next.rooms, 'brew_speed_pct', next.rooms.find(r => r.defId === 'alchemy_lab' && r.state === 'built'));
+    const manaCost = Math.max(10, Math.round(30 * Math.max(0.5, 1 - brewBonus / 100)));
+    if (next.mana < manaCost) {
+      return { state, success: false, error: `Need ${manaCost} Mana for alchemical reagent catalyst.` };
     }
 
-    next.mana -= 30;
+    next.mana -= manaCost;
     next.resources.potions[potionId] = (next.resources.potions[potionId] || 0) + 1;
 
     next.notices.push({
@@ -2937,10 +2979,22 @@ export class AnkicasterEngine {
     if (card.type === 'blueprint' && card.targetId) {
       next.roomPlans = { ...(next.roomPlans || {}) };
       next.roomPlans[card.targetId] = (next.roomPlans[card.targetId] || 0) + 1;
+      for (const reqFid of requiredFixturesForRoom(card.targetId)) {
+        if (!next.knownPatterns.includes(reqFid)) next.knownPatterns.push(reqFid);
+      }
       message = `Kept a ${ROOM_DEFINITIONS[card.targetId]?.name || card.name} plan. It can be built once.`;
     } else if (card.type === 'furniture_pattern' && card.targetId) {
       if (!next.knownPatterns.includes(card.targetId)) next.knownPatterns.push(card.targetId);
       message = `Learned furniture pattern for ${card.name}!`;
+    } else if (card.type === 'seed' && card.targetId) {
+      if (!next.resources.seedsUnlocked.includes(card.targetId)) {
+        next.resources.seedsUnlocked.push(card.targetId);
+      }
+      message = `Unlocked ${card.name} for your grounds plots!`;
+    } else if (card.type === 'recipe_page' && card.targetId) {
+      const recipe = next.potions.find(p => p.id === card.targetId);
+      if (recipe) recipe.discovered = true;
+      message = `Discovered potion recipe: ${recipe?.name || card.name}!`;
     } else if (card.type === 'boon') {
       if (card.name.includes('Supply')) {
         next.resources.timber += 45;
@@ -2953,7 +3007,14 @@ export class AnkicasterEngine {
         message = 'Astral Influx absorbed: +35 Insight, +150 Mana!';
       } else if (card.name.includes('Dawn')) {
         next.resources.radiance += 30;
-        message = 'Dawn Blessing received: +30 Radiance!';
+        const injured = next.characters.find(c => !!c.injury);
+        if (injured) {
+          injured.injury = undefined;
+          injured.needs.health = 100;
+          message = `Dawn Blessing received: +30 Radiance and cured ${injured.name}!`;
+        } else {
+          message = 'Dawn Blessing received: +30 Radiance!';
+        }
       } else if (card.name.includes('Veil')) {
         next.veil.strength = Math.min(100, next.veil.strength + 35);
         next.resources.umbra += 25;

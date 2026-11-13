@@ -12,6 +12,7 @@ import {
   getWizardLevelRequirements
 } from '../src/utils/formulas.ts';
 import { AnkicasterEngine, getAnkiDayNumber } from '../src/utils/engine.ts';
+import { STARTER_PATTERNS } from '../src/utils/decks.ts';
 import { createInitialGameState } from '../src/data/initialState.ts';
 import { SchoolType, Character, PlacedRoom } from '../src/types/ankicaster.ts';
 import { CREATURE_DEFINITIONS } from '../src/data/content.ts';
@@ -591,7 +592,7 @@ test('7. Timed Terms reset: students, faculty and creatures reset; card links fr
   assert.equal(res.state.renown, 0, 'Renown must reset to 0 (Item 41)');
   assert.equal(res.state.roomPlans?.library, 2, 'Found room plans survive the term');
   assert.equal(res.state.roomPlans?.scriptorium, 1, 'Found room plans survive the term');
-  assert.deepEqual(res.state.knownPatterns, ['simple_cot', 'long_table', 'hearth', 'couch', 'potted_fern', 'bookshelf'], 'Known patterns reset to starting set');
+  assert.deepEqual(res.state.knownPatterns, STARTER_PATTERNS, 'Known patterns reset to starting set');
   assert.deepEqual(res.state.draftHistory, {}, 'Draft history reset');
   assert.equal(res.state.settings.termLengthDays, 120, 'Default term length is 120 days');
 

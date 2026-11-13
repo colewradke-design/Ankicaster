@@ -923,6 +923,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   simple_cot: {
     id: 'simple_cot',
     name: 'Simple Cot',
+    deck: 'foundation',
     role: 'bed',
     targetRole: 'bed',
     slots: 1,
@@ -934,6 +935,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   feather_bed: {
     id: 'feather_bed',
     name: 'Feather Bed',
+    deck: 'foundation',
     role: 'bed',
     targetRole: 'bed',
     slots: 1,
@@ -945,6 +947,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   canopy_bed: {
     id: 'canopy_bed',
     name: 'Canopy Bed',
+    deck: 'foundation',
     role: 'bed',
     targetRole: 'bed',
     slots: 1,
@@ -957,6 +960,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   faculty_bed: {
     id: 'faculty_bed',
     name: 'Faculty Bed',
+    deck: 'foundation',
     role: 'faculty_bed',
     targetRole: 'faculty_bed',
     slots: 1,
@@ -969,6 +973,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   grand_doors: {
     id: 'grand_doors',
     name: 'Grand Doors',
+    deck: 'foundation',
     role: 'required',
     targetRole: 'grand_doors',
     slots: 1,
@@ -980,6 +985,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   orb_stand: {
     id: 'orb_stand',
     name: 'Orb Stand',
+    deck: 'magic',
     role: 'required',
     targetRole: 'orb_stand',
     slots: 1,
@@ -991,6 +997,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   lectern: {
     id: 'lectern',
     name: 'Study Lectern',
+    deck: 'foundation',
     role: 'required',
     targetRole: 'lectern',
     slots: 1,
@@ -1002,6 +1009,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   shelving: {
     id: 'shelving',
     name: 'Vault Shelving',
+    deck: 'foundation',
     role: 'required',
     targetRole: 'shelving',
     slots: 1,
@@ -1013,6 +1021,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   long_table: {
     id: 'long_table',
     name: 'Long Table',
+    deck: 'foundation',
     role: 'required',
     targetRole: 'long_table',
     slots: 1,
@@ -1024,6 +1033,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   hearth: {
     id: 'hearth',
     name: 'Hearth',
+    deck: 'foundation',
     role: 'required',
     targetRole: 'hearth',
     slots: 1,
@@ -1035,6 +1045,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   teachers_lectern: {
     id: 'teachers_lectern',
     name: "Teacher's Lectern",
+    deck: 'foundation',
     role: 'required',
     targetRole: 'teachers_lectern',
     slots: 1,
@@ -1046,6 +1057,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   orrery_globe: {
     id: 'orrery_globe',
     name: 'Orrery Globe',
+    deck: 'magic',
     role: 'required',
     targetRole: 'orrery_globe',
     slots: 1,
@@ -1057,6 +1069,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   potting_bench: {
     id: 'potting_bench',
     name: 'Potting Bench',
+    deck: 'foundation',
     role: 'required',
     targetRole: 'potting_bench',
     slots: 1,
@@ -1068,6 +1081,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   sun_altar: {
     id: 'sun_altar',
     name: 'Sun Altar',
+    deck: 'magic',
     role: 'required',
     targetRole: 'sun_altar',
     slots: 1,
@@ -1079,6 +1093,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   veiled_mirror: {
     id: 'veiled_mirror',
     name: 'Veiled Mirror',
+    deck: 'magic',
     role: 'required',
     targetRole: 'veiled_mirror',
     slots: 1,
@@ -1090,6 +1105,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   bench_cauldron: {
     id: 'bench_cauldron',
     name: 'Bench Cauldron',
+    deck: 'magic',
     role: 'required',
     targetRole: 'bench_cauldron',
     slots: 1,
@@ -1101,6 +1117,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   planter_bed: {
     id: 'planter_bed',
     name: 'Planter Bed',
+    deck: 'grounds',
     role: 'required',
     targetRole: 'planter_bed',
     slots: 1,
@@ -1113,6 +1130,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   potted_fern: {
     id: 'potted_fern',
     name: 'Potted Fern',
+    deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 30, timber: 2 },
@@ -1123,6 +1141,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   bookshelf: {
     id: 'bookshelf',
     name: 'Bookshelf',
+    deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 100, timber: 10 },
@@ -1134,6 +1153,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   tapestry: {
     id: 'tapestry',
     name: 'Tapestry',
+    deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 80, cloth: 4 },
@@ -1144,17 +1164,19 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   ward_lantern: {
     id: 'ward_lantern',
     name: 'Ward Lantern',
+    deck: 'magic',
     role: 'optional',
     slots: 1,
     cost: { mana: 160, glass: 5, umbra: 5 },
     stats: { order: 2 },
-    specialEffect: 'Hazards in room -30%, adjacent rooms -10%',
+    specialEffect: 'Hazards in room -10%',
     rooms: 'any',
     unlock: { type: 'draft', school: 'shadow', rarity: 'common' }
   },
   enchanted_broom: {
     id: 'enchanted_broom',
     name: 'Enchanted Broom',
+    deck: 'magic',
     role: 'optional',
     slots: 1,
     cost: { mana: 150, timber: 5, reagents: 5 },
@@ -1166,11 +1188,12 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   fume_hood: {
     id: 'fume_hood',
     name: 'Fume Hood',
+    deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 250, stone: 10, glass: 10, reagents: 3 },
     stats: { order: 2 },
-    specialEffect: 'Explosions -40%; removes Alchemy Lab noise penalty',
+    specialEffect: 'Room hazard chance -10%',
     rooms: ['alchemy_lab'],
     unlock: { type: 'draft', school: 'alchemy', rarity: 'uncommon' }
   },
@@ -1178,6 +1201,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   bunk_bed: {
     id: 'bunk_bed',
     name: 'Bunk Bed',
+    deck: 'foundation',
     role: 'bed',
     slots: 1,
     cost: { mana: 120, timber: 12 },
@@ -1189,6 +1213,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   dreamcatcher_bed: {
     id: 'dreamcatcher_bed',
     name: 'Dreamcatcher Bed',
+    deck: 'magic',
     role: 'bed',
     slots: 1,
     cost: { mana: 300, timber: 8, cloth: 4, insight: 5 },
@@ -1200,17 +1225,19 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   mossbed: {
     id: 'mossbed',
     name: 'Living Mossbed',
+    deck: 'magic',
     role: 'bed',
     slots: 1,
     cost: { mana: 180, timber: 6, herbs: 10 },
     stats: { comfort: 4, aura: 1 },
-    specialEffect: 'Occupant heals 20% faster',
+    specialEffect: 'Occupant heals 10% faster',
     rooms: ['dormitory', 'grand_dormitory'],
     unlock: { type: 'draft', school: 'nature', rarity: 'uncommon' }
   },
   footlocker: {
     id: 'footlocker',
     name: 'Footlocker',
+    deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 40, timber: 4 },
@@ -1221,6 +1248,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   moon_curtains: {
     id: 'moon_curtains',
     name: 'Moon-Shroud Curtains',
+    deck: 'magic',
     role: 'optional',
     slots: 1,
     cost: { mana: 140, cloth: 6, umbra: 4 },
@@ -1233,6 +1261,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   couch: {
     id: 'couch',
     name: 'Velvet Couch',
+    deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 90, timber: 8, cloth: 4 },
@@ -1243,6 +1272,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   hammock: {
     id: 'hammock',
     name: 'Woven Hammock',
+    deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 60, cloth: 4 },
@@ -1253,17 +1283,19 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   tea_service: {
     id: 'tea_service',
     name: 'Porcelain Tea Service',
+    deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 120, glass: 2, herbs: 2 },
     stats: { comfort: 2, charm: 2 },
-    specialEffect: 'Lounge career outputs +1%',
+    specialEffect: 'Lounge career outputs +5%',
     rooms: ['faculty_lounge', 'wizard_study'],
     unlock: { type: 'draft', school: 'light', rarity: 'common' }
   },
   wizard_chess: {
     id: 'wizard_chess',
     name: "Wizard's Chess Table",
+    deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 140, timber: 10, insight: 2 },
@@ -1275,6 +1307,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   music_box: {
     id: 'music_box',
     name: 'Music Box of Calm',
+    deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 160, glass: 3, radiance: 3 },
@@ -1286,6 +1319,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   hex_darts: {
     id: 'hex_darts',
     name: 'Dartboard of Harmless Hexes',
+    deck: 'magic',
     role: 'optional',
     slots: 1,
     cost: { mana: 120, timber: 6, umbra: 3 },
@@ -1297,11 +1331,12 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   warm_hearthstone: {
     id: 'warm_hearthstone',
     name: 'Warm Hearthstone',
+    deck: 'magic',
     role: 'optional',
     slots: 1,
     cost: { mana: 160, stone: 10, reagents: 3 },
     stats: { comfort: 3, order: 1 },
-    specialEffect: 'Halves Cold Snap hazard effects in room',
+    specialEffect: 'Room hazard chance -8%',
     rooms: ['dormitory', 'common_room', 'faculty_lounge'],
     unlock: { type: 'draft', school: 'alchemy', rarity: 'common' }
   },
@@ -1309,6 +1344,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   cooking_range: {
     id: 'cooking_range',
     name: 'Cooking Range',
+    deck: 'foundation',
     role: 'required',
     slots: 1,
     cost: { mana: 180, stone: 15, glass: 2 },
@@ -1319,6 +1355,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   spice_rack: {
     id: 'spice_rack',
     name: 'Herb & Spice Rack',
+    deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 70, timber: 5, herbs: 3 },
@@ -1330,6 +1367,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   frostbox: {
     id: 'frostbox',
     name: 'Arcane Frostbox',
+    deck: 'magic',
     role: 'optional',
     slots: 1,
     cost: { mana: 200, stone: 5, glass: 5, insight: 3 },
@@ -1341,22 +1379,24 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   stewpot: {
     id: 'stewpot',
     name: 'Bottomless Stewpot',
+    deck: 'magic',
     role: 'optional',
     slots: 1,
     cost: { mana: 400, stone: 10, reagents: 10, ember_salt: 2 },
     stats: { aura: 2, comfort: 2 },
-    specialEffect: 'Meals use 20% fewer Provisions',
+    specialEffect: 'Kitchen output +10%',
     rooms: ['kitchen'],
     unlock: { type: 'draft', school: 'alchemy', rarity: 'rare' }
   },
   banquet_bell: {
     id: 'banquet_bell',
     name: 'Banquet Bell',
+    deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 250, stone: 10, glass: 3 },
     stats: { charm: 3 },
-    specialEffect: 'Ring for Feast: next meal gives Well-Fed to all and +5 Leisure',
+    specialEffect: 'Academy morale +4',
     rooms: ['refectory'],
     unlock: { type: 'draft', rarity: 'uncommon' }
   },
@@ -1364,6 +1404,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   reading_desk: {
     id: 'reading_desk',
     name: 'Reading Desk',
+    deck: 'foundation',
     role: 'required',
     slots: 1,
     cost: { mana: 90, timber: 8 },
@@ -1374,6 +1415,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   rolling_ladder: {
     id: 'rolling_ladder',
     name: 'Rolling Library Ladder',
+    deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 80, timber: 8 },
@@ -1385,6 +1427,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   great_telescope: {
     id: 'great_telescope',
     name: 'Great Brass Telescope',
+    deck: 'foundation',
     role: 'required',
     slots: 2,
     cost: { mana: 400, stone: 10, glass: 15, crystal: 2 },
@@ -1395,6 +1438,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   scribes_desk: {
     id: 'scribes_desk',
     name: "Master Scribe's Desk",
+    deck: 'foundation',
     role: 'required',
     slots: 1,
     cost: { mana: 150, timber: 10, cloth: 3 },
@@ -1405,6 +1449,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   globe_elsewhere: {
     id: 'globe_elsewhere',
     name: 'Globe of Elsewhere',
+    deck: 'magic',
     role: 'optional',
     slots: 1,
     cost: { mana: 350, glass: 5, insight: 10, crystal: 1 },
@@ -1416,17 +1461,19 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   silent_quill: {
     id: 'silent_quill',
     name: 'Self-Writing Quill',
+    deck: 'magic',
     role: 'optional',
     slots: 1,
     cost: { mana: 220, moonsilk: 2, insight: 5 },
     stats: { focus: 3 },
-    specialEffect: 'Scriptorium crafts 25% faster',
+    specialEffect: 'Scriptorium output +10%',
     rooms: ['scriptorium', 'wizard_study'],
     unlock: { type: 'draft', school: 'arcane', rarity: 'uncommon' }
   },
   map_table: {
     id: 'map_table',
     name: 'Expedition Map Table',
+    deck: 'foundation',
     role: 'optional',
     slots: 2,
     cost: { mana: 300, timber: 10, cloth: 5, insight: 5 },
@@ -1439,6 +1486,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   rain_cistern: {
     id: 'rain_cistern',
     name: 'Rainwater Cistern',
+    deck: 'grounds',
     role: 'optional',
     slots: 1,
     cost: { mana: 140, stone: 10, glass: 3 },
@@ -1450,6 +1498,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   compost_bin: {
     id: 'compost_bin',
     name: 'Enriched Compost Bin',
+    deck: 'grounds',
     role: 'optional',
     slots: 1,
     cost: { mana: 50, timber: 6 },
@@ -1461,17 +1510,19 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   glowcap_lamp: {
     id: 'glowcap_lamp',
     name: 'Glowcap Grow-Lamp',
+    deck: 'grounds',
     role: 'optional',
     slots: 1,
     cost: { mana: 180, glass: 3, herbs: 5, insight: 2 },
     stats: { aura: 2 },
-    specialEffect: 'Greenhouse crop output +15%',
+    specialEffect: 'Greenhouse crop output +10%',
     rooms: ['greenhouse'],
     unlock: { type: 'draft', school: 'nature', rarity: 'uncommon' }
   },
   feeding_trough: {
     id: 'feeding_trough',
     name: 'Meadow Feeding Trough',
+    deck: 'grounds',
     role: 'required',
     slots: 1,
     cost: { mana: 60, timber: 8 },
@@ -1482,6 +1533,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   glass_tank: {
     id: 'glass_tank',
     name: 'Reinforced Glass Tank',
+    deck: 'grounds',
     role: 'required',
     slots: 2,
     cost: { mana: 200, glass: 20 },
@@ -1492,6 +1544,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   perch_tree: {
     id: 'perch_tree',
     name: 'Indoor Perch Tree',
+    deck: 'grounds',
     role: 'required',
     slots: 1,
     cost: { mana: 120, timber: 10 },
@@ -1502,6 +1555,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   lightless_burrow: {
     id: 'lightless_burrow',
     name: 'Lightless Burrow',
+    deck: 'grounds',
     role: 'required',
     slots: 1,
     cost: { mana: 100, stone: 10, cloth: 2 },
@@ -1512,6 +1566,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   brazier_nest: {
     id: 'brazier_nest',
     name: 'Fire-Clay Brazier Nest',
+    deck: 'grounds',
     role: 'required',
     slots: 1,
     cost: { mana: 140, stone: 15 },
@@ -1522,6 +1577,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   geode_bed: {
     id: 'geode_bed',
     name: 'Resonant Geode Bed',
+    deck: 'grounds',
     role: 'required',
     slots: 1,
     cost: { mana: 160, stone: 10, crystal: 1 },
@@ -1532,28 +1588,31 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   creature_toybox: {
     id: 'creature_toybox',
     name: 'Creature Toybox',
+    deck: 'grounds',
     role: 'optional',
     slots: 1,
     cost: { mana: 90, timber: 6, cloth: 3 },
     stats: { charm: 2 },
-    specialEffect: 'Creature escape chance in room -20%',
+    specialEffect: 'Creature bond gain +10%',
     rooms: ['meadow_paddock', 'tide_tank', 'aviary', 'gloom_hutch', 'ember_pit', 'crystal_vivarium', 'menagerie'],
     unlock: { type: 'draft', school: 'nature', rarity: 'common' }
   },
   treat_dispenser: {
     id: 'treat_dispenser',
     name: 'Automatic Treat Dispenser',
+    deck: 'grounds',
     role: 'optional',
     slots: 1,
     cost: { mana: 120, stone: 5, reagents: 2 },
     stats: { order: 1 },
-    specialEffect: 'Creatures here consume 25% less food diet',
+    specialEffect: 'Creatures here consume 10% less food',
     rooms: ['meadow_paddock', 'tide_tank', 'aviary', 'gloom_hutch', 'ember_pit', 'crystal_vivarium', 'menagerie'],
     unlock: { type: 'draft', school: 'alchemy', rarity: 'uncommon' }
   },
   warm_rock: {
     id: 'warm_rock',
     name: 'Sunning Rock',
+    deck: 'grounds',
     role: 'optional',
     slots: 1,
     cost: { mana: 80, stone: 10 },
@@ -1566,6 +1625,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   infirmary_cot: {
     id: 'infirmary_cot',
     name: 'Infirmary Cot',
+    deck: 'foundation',
     role: 'required',
     slots: 1,
     cost: { mana: 90, timber: 6, cloth: 3 },
@@ -1577,6 +1637,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   remedy_cabinet: {
     id: 'remedy_cabinet',
     name: 'Apothecary Remedy Cabinet',
+    deck: 'foundation',
     role: 'required',
     slots: 1,
     cost: { mana: 150, timber: 8, glass: 4 },
@@ -1588,72 +1649,79 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   healing_basin: {
     id: 'healing_basin',
     name: 'Healing Spring Basin',
+    deck: 'magic',
     role: 'optional',
     slots: 2,
     cost: { mana: 350, stone: 15, radiance: 10 },
     stats: { aura: 3, comfort: 2 },
-    specialEffect: 'Healing rate +25%',
-    rooms: ['infirmary', 'bathhouse', 'sanctuary'],
+    specialEffect: 'Healing rate +10%',
+    rooms: ['infirmary', 'bathhouse', 'sunlit_sanctum'],
     unlock: { type: 'draft', school: 'light', rarity: 'rare' }
   },
   sun_window: {
     id: 'sun_window',
     name: 'Luminous Sun Window',
+    deck: 'magic',
     role: 'required',
     slots: 1,
     cost: { mana: 200, glass: 15, radiance: 5 },
     stats: { charm: 3, aura: 3 },
-    rooms: ['sanctuary'],
+    rooms: ['sunlit_sanctum'],
     unlock: { type: 'std' }
   },
   meditation_cushions: {
     id: 'meditation_cushions',
     name: 'Silk Meditation Cushions',
+    deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 60, cloth: 4 },
     stats: { comfort: 2, focus: 1 },
     specialEffect: 'Sanctum capacity +1; restores composure',
-    rooms: ['sanctuary', 'common_room', 'wizard_study'],
+    rooms: ['sunlit_sanctum', 'common_room', 'wizard_study'],
     unlock: { type: 'std' }
   },
   soaking_tub: {
     id: 'soaking_tub',
     name: 'Marble Soaking Tub',
+    deck: 'foundation',
     role: 'required',
     slots: 2,
     cost: { mana: 220, stone: 10, glass: 5 },
     stats: { comfort: 4 },
-    specialEffect: 'Restores Rest target +10 and heals 10% faster',
+    specialEffect: 'Rest target +5',
     rooms: ['bathhouse'],
     unlock: { type: 'std' }
   },
   halo_candles: {
     id: 'halo_candles',
     name: 'Halo Candles',
+    deck: 'magic',
     role: 'optional',
     slots: 1,
     cost: { mana: 130, glass: 2, radiance: 4 },
     stats: { aura: 2, charm: 1 },
     specialEffect: 'Composure target +2 in room',
-    rooms: ['dormitory', 'sanctuary', 'infirmary'],
+    rooms: ['dormitory', 'sunlit_sanctum', 'infirmary'],
     unlock: { type: 'draft', school: 'light', rarity: 'common' }
   },
   // Shadow & Defense
   ward_circle: {
     id: 'ward_circle',
     name: 'Inscribed Ward Circle',
+    deck: 'magic',
     role: 'required',
     slots: 1,
     cost: { mana: 200, stone: 10, glass: 2 },
     stats: { order: 3, aura: 2 },
     specialEffect: 'Suppresses hazards in room and adjacent areas',
-    rooms: ['warding_chamber', 'ward_spire'],
+    rooms: ['warding_chamber'],
     unlock: { type: 'std' }
   },
   penitent_benches: {
     id: 'penitent_benches',
     name: 'Hardwood Penitent Benches',
+    deck: 'foundation',
     role: 'required',
     slots: 1,
     cost: { mana: 100, timber: 10 },
@@ -1665,33 +1733,36 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   silence_bell: {
     id: 'silence_bell',
     name: 'Silence Bell of St. Jude',
+    deck: 'magic',
     role: 'optional',
     slots: 1,
     cost: { mana: 250, stone: 5, umbra: 8 },
     stats: { order: 3 },
-    specialEffect: 'Misbehavior in adjacent rooms -15%',
+    specialEffect: 'Adjacent rooms hazard chance -8%',
     rooms: ['corridor', 'dormitory', 'detention_hall'],
     unlock: { type: 'draft', school: 'shadow', rarity: 'uncommon' }
   },
   shadow_ledger: {
     id: 'shadow_ledger',
     name: 'Shadow Ledger of Fates',
+    deck: 'magic',
     role: 'optional',
     slots: 1,
     cost: { mana: 300, cloth: 10, umbra: 10 },
     stats: { order: 2, focus: 2 },
-    specialEffect: 'Warns of next hazard target room in advance',
+    specialEffect: 'Academy hazard chance -8%',
     rooms: ['warding_chamber', 'wizard_study'],
     unlock: { type: 'draft', school: 'shadow', rarity: 'uncommon' }
   },
   nightglass: {
     id: 'nightglass',
     name: 'Nightglass Tinted Pane',
+    deck: 'magic',
     role: 'optional',
     slots: 1,
     cost: { mana: 180, glass: 10, umbra: 4 },
     stats: { aura: 2, charm: 1 },
-    specialEffect: 'Gloom creatures in adjacent habitats +10% buff',
+    specialEffect: 'Creature bond gain +10%',
     rooms: ['gloom_hutch', 'warding_chamber', 'dormitory'],
     unlock: { type: 'draft', school: 'shadow', rarity: 'common' }
   },
@@ -1699,6 +1770,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   brewing_cauldron: {
     id: 'brewing_cauldron',
     name: 'Cast Iron Brewing Cauldron',
+    deck: 'magic',
     role: 'required',
     slots: 1,
     cost: { mana: 220, stone: 15, glass: 2 },
@@ -1709,27 +1781,30 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   ingredient_rack: {
     id: 'ingredient_rack',
     name: 'Organized Ingredient Rack',
+    deck: 'foundation',
     role: 'required',
     slots: 1,
     cost: { mana: 100, timber: 8, glass: 2 },
     stats: { order: 2 },
-    rooms: ['alchemy_lab', 'apothecary'],
+    rooms: ['alchemy_lab'],
     unlock: { type: 'std' }
   },
   alembic_array: {
     id: 'alembic_array',
     name: 'Crystal Alembic Array',
+    deck: 'magic',
     role: 'optional',
     slots: 2,
     cost: { mana: 450, glass: 20, reagents: 10, ember_salt: 2 },
     stats: { aura: 4, focus: 2 },
-    specialEffect: 'Potion yield +10%, brew review cost -20%',
+    specialEffect: 'Brewing progress +10%',
     rooms: ['alchemy_lab'],
     unlock: { type: 'draft', school: 'alchemy', rarity: 'rare' }
   },
   workbench: {
     id: 'workbench',
     name: 'Heavy Timber Workbench',
+    deck: 'foundation',
     role: 'required',
     slots: 1,
     cost: { mana: 150, timber: 15, stone: 5 },
@@ -1740,6 +1815,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   tool_wall: {
     id: 'tool_wall',
     name: 'Master Builder Tool Wall',
+    deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 90, timber: 8, stone: 3 },
@@ -1751,6 +1827,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   kiln: {
     id: 'kiln',
     name: 'High-Temperature Kiln',
+    deck: 'foundation',
     role: 'required',
     slots: 1,
     cost: { mana: 200, stone: 25 },
@@ -1761,6 +1838,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   loom: {
     id: 'loom',
     name: 'Floor Weaving Loom',
+    deck: 'foundation',
     role: 'required',
     slots: 1,
     cost: { mana: 150, timber: 15 },
@@ -1771,6 +1849,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   practice_dummies: {
     id: 'practice_dummies',
     name: 'Straw Practice Dummies',
+    deck: 'foundation',
     role: 'required',
     slots: 1,
     cost: { mana: 80, timber: 10, cloth: 2 },
@@ -1781,6 +1860,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   supply_chest: {
     id: 'supply_chest',
     name: 'Reinforced Expedition Supply Chest',
+    deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 120, timber: 10 },
@@ -1792,6 +1872,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   artifact_plinth: {
     id: 'artifact_plinth',
     name: 'Polished Marble Plinth',
+    deck: 'foundation',
     role: 'required',
     slots: 1,
     cost: { mana: 150, stone: 15 },
@@ -1804,6 +1885,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   garden_gnome: {
     id: 'garden_gnome',
     name: 'Enchanted Clay Gnome',
+    deck: 'grounds',
     role: 'outdoor',
     slots: 1,
     cost: { mana: 60, stone: 5 },
@@ -1815,6 +1897,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   bird_bath: {
     id: 'bird_bath',
     name: 'Marble Bird Bath',
+    deck: 'grounds',
     role: 'outdoor',
     slots: 1,
     cost: { mana: 80, stone: 10 },
@@ -1826,6 +1909,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   scarecrow: {
     id: 'scarecrow',
     name: 'Hexed Scarecrow',
+    deck: 'grounds',
     role: 'outdoor',
     slots: 1,
     cost: { mana: 90, timber: 6, cloth: 2, umbra: 2 },
@@ -1837,6 +1921,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   stone_lantern: {
     id: 'stone_lantern',
     name: 'Carved Stone Lantern',
+    deck: 'grounds',
     role: 'outdoor',
     slots: 1,
     cost: { mana: 100, stone: 12 },
@@ -1848,6 +1933,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   beehive_box: {
     id: 'beehive_box',
     name: 'Beehive Box',
+    deck: 'grounds',
     role: 'outdoor',
     slots: 1,
     cost: { mana: 120, timber: 8 },
@@ -1859,6 +1945,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   windmill_charm: {
     id: 'windmill_charm',
     name: 'Copper Windmill Charm',
+    deck: 'grounds',
     role: 'outdoor',
     slots: 1,
     cost: { mana: 150, timber: 10, reagents: 3 },
@@ -1870,22 +1957,24 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   fairy_ring: {
     id: 'fairy_ring',
     name: 'Fairy Mushroom Ring',
+    deck: 'grounds',
     role: 'outdoor',
     slots: 1,
     cost: { mana: 250, herbs: 10, insight: 5 },
     stats: { charm: 3, aura: 2 },
-    specialEffect: '5% chance per day: a wild creature visits your grounds',
+    specialEffect: 'Taming speed on grounds +8%',
     rooms: ['courtyard_garden', 'standing_stones', 'orchard'],
     unlock: { type: 'draft', school: 'nature', rarity: 'uncommon' }
   },
   rune_marker: {
     id: 'rune_marker',
     name: 'Warding Rune Marker',
+    deck: 'grounds',
     role: 'outdoor',
     slots: 1,
     cost: { mana: 200, stone: 15, umbra: 5 },
     stats: { order: 2, aura: 1 },
-    specialEffect: 'Grounds hazards -15%',
+    specialEffect: 'Grounds hazards -10%',
     rooms: ['woodlot', 'quarry', 'standing_stones'],
     unlock: { type: 'draft', school: 'shadow', rarity: 'uncommon' }
   },
@@ -1893,6 +1982,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   starfall_chandelier: {
     id: 'starfall_chandelier',
     name: 'Starfall Chandelier',
+    deck: 'magic',
     role: 'optional',
     slots: 1,
     cost: { mana: 600 },
@@ -1904,12 +1994,13 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   heartwood_bench: {
     id: 'heartwood_bench',
     name: 'Living Heartwood Bench',
+    deck: 'magic',
     role: 'optional',
     slots: 2,
     cost: { mana: 600 },
     stats: { comfort: 6, charm: 4 },
     specialEffect: "All occupants' morale +5",
-    rooms: ['common_room', 'faculty_lounge', 'sanctuary'],
+    rooms: ['common_room', 'faculty_lounge', 'sunlit_sanctum'],
     unlock: { type: 'rift', destination: 'crystal_caverns' }
   }
 };

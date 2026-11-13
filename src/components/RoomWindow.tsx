@@ -14,7 +14,7 @@
 
 import React from 'react';
 import {
-  X, AlertTriangle, Sparkles, Droplets, Shield, Gauge, ChevronRight, Info, Hammer, Users, Briefcase, Award, Move, Trash2, Pause, Play
+  X, AlertTriangle, Sparkles, Droplets, Shield, Gauge, ChevronRight, Info, Hammer, Users, Briefcase, Award, Move, Trash2, Pause, Play, Lock
 } from 'lucide-react';
 import { reviewsToGo, reviewsToGoText } from '../utils/construction';
 import { requiredSlotStatus, requiredInstallOption, costText, unaffordable } from '../utils/requiredFurniture';
@@ -24,7 +24,11 @@ import { CharacterPortrait } from './CharacterPortrait';
 import { CreaturePortrait } from './CreaturePortrait';
 import { FullGameState, PlacedRoom } from '../types/ankicaster';
 import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS, SPELL_DEFINITIONS, CREATURE_DEFINITIONS } from '../data/content';
-import { calculateRoomQuality, calculateFacultyLimit, wizardOrbQuote } from '../utils/formulas';
+import {
+  calculateRoomQuality, calculateFacultyLimit, wizardOrbQuote,
+  FURNITURE_EFFECTS, formatFurnitureEffect, FurnitureEffectKind, roomFurnitureEffects
+} from '../utils/formulas';
+import { isPatternKnown } from '../utils/decks';
 import { HAZARD_DISPEL_MANA_COST } from '../utils/engine';
 import { ScreenId, SCREEN_DEFS, getRoomScreens } from '../ui/screens';
 import { ScreenIcon } from './ScreenIcon';
@@ -204,7 +208,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
       if (fDef.role === 'bed' && room.defId.includes('dorm')) return true;
       return false;
     })
-    .slice(0, 12);
+    .sort((a, b) => (isPatternKnown(state, a.id) ? 0 : 1) - (isPatternKnown(state, b.id) ? 0 : 1));
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[1px] flex items-center justify-center p-4" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
@@ -637,21 +641,36 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                 {room.furniture.length === 0 ? (
                   <div className="text-slate-500">Nothing yet.</div>
                 ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {room.furniture.map(f => {
-                      const fDef = FURNITURE_DEFINITIONS[f.defId];
-                      const req = f.slotKind.startsWith('required:');
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap gap-1.5">
+                      {room.furniture.map(f => {
+                        const fDef = FURNITURE_DEFINITIONS[f.defId];
+                        const req = f.slotKind.startsWith('required:');
+                        const eff = FURNITURE_EFFECTS[f.defId];
+                        const effText = eff ? formatFurnitureEffect(eff.kind, eff.value * (f.damaged ? 0.5 : 1)) : null;
+                        return (
+                          <span key={f.id} className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border ${req ? 'border-amber-800/50 text-amber-200' : 'border-slate-700 text-slate-200'}`} title={effText || (req ? 'Required fixture' : 'Optional furnishing')}>
+                            <span>{fDef?.name || f.defId}</span>
+                            {effText && <span className="text-[11px] text-emerald-300/90">({effText})</span>}
+                            {!req && (
+                              <button onClick={() => onRemoveFurniture(room.id, f.id)} className="text-rose-400 hover:text-rose-300 ml-0.5" aria-label={`Remove ${fDef?.name || f.defId}`} title="Remove">
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </span>
+                        );
+                      })}
+                    </div>
+                    {(() => {
+                      const totals = Object.entries(roomFurnitureEffects(room)) as Array<[FurnitureEffectKind, number]>;
+                      if (totals.length === 0) return null;
                       return (
-                        <span key={f.id} className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border ${req ? 'border-amber-800/50 text-amber-200' : 'border-slate-700 text-slate-200'}`} title={req ? 'Required fixture' : 'Optional furnishing'}>
-                          {fDef?.name || f.defId}
-                          {!req && (
-                            <button onClick={() => onRemoveFurniture(room.id, f.id)} className="text-rose-400 hover:text-rose-300 ml-0.5" aria-label={`Remove ${fDef?.name || f.defId}`} title="Remove">
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </span>
+                        <div className="text-[12px] text-emerald-300/90 bg-emerald-950/20 border border-emerald-900/30 rounded-lg px-2.5 py-1.5" data-testid="room-furniture-totals">
+                          <span className="font-bold text-emerald-200 mr-1.5">Room total:</span>
+                          {totals.map(([k, v]) => formatFurnitureEffect(k, v)).join(' · ')}
+                        </div>
                       );
-                    })}
+                    })()}
                   </div>
                 )}
               </div>
@@ -660,10 +679,35 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                 <div className="text-[12px] uppercase tracking-wider font-bold text-slate-500 mb-1.5">Furnish</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1">
                   {compatible.map(fDef => {
-                    const buyTitle = furnitureBuyTitle(room, fDef.stats);
+                    const known = isPatternKnown(state, fDef.id);
+                    const eff = FURNITURE_EFFECTS[fDef.id];
+                    const effText = eff ? formatFurnitureEffect(eff.kind, eff.value) : null;
+                    if (!known) {
+                      const deckLabel = fDef.deck[0].toUpperCase() + fDef.deck.slice(1);
+                      return (
+                        <div
+                          key={fDef.id}
+                          data-testid={`locked-pattern-${fDef.id}`}
+                          className="flex items-center justify-between gap-2 bg-slate-950/60 border border-slate-800/70 px-2.5 py-1.5 rounded-lg opacity-65"
+                          title={`Pattern needed (${deckLabel} deck)`}
+                        >
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 text-slate-400 truncate">
+                              <Lock className="w-3 h-3 shrink-0" />
+                              <span className="truncate">{fDef.name}</span>
+                            </div>
+                            <div className="text-[11px] text-slate-500 truncate">Pattern needed ({deckLabel} deck)</div>
+                          </div>
+                        </div>
+                      );
+                    }
+                    const buyTitle = [furnitureBuyTitle(room, fDef.stats), effText].filter(Boolean).join(' · ');
                     return (
                     <div key={fDef.id} title={buyTitle} className="flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 px-2.5 py-1.5 rounded-lg">
-                      <span className="text-slate-200 truncate">{fDef.name}</span>
+                      <div className="min-w-0">
+                        <div className="text-slate-200 truncate">{fDef.name}</div>
+                        {effText && <div className="text-[11px] text-emerald-400/80 truncate">{effText}</div>}
+                      </div>
                       <button
                         onClick={() => onAddFurniture(room.id, fDef.id)}
                         className="shrink-0 px-2 py-1 min-h-[28px] bg-amber-500/15 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-md text-[12px] font-bold"

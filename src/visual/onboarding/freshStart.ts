@@ -20,6 +20,7 @@
 import { FullGameState, PlacedRoom, SchoolType } from '../../types/ankicaster';
 import { generateInitialCollection } from '../../data/mockCollection';
 import { POTION_RECIPES } from '../../data/content';
+import { STARTER_PATTERNS } from '../../utils/decks';
 import { normalizeAppearance, SKIN_TONES } from '../../utils/appearance';
 
 export interface HeadmasterChoices {
@@ -237,7 +238,7 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
     hand: [], // Hand empty until tutorial draft
     roomPlans: {},
     knownPlans: [],
-    knownPatterns: ['simple_cot', 'long_table', 'hearth', 'couch', 'potted_fern', 'bookshelf'],
+    knownPatterns: [...STARTER_PATTERNS],
     draftHistory: {},
     draftPity: {},
     roomlessStreak: {},

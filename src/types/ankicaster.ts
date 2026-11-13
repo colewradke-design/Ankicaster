@@ -241,6 +241,7 @@ export interface PlacedRoom {
 export interface FurnitureDefinition {
   id: string;
   name: string;
+  deck: 'foundation' | 'grounds' | 'magic';
   role: 'required' | 'optional' | 'bed' | 'faculty_bed' | 'outdoor' | 'plinth';
   targetRole?: string; // e.g. 'planter_bed'
   slots: number; // takes 1 or 2 slots

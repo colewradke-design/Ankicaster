@@ -9,18 +9,15 @@
     "build:addon": "VITE_DEBUG_TOOLS=false NODE_ENV=production vite build --mode production && rm -rf addon/web && mkdir -p addon/web && cp -r dist/* addon/web/ && rm -rf addon/web/assets/aistudio",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "test": "tsx --test tests/engine.test.ts tests/ui-reachability.test.tsx tests/building.test.ts tests/visual-catalog.test.ts tests/visual-v2b.test.tsx tests/visual-v3.test.tsx tests/visual-v4.test.tsx tests/creatures-v5.test.tsx tests/creature-debug.test.ts tests/required-fixtures.test.ts tests/furniture-matters.test.tsx tests/card-rooms.test.ts tests/targeted-stairs-trims.test.tsx",
+    "test": "tsx --test tests/engine.test.ts tests/ui-reachability.test.tsx tests/building.test.ts tests/visual-catalog.test.ts tests/visual-v2b.test.tsx tests/visual-v3.test.tsx tests/visual-v4.test.tsx tests/creatures-v5.test.tsx tests/creature-debug.test.ts tests/required-fixtures.test.ts tests/furniture-matters.test.tsx tests/furniture-patterns-effects.test.tsx tests/card-rooms.test.ts tests/targeted-stairs-trims.test.tsx",
     "package:addon": "npm run build:addon && node scripts/package-addon.mjs",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/canvas-confetti": "^1.9.0",
     "@vitejs/plugin-react": "^6.1.1",
     "canvas-confetti": "^1.9.4",
-    "dotenv": "^17.2.3",
-    "express": "^4.21.2",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "pixi.js": "^8.8.0",
@@ -29,7 +26,6 @@
     "vite": "^8.3.0"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
