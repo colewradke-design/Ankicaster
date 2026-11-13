@@ -125,6 +125,7 @@ export interface RoomDefinition {
   id: string;
   name: string;
   category: SchoolType | 'core' | 'living' | 'grounds' | 'craft' | 'rift';
+  school?: SchoolType;
   area: 'castle' | 'grounds';
   size: [number, number]; // [width, height]
   needsSky?: boolean;
@@ -352,6 +353,7 @@ export interface PotionRecipe {
   id: string;
   name: string;
   tier: 'basic' | 'advanced' | 'rare' | 'legendary';
+  school?: SchoolType;
   ingredients: [string, string, string];
   reviewsToBrew: number;
   effect: string;

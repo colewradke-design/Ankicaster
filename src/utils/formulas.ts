@@ -6,6 +6,7 @@
  */
 
 import {
+  CareerType,
   Character,
   FullGameState,
   PlacedRoom,
@@ -527,4 +528,110 @@ const EFFECT_LABELS: Record<FurnitureEffectKind, (v: number) => string> = {
 export function formatFurnitureEffect(kind: FurnitureEffectKind, value: number): string {
   return EFFECT_LABELS[kind](Number.isInteger(value) ? value : Math.round(value * 10) / 10);
 }
+
+/**
+ * School tags for room hazards so Warder affinity applies.
+ */
+export const HAZARD_SCHOOL: Record<NonNullable<PlacedRoom['hazard']>['type'], SchoolType> = {
+  spill_of_night: 'shadow',
+  hex_fog: 'shadow',
+  echo_loop: 'arcane',
+  cold_snap: 'nature',
+  breach: 'shadow'
+};
+
+/**
+ * Classroom defId -> SchoolType mapping.
+ */
+export function classroomSchool(defId: string): SchoolType | undefined {
+  if (!defId.startsWith('class_')) return undefined;
+  const sch = defId.slice('class_'.length);
+  if (sch === 'arcane' || sch === 'nature' || sch === 'light' || sch === 'shadow' || sch === 'alchemy') {
+    return sch;
+  }
+  return undefined;
+}
+
+/**
+ * Schools the Headmaster (wizard) has mastered (level >= 5).
+ */
+export function wizardMasteredSchools(levels: Partial<Record<SchoolType, number>>): SchoolType[] {
+  const schools: SchoolType[] = ['arcane', 'nature', 'light', 'shadow', 'alchemy'];
+  return schools.filter(s => (levels[s] || 0) >= 5);
+}
+
+export interface CareerAffinityDef {
+  homeSchool: SchoolType | null;
+  broadPct: number;
+  focusedPct: number;
+  broadLabel: string;
+  focusedNoun: string;
+}
+
+/**
+ * Career School Affinities.
+ * Focused bonus applies to work tagged with ANY school the character has mastered.
+ * Broad bonus applies to all of that career's work only if the character mastered the career's home school.
+ * Use Math.max(focused, broad) — never add them.
+ */
+export const CAREER_AFFINITY: Record<CareerType, CareerAffinityDef> = {
+  gardener: { homeSchool: 'nature', broadPct: 5, focusedPct: 10, broadLabel: 'all plant-growing rooms', focusedNoun: 'plants' },
+  alchemist: { homeSchool: 'alchemy', broadPct: 5, focusedPct: 10, broadLabel: 'all alchemy production', focusedNoun: 'potions' },
+  tamer: { homeSchool: 'nature', broadPct: 10, focusedPct: 20, broadLabel: 'all creatures', focusedNoun: 'creatures' },
+  healer: { homeSchool: 'light', broadPct: 5, focusedPct: 10, broadLabel: 'everyone', focusedNoun: 'characters' },
+  warder: { homeSchool: 'shadow', broadPct: 5, focusedPct: 10, broadLabel: 'all hazard/ward effects', focusedNoun: 'hazards' },
+  scholar: { homeSchool: 'arcane', broadPct: 5, focusedPct: 10, broadLabel: 'research/study output', focusedNoun: 'research' },
+  builder: { homeSchool: null, broadPct: 0, focusedPct: 0, broadLabel: '', focusedNoun: '' },
+  teacher: { homeSchool: null, broadPct: 0, focusedPct: 0, broadLabel: '', focusedNoun: '' },
+  adventurer: { homeSchool: null, broadPct: 0, focusedPct: 0, broadLabel: '', focusedNoun: '' }
+};
+
+/**
+ * Returns the multiplier (e.g. 1.0, 1.05, 1.10, 1.20) for a character's career on a target school (or array of schools).
+ * Never adds broad and focused bonuses; always takes the higher one that applies.
+ */
+export function careerAffinityMultiplier(
+  masteredSchools: SchoolType[],
+  career: CareerType | undefined,
+  targetSchool?: SchoolType | SchoolType[]
+): number {
+  if (!career) return 1;
+  const def = CAREER_AFFINITY[career];
+  if (!def || (def.broadPct === 0 && def.focusedPct === 0)) return 1;
+
+  const targets = Array.isArray(targetSchool)
+    ? targetSchool
+    : targetSchool
+    ? [targetSchool]
+    : [];
+
+  const hasFocused = targets.some(s => masteredSchools.includes(s));
+  const hasBroad = def.homeSchool !== null && masteredSchools.includes(def.homeSchool);
+  const pct = Math.max(hasFocused ? def.focusedPct : 0, hasBroad ? def.broadPct : 0);
+  return 1 + pct / 100;
+}
+
+function capSchool(s: SchoolType): string {
+  return s[0].toUpperCase() + s.slice(1);
+}
+
+/**
+ * Human-readable summary of what career affinity bonus a character would receive for a given career.
+ */
+export function describeCareerAffinity(masteredSchools: SchoolType[], career: CareerType): string {
+  if (career === 'teacher') return 'Teaches mastered school classrooms only (no affinity bonus)';
+  if (career === 'builder') return 'No school bonus';
+  if (career === 'adventurer') return 'No school bonus';
+  const def = CAREER_AFFINITY[career];
+  if (!def || (def.broadPct === 0 && def.focusedPct === 0) || masteredSchools.length === 0) {
+    return 'No school bonus';
+  }
+  const hasBroad = def.homeSchool !== null && masteredSchools.includes(def.homeSchool);
+  const schoolList = masteredSchools.map(capSchool).join(' & ');
+  if (hasBroad) {
+    return `+${def.broadPct}% ${def.broadLabel}, +${def.focusedPct}% ${schoolList} ${def.focusedNoun}`;
+  }
+  return `+${def.focusedPct}% ${schoolList} ${def.focusedNoun} only`;
+}
+
 

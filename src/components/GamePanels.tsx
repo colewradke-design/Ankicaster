@@ -52,6 +52,10 @@ import {
   calculateTeacherDelay,
   calculateRiftChance,
   calculateFacultyLimit,
+  careerAffinityMultiplier,
+  classroomSchool,
+  describeCareerAffinity,
+  wizardMasteredSchools,
   wizardOrbQuote
 } from '../utils/formulas';
 import {
@@ -276,11 +280,12 @@ export const WizardStudyPanel: React.FC<{
 export const RosterPanel: React.FC<{
   state: FullGameState;
   onAssignCareer: (charId: number, career: CareerType) => void;
+  onAssignTeacherRoom?: (charId: number, roomId: number) => void;
   onRetireCharacter?: (charId: number) => void;
   onEnrollSecondSchool?: (charId: number, school: SchoolType) => void;
   /** Room-based view: dorms show students, Faculty Quarters shows faculty, Trophy Hall alumni. */
   view?: 'all' | 'students' | 'faculty' | 'alumni';
-}> = ({ state, onAssignCareer, onRetireCharacter, onEnrollSecondSchool, view = 'all' }) => {
+}> = ({ state, onAssignCareer, onAssignTeacherRoom, onRetireCharacter, onEnrollSecondSchool, view = 'all' }) => {
   const { cardSets, allCards, alumniGallery } = state;
   const characters =
     view === 'students' ? state.characters.filter(c => !c.career) :
@@ -547,9 +552,18 @@ export const RosterPanel: React.FC<{
               </div>
 
               {/* Career Assignment & Switching for Masters */}
-              {selectedChar.masteredSchools.length > 0 && (
-                <div className="bg-slate-900 border border-amber-900/40 p-4 rounded-xl">
-                  <div className="flex items-center justify-between mb-2">
+              {selectedChar.masteredSchools.length > 0 && (() => {
+                const matchingClassrooms = state.rooms.filter(r => {
+                  if (r.state !== 'built') return false;
+                  const sch = classroomSchool(r.defId);
+                  return !!sch && selectedChar.masteredSchools.includes(sch);
+                });
+                const canBeTeacher = matchingClassrooms.length > 0;
+                const careerList = (['teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist', 'builder', 'adventurer'] as CareerType[])
+                  .filter(car => car !== 'teacher' || canBeTeacher || selectedChar.career === 'teacher');
+                return (
+                <div className="bg-slate-900 border border-amber-900/40 p-4 rounded-xl space-y-3" data-testid="career-picker">
+                  <div className="flex items-center justify-between">
                     <h4 className="text-xs font-bold text-amber-300">
                       Master Career Appointment (+20 Career Flashcards)
                     </h4>
@@ -559,30 +573,54 @@ export const RosterPanel: React.FC<{
                       </span>
                     )}
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {(['teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist', 'builder', 'adventurer'] as CareerType[]).map(car => {
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {careerList.map(car => {
                       const isCurrent = selectedChar.career === car;
                       const isSwitchBlocked = selectedChar.career && !isCurrent && selectedChar.masteredSchools.length < 2;
+                      const affinityText = describeCareerAffinity(selectedChar.masteredSchools, car);
                       return (
                         <button
                           key={car}
+                          data-career-option={car}
                           onClick={() => onAssignCareer(selectedChar.id, car)}
                           disabled={isCurrent || !!isSwitchBlocked}
-                          className={`px-3 py-1.5 rounded-xl text-xs capitalize font-bold transition ${
+                          className={`text-left px-3 py-2 rounded-xl text-xs transition ${
                             isCurrent
-                              ? 'bg-amber-600 text-slate-950'
+                              ? 'bg-amber-600 text-slate-950 font-bold'
                               : isSwitchBlocked
                               ? 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
                               : 'bg-amber-600/20 hover:bg-amber-600/40 text-amber-200 border border-amber-500/40'
                           }`}
                         >
-                          {car} {isCurrent && '✔'}
+                          <div className="capitalize font-bold">{car} {isCurrent && '✔'}</div>
+                          <div className={`text-[11px] mt-0.5 ${isCurrent ? 'text-slate-900' : 'text-slate-300/80'}`}>
+                            {car === 'teacher' ? 'Teacher: ' : `${car[0].toUpperCase() + car.slice(1)}: `}{affinityText}
+                          </div>
                         </button>
                       );
                     })}
                   </div>
+                  {selectedChar.career === 'teacher' && onAssignTeacherRoom && (
+                    <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
+                      <span className="text-xs text-slate-300 font-semibold">Assigned Classroom:</span>
+                      <select
+                        data-testid="teacher-classroom-picker"
+                        value={selectedChar.workplaceRoomId ?? ''}
+                        onChange={e => e.target.value && onAssignTeacherRoom(selectedChar.id, Number(e.target.value))}
+                        className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200"
+                      >
+                        <option value="">Select matching classroom...</option>
+                        {matchingClassrooms.map(r => (
+                          <option key={r.id} value={r.id}>
+                            {ROOM_DEFINITIONS[r.defId]?.name || r.defId}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
-              )}
+                );
+              })()}
             </div>
           ) : (
             <div className="col-span-2 text-center text-slate-500 py-12 text-xs">
@@ -1058,20 +1096,34 @@ export const BestiaryPanel: React.FC<{
                         </div>
                       )}
 
-                      {c.status === 'wary' && (
-                        <div className="space-y-1">
-                          <div className="flex justify-between text-xs text-slate-400">
-                            <span>Taming Progress:</span>
-                            <span>{c.tamingProgress} / {def.tamingReviews} reviews</span>
+                      {c.status === 'wary' && (() => {
+                        const hasTamer = c.tamerId !== undefined && c.tamerId !== null;
+                        const tamerMastered = !hasTamer
+                          ? []
+                          : c.tamerId === 0
+                          ? wizardMasteredSchools(state.wizard.levels)
+                          : (characters.find(ch => ch.id === c.tamerId)?.masteredSchools || []);
+                        const tamerMult = hasTamer ? careerAffinityMultiplier(tamerMastered, 'tamer', def.school) : 1;
+                        const tamerTitle = hasTamer
+                          ? `Tamer speed: ×${tamerMult.toFixed(2)} (${def.school} creature)`
+                          : 'No tamer assigned';
+                        return (
+                          <div className="space-y-1" title={tamerTitle} data-testid={`taming-tooltip-${c.id}`}>
+                            <div className="flex justify-between text-xs text-slate-400">
+                              <span>
+                                Taming Progress{hasTamer ? ` (×${tamerMult.toFixed(2)})` : ''}:
+                              </span>
+                              <span>{c.tamingProgress} / {def.tamingReviews} reviews</span>
+                            </div>
+                            <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden border border-slate-700">
+                              <div
+                                className="bg-amber-400 h-full transition-all"
+                                style={{ width: `${Math.min(100, (c.tamingProgress / def.tamingReviews) * 100)}%` }}
+                              />
+                            </div>
                           </div>
-                          <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden border border-slate-700">
-                            <div
-                              className="bg-amber-400 h-full transition-all"
-                              style={{ width: `${Math.min(100, (c.tamingProgress / def.tamingReviews) * 100)}%` }}
-                            />
-                          </div>
-                        </div>
-                      )}
+                        );
+                      })()}
 
                       {c.status === 'tamed' && (
                         <div className="text-xs text-amber-300 flex items-center gap-1">
@@ -1092,16 +1144,23 @@ export const BestiaryPanel: React.FC<{
                       >
                         Feed Diet
                       </button>
-                      {c.status === 'wary' && tamers.length > 0 && (
+                      {c.status === 'wary' && (
                         <select
-                          value={c.tamerId || ''}
-                          onChange={e => onAssignTamer(c.id, Number(e.target.value))}
+                          aria-label="Assign Tamer"
+                          value={c.tamerId !== undefined && c.tamerId !== null ? String(c.tamerId) : ''}
+                          onChange={e => e.target.value !== '' && onAssignTamer(c.id, Number(e.target.value))}
                           className="bg-slate-950 border border-slate-700 rounded-xl text-xs p-1.5 text-slate-200"
                         >
                           <option value="">Assign Tamer...</option>
-                          {tamers.map(t => (
-                            <option key={t.id} value={t.id}>{t.name}</option>
-                          ))}
+                          <option value="0">Headmaster ({state.wizard.name})</option>
+                          {tamers.map(t => {
+                            const mult = careerAffinityMultiplier(t.masteredSchools, 'tamer', def.school);
+                            return (
+                              <option key={t.id} value={t.id}>
+                                {t.name} (×{mult.toFixed(2)})
+                              </option>
+                            );
+                          })}
                         </select>
                       )}
                     </div>

@@ -670,7 +670,7 @@ export class CreatureChoreographer {
       if (!room) continue;
       const pen = getPenRect(room, this.groundY, agent.habitat, Math.floor(hashSeed(agent.creatureId, 9) * 3));
 
-      const tamerAgent = agent.tamerId ? charAgents?.get(`char-${agent.tamerId}`) : undefined;
+      const tamerAgent = agent.tamerId !== undefined && agent.tamerId !== null ? charAgents?.get(`char-${agent.tamerId}`) : undefined;
       const tamerPresent = !!(tamerAgent && tamerAgent.currentRoomId === room.id);
 
       if (agent.status === 'wary') {
@@ -770,7 +770,7 @@ export class CreatureChoreographer {
       return;
     }
 
-    const tamerAgent = agent.tamerId ? charAgents?.get(`char-${agent.tamerId}`) : undefined;
+    const tamerAgent = agent.tamerId !== undefined && agent.tamerId !== null ? charAgents?.get(`char-${agent.tamerId}`) : undefined;
     const seed = Math.floor(this.clockMs / 400) + agent.creatureId * 13;
     const rPick = hashSeed(agent.creatureId, seed);
 

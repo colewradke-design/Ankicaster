@@ -50,6 +50,7 @@ import {
   academyFurnitureEffect,
   calculateReviewMana,
   calculateDailyVeilCost,
+  calculateFacultyLimit,
   calculateStudentSkill,
   isMasteryReady,
   calculateTeacherDelay,
@@ -57,6 +58,10 @@ import {
   calculateMorale,
   calculateRoomEfficiency,
   calculateRoomQuality,
+  careerAffinityMultiplier,
+  classroomSchool,
+  HAZARD_SCHOOL,
+  wizardMasteredSchools,
   wizardOrbQuote
 } from '../utils/formulas';
 import { computeReachability, ReachabilityInfo } from './reachability';
@@ -301,10 +306,14 @@ export class AnkicasterEngine {
     // 5. Advance Active Creature Taming & Hatching
     for (const c of next.creatures) {
       const cRoom = c.roomId != null ? next.rooms.find(r => r.id === c.roomId) : undefined;
-      if (c.status === 'wary' && c.tamerId) {
+      if (c.status === 'wary' && c.tamerId !== undefined && c.tamerId !== null) {
         const tamingBonus = academyFurnitureEffect(next.rooms, 'taming_pct', cRoom);
-        c.tamingProgress += 1 + tamingBonus / 100;
+        const tamerMastered = c.tamerId === 0
+          ? wizardMasteredSchools(next.wizard.levels)
+          : (next.characters.find(ch => ch.id === c.tamerId)?.masteredSchools || []);
         const cDef = CREATURE_DEFINITIONS[c.defId];
+        const tamerMult = careerAffinityMultiplier(tamerMastered, 'tamer', cDef?.school);
+        c.tamingProgress += (1 + tamingBonus / 100) * tamerMult;
         if (cDef && c.tamingProgress >= cDef.tamingReviews) {
           c.status = 'tamed';
           notifications.push(`🐾 Tamed ${c.nickname} (${cDef.name})!`);
@@ -344,7 +353,8 @@ export class AnkicasterEngine {
         infirmaryRoom = r;
       }
     }
-    const activeHealers = next.characters.filter(c => c.career === 'healer' && c.careerState === 'active').length;
+    const activeHealerChars = next.characters.filter(c => c.career === 'healer' && c.careerState === 'active');
+    const activeHealers = activeHealerChars.length;
     const hasHealingCreature = next.creatures.some(c => c.status === 'tamed' && (c.defId === 'halo_lamb' || c.defId === 'fen_sprite' || c.defId === 'ember_phoenix'));
 
     for (const char of next.characters) {
@@ -358,6 +368,11 @@ export class AnkicasterEngine {
           academyFurnitureEffect(next.rooms, 'heal_pct', bedRoom) +
           (infirmaryRoom && infirmaryRoom.id !== bedRoom?.id ? academyFurnitureEffect(next.rooms, 'heal_pct', infirmaryRoom) : 0);
         if (healPct > 0) healRate *= 1 + healPct / 100;
+        if (activeHealerChars.length > 0) {
+          const charSchools: SchoolType[] = [...(char.currentSchool ? [char.currentSchool] : []), ...char.masteredSchools];
+          const healerMult = Math.max(...activeHealerChars.map(h => careerAffinityMultiplier(h.masteredSchools, 'healer', charSchools)));
+          healRate *= healerMult;
+        }
 
         char.injury.points += healRate;
         if (char.injury.points >= char.injury.required) {
@@ -466,10 +481,15 @@ export class AnkicasterEngine {
     ).length;
   }
 
-  private static findOpenWorkplace(state: FullGameState, career: string, exceptId?: number): PlacedRoom | undefined {
+  private static findOpenWorkplace(state: FullGameState, career: string, exceptId?: number, char?: Character): PlacedRoom | undefined {
     return state.rooms.find(r => {
       const wp = ROOM_DEFINITIONS[r.defId]?.workplace;
-      return !!wp && wp.career === career && AnkicasterEngine.roomWorkable(r) && AnkicasterEngine.slotsUsed(state, r, exceptId) < wp.slots;
+      if (!wp || wp.career !== career || !AnkicasterEngine.roomWorkable(r)) return false;
+      if (career === 'teacher' && char) {
+        const sch = classroomSchool(r.defId);
+        if (!sch || !char.masteredSchools.includes(sch)) return false;
+      }
+      return AnkicasterEngine.slotsUsed(state, r, exceptId) < wp.slots;
     });
   }
 
@@ -487,16 +507,29 @@ export class AnkicasterEngine {
       if (c.careerState === 'sabbatical') continue;
       const current = c.workplaceRoomId != null ? state.rooms.find(r => r.id === c.workplaceRoomId) : undefined;
       const wp = current ? ROOM_DEFINITIONS[current.defId]?.workplace : undefined;
-      const still = !!current && !!wp && wp.career === c.career && AnkicasterEngine.roomWorkable(current)
+      const teacherMatch = c.career !== 'teacher' || (!!current && (() => {
+        const sch = classroomSchool(current.defId);
+        return !!sch && c.masteredSchools.includes(sch);
+      })());
+      const still = !!current && !!wp && wp.career === c.career && teacherMatch && AnkicasterEngine.roomWorkable(current)
         && AnkicasterEngine.slotsUsed(state, current, c.id) < wp.slots;
       if (still) continue;
-      c.workplaceRoomId = AnkicasterEngine.findOpenWorkplace(state, c.career, c.id)?.id;
+      c.workplaceRoomId = AnkicasterEngine.findOpenWorkplace(state, c.career, c.id, c)?.id;
     }
   }
 
   private static roomIsStaffed(state: FullGameState, room: PlacedRoom): boolean {
     const workplace = ROOM_DEFINITIONS[room.defId]?.workplace;
     if (!workplace || !STAFF_CAREERS.has(workplace.career)) return true;
+    const classSch = classroomSchool(room.defId);
+    if (classSch) {
+      return state.characters.some(c =>
+        c.workplaceRoomId === room.id &&
+        c.career === 'teacher' &&
+        c.careerState !== 'sabbatical' &&
+        c.masteredSchools.includes(classSch)
+      );
+    }
     return state.characters.some(c => c.workplaceRoomId === room.id && c.career === workplace.career && c.careerState !== 'sabbatical');
   }
 
@@ -634,11 +667,16 @@ export class AnkicasterEngine {
     };
     const roomName = (defId: string) => ROOM_DEFINITIONS[defId]?.name || defId;
 
-    // 1. Classroom Essence Production (influenced by room hazards)
+    // 1. Classroom Essence Production (influenced by room hazards & qualifying teacher)
     for (const char of state.characters) {
       if (char.status === 'student' && char.seatRoomId && char.currentSchool) {
         const room = state.rooms.find(r => r.id === char.seatRoomId);
         if (room && room.state === 'built' && !isRoomUnfinished(room)) {
+          // A classroom only teaches its own school and teaches nothing without a qualifying teacher.
+          const classSch = classroomSchool(room.defId);
+          if (classSch && char.currentSchool !== classSch) continue;
+          if (classSch && !AnkicasterEngine.roomIsStaffed(state, room)) continue;
+
           // Hazard active effects
           if (room.hazard?.type === 'cold_snap') continue; // room frozen/disabled
           if (room.hazard?.type === 'echo_loop') continue; // suppresses classroom essence
@@ -672,6 +710,8 @@ export class AnkicasterEngine {
     const greenhouseMult = hasTortoise ? 1.05 : 1.0;
     const cap = AnkicasterEngine.storageCap(state);
     const store = (before: number, add: number) => (add > 0 && before >= cap ? before : add > 0 ? Math.min(cap, before + add) : before + add);
+    const PLANT_ROOMS = new Set(['vegetable_patch', 'herb_garden', 'woodlot', 'greenhouse', 'orchard']);
+    const activeGardeners = state.characters.filter(c => c.career === 'gardener' && c.careerState === 'active');
 
     for (const room of state.rooms) {
       if (room.state !== 'built' || isRoomUnfinished(room)) continue; // Unfinished rooms run at 0%
@@ -687,6 +727,17 @@ export class AnkicasterEngine {
       }
       const outPct = academyFurnitureEffect(state.rooms, 'output_pct', room);
       if (outPct !== 0) harvestMult *= 1 + outPct / 100;
+
+      if (PLANT_ROOMS.has(room.defId)) {
+        const assignedGardeners = activeGardeners.filter(g => g.workplaceRoomId === room.id);
+        const hasSlot = ROOM_DEFINITIONS[room.defId]?.workplace?.career === 'gardener';
+        const gardeners = hasSlot ? assignedGardeners : (assignedGardeners.length > 0 ? assignedGardeners : activeGardeners);
+        if (gardeners.length > 0) {
+          const roomSchool = ROOM_DEFINITIONS[room.defId]?.school;
+          const gardenerMult = Math.max(...gardeners.map(g => careerAffinityMultiplier(g.masteredSchools, 'gardener', roomSchool)));
+          harvestMult *= gardenerMult;
+        }
+      }
 
       const insightBell = academyFurnitureEffect(state.rooms, 'insight_per_bell', room);
       if (insightBell > 0) {
@@ -749,6 +800,15 @@ export class AnkicasterEngine {
         before = bag.nectar || 0;
         bag.nectar = store(before, 0.3 * harvestMult);
         note('nectar', before, src);
+      } else if (room.defId === 'library') {
+        const scholars = state.characters.filter(c => c.career === 'scholar' && c.careerState === 'active' && c.workplaceRoomId === room.id);
+        if (scholars.length > 0) {
+          const roomSchool = ROOM_DEFINITIONS[room.defId]?.school;
+          const scholarMult = Math.max(...scholars.map(s => careerAffinityMultiplier(s.masteredSchools, 'scholar', roomSchool)));
+          const before = bag.insight || 0;
+          bag.insight = before + 0.3 * harvestMult * scholarMult;
+          note('insight', before, roomName(room.defId));
+        }
       } else if (room.defId === 'glassworks') {
         const conv = glassworksConversion(bag.stone || 0, harvestMult, bag.glass || 0, cap);
         if (conv.stoneUsed > 0) {
@@ -2402,7 +2462,8 @@ export class AnkicasterEngine {
   static assignCareer(
     state: FullGameState,
     charId: number,
-    career: CareerType
+    career: CareerType,
+    targetRoomId?: number
   ): { state: FullGameState; success: boolean; error?: string } {
     const next = structuredClone(state);
     const char = next.characters.find(c => c.id === charId);
@@ -2419,7 +2480,37 @@ export class AnkicasterEngine {
       }
     }
 
-    // Check faculty limits (F12, BR-14, BR-22)
+    // Teacher can only be appointed if they have mastered a school with a built classroom
+    if (career === 'teacher') {
+      const matchingRooms = next.rooms.filter(r => {
+        if (r.state !== 'built') return false;
+        const sch = classroomSchool(r.defId);
+        return !!sch && char.masteredSchools.includes(sch);
+      });
+      if (matchingRooms.length === 0) {
+        return {
+          state,
+          success: false,
+          error: 'Needs a built classroom in a school this character has mastered.'
+        };
+      }
+      if (targetRoomId !== undefined) {
+        const chosen = matchingRooms.find(r => r.id === targetRoomId);
+        if (!chosen) {
+          return {
+            state,
+            success: false,
+            error: 'Teacher can only be assigned to a classroom of a school they have mastered.'
+          };
+        }
+        const wpSlots = ROOM_DEFINITIONS[chosen.defId]?.workplace?.slots ?? 1;
+        if (AnkicasterEngine.slotsUsed(next, chosen, char.id) >= wpSlots) {
+          return { state, success: false, error: 'That classroom already has a teacher.' };
+        }
+      }
+    }
+
+    // Check faculty limits (F12, BR-14, BR-22) - no hard cap of 12
     const facultyCareers: CareerType[] = ['teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist', 'builder'];
     if (facultyCareers.includes(career)) {
       const activeFaculty = next.characters.filter(c => c.career && facultyCareers.includes(c.career) && c.careerState === 'active' && c.id !== char.id).length;
@@ -2434,14 +2525,7 @@ export class AnkicasterEngine {
       const classroomsCount = next.rooms.filter(r => r.state === 'built' && (r.defId.startsWith('class_') || r.defId.startsWith('hall_'))).length;
       const studentsCount = next.characters.filter(c => c.status === 'student').length;
 
-      // F12 formula
-      const maxAllowed = Math.min(
-        1 + Math.floor(totalWiz / 4),
-        Math.max(1, facultyBeds),
-        1 + 2 * classroomsCount,
-        1 + Math.floor(studentsCount / 3),
-        12
-      );
+      const maxAllowed = calculateFacultyLimit(totalWiz, facultyBeds, classroomsCount, studentsCount).limit;
 
       if (activeFaculty >= maxAllowed) {
         return {
@@ -2498,6 +2582,11 @@ export class AnkicasterEngine {
     char.career = career;
     char.careerState = 'active';
     char.status = career === 'adventurer' ? 'resident' : 'faculty';
+    if (career === 'teacher' && targetRoomId !== undefined) {
+      char.workplaceRoomId = targetRoomId;
+    } else if (previousCareer !== career) {
+      char.workplaceRoomId = undefined;
+    }
     AnkicasterEngine.syncWorkplaces(next);
     char.chronicle.push({
       day: next.day,
@@ -2515,6 +2604,33 @@ export class AnkicasterEngine {
         : `🏛️ ${char.name} has taken the mantle of ${career.toUpperCase()}!`
     });
 
+    return { state: next, success: true };
+  }
+
+  /**
+   * Assign an existing Teacher to a specific classroom of a school they have mastered.
+   */
+  static assignTeacherToClassroom(
+    state: FullGameState,
+    charId: number,
+    roomId: number
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const next = structuredClone(state);
+    const char = next.characters.find(c => c.id === charId);
+    if (!char || char.career !== 'teacher') {
+      return { state, success: false, error: 'Character is not a teacher.' };
+    }
+    const room = next.rooms.find(r => r.id === roomId && r.state === 'built');
+    if (!room) return { state, success: false, error: 'Classroom not found.' };
+    const sch = classroomSchool(room.defId);
+    if (!sch || !char.masteredSchools.includes(sch)) {
+      return { state, success: false, error: 'Teacher has not mastered that classroom’s school.' };
+    }
+    const wpSlots = ROOM_DEFINITIONS[room.defId]?.workplace?.slots ?? 1;
+    if (AnkicasterEngine.slotsUsed(next, room, char.id) >= wpSlots) {
+      return { state, success: false, error: 'That classroom already has a teacher.' };
+    }
+    char.workplaceRoomId = room.id;
     return { state: next, success: true };
   }
 
@@ -2912,8 +3028,14 @@ export class AnkicasterEngine {
     const potion = next.potions.find(p => p.id === potionId);
     if (!potion) return { state, success: false, error: 'Potion recipe not found.' };
 
-    const brewBonus = academyFurnitureEffect(next.rooms, 'brew_speed_pct', next.rooms.find(r => r.defId === 'alchemy_lab' && r.state === 'built'));
-    const manaCost = Math.max(10, Math.round(30 * Math.max(0.5, 1 - brewBonus / 100)));
+    const lab = next.rooms.find(r => r.defId === 'alchemy_lab' && r.state === 'built');
+    const brewBonus = academyFurnitureEffect(next.rooms, 'brew_speed_pct', lab);
+    const alchemists = next.characters.filter(c => c.career === 'alchemist' && c.careerState === 'active' && (!lab || c.workplaceRoomId === lab.id));
+    const alchMult = alchemists.length > 0
+      ? Math.max(...alchemists.map(a => careerAffinityMultiplier(a.masteredSchools, 'alchemist', potion.school)))
+      : 1;
+    const baseManaCost = Math.max(10, Math.round(30 * Math.max(0.5, 1 - brewBonus / 100)));
+    const manaCost = Math.max(10, Math.round(baseManaCost / alchMult));
     if (next.mana < manaCost) {
       return { state, success: false, error: `Need ${manaCost} Mana for alchemical reagent catalyst.` };
     }

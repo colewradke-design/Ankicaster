@@ -734,6 +734,17 @@ export default function App() {
     }
   };
 
+  // Handler: Assign Teacher Classroom
+  const handleAssignTeacherRoom = (charId: number, roomId: number) => {
+    const res = AnkicasterEngine.assignTeacherToClassroom(state, charId, roomId);
+    if (!res.success) {
+      addToast(res.error || 'Cannot assign classroom.', 'warning');
+    } else {
+      setState(res.state);
+      addToast('Teacher assigned to classroom!', 'success');
+    }
+  };
+
   // Handler: Launch Expedition
   const handleLaunchExpedition = (destId: string, teamIds: number[], supplies: string[] = [], companionId?: number) => {
     const res = AnkicasterEngine.launchRiftExpedition(state, destId, teamIds, supplies, companionId);
@@ -794,6 +805,7 @@ export default function App() {
             state={state}
             view={id}
             onAssignCareer={handleAssignCareer}
+            onAssignTeacherRoom={handleAssignTeacherRoom}
             onRetireCharacter={handleRetireCharacter}
             onEnrollSecondSchool={handleEnrollSecondSchool}
           />

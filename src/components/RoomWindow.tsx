@@ -26,7 +26,8 @@ import { FullGameState, PlacedRoom } from '../types/ankicaster';
 import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS, SPELL_DEFINITIONS, CREATURE_DEFINITIONS } from '../data/content';
 import {
   calculateRoomQuality, calculateFacultyLimit, wizardOrbQuote,
-  FURNITURE_EFFECTS, formatFurnitureEffect, FurnitureEffectKind, roomFurnitureEffects
+  FURNITURE_EFFECTS, formatFurnitureEffect, FurnitureEffectKind, roomFurnitureEffects,
+  careerAffinityMultiplier, classroomSchool
 } from '../utils/formulas';
 import { isPatternKnown } from '../utils/decks';
 import { HAZARD_DISPEL_MANA_COST } from '../utils/engine';
@@ -382,16 +383,43 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
           <RoomSummary state={state} room={room} onChangeLook={onChangeLook} />
 
           {(() => {
+            const classSch = !isSite ? classroomSchool(room.defId) : undefined;
+            const hasQualifyingTeacher = !classSch || state.characters.some(c =>
+              c.workplaceRoomId === room.id &&
+              c.career === 'teacher' &&
+              c.careerState !== 'sabbatical' &&
+              c.masteredSchools.includes(classSch)
+            );
             const people = state.characters.filter(c => c.bedRoomId === room.id || c.seatRoomId === room.id || c.workplaceRoomId === room.id);
-            if (!people.length) return null;
+            if (!people.length && hasQualifyingTeacher) return null;
+            const capSch = classSch ? classSch[0].toUpperCase() + classSch.slice(1) : '';
             return (
-              <div className="flex flex-wrap gap-2" data-testid="room-occupants">
-                {people.map(c => (
-                  <div key={c.id} className="flex items-center gap-2 bg-slate-950/60 border border-slate-800 rounded-full pr-3">
-                    <CharacterPortrait character={c} size={40} />
-                    <span className="text-[12px] text-slate-200">{c.name}</span>
+              <div className="space-y-2">
+                {!hasQualifyingTeacher && (
+                  <div className="bg-amber-950/40 border border-amber-600/50 rounded-xl px-3 py-2 text-[12px] text-amber-200 font-semibold" data-testid="classroom-needs-teacher">
+                    Needs a {capSch} master teacher
                   </div>
-                ))}
+                )}
+                {people.length > 0 && (
+                  <div className="flex flex-wrap gap-2" data-testid="room-occupants">
+                    {people.map(c => {
+                      const isStaffHere = c.workplaceRoomId === room.id && !!c.career && c.career !== 'teacher' && c.career !== 'builder';
+                      const mult = isStaffHere ? careerAffinityMultiplier(c.masteredSchools, c.career, def?.school) : 1;
+                      const bonusPct = Math.round((mult - 1) * 100);
+                      return (
+                        <div key={c.id} className="flex items-center gap-2 bg-slate-950/60 border border-slate-800 rounded-full pr-3">
+                          <CharacterPortrait character={c} size={40} />
+                          <span className="text-[12px] text-slate-200">{c.name}</span>
+                          {isStaffHere && bonusPct > 0 && (
+                            <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/50 text-emerald-300 font-semibold" data-testid={`staff-affinity-${c.id}`}>
+                              +{bonusPct}%
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             );
           })()}

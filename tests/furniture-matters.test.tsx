@@ -89,7 +89,8 @@ test('a Splendid classroom yields more essence than a Bare one', () => {
     const room = place(state, 'class_arcane', 50, 6, 0, classFurniture(splendid));
     const tier = calculateRoomQuality(room).tier;
     assert.equal(tier, splendid ? 'splendid' : 'bare');
-    state.characters.push(student(3, room.id));
+    state.characters.push(student(3, room.id), teacher(99, 'arcane'));
+    AnkicasterEngine.syncWorkplaces(state);
     const before = state.resources.insight;
     AnkicasterEngine.ringBell(state, []);
     return state.resources.insight - before;
@@ -138,11 +139,12 @@ test('a damaged item counts half its stat points', () => {
   assert.equal(FURNITURE_DEFINITIONS.feather_bed.stats.comfort, 3);
 });
 
-function teacher(id: number): Character {
+function teacher(id: number, school: 'arcane' | 'nature' | 'light' | 'shadow' | 'alchemy' = 'arcane'): Character {
   const t = student(id, 0);
   t.career = 'teacher';
   t.careerState = 'active';
   t.status = 'faculty';
+  t.masteredSchools = [school];
   t.name = 'Teacher';
   return t;
 }

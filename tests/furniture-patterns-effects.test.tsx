@@ -249,12 +249,32 @@ test('Structured effects: rest_bonus, storage_bonus, output_pct, damaged=half, a
   assert.ok(vault.id > 0);
 
   // Classroom output_pct: bookshelf (+10%) increases essence yield
+  const arcaneTeacher = (roomId: number) => ({
+    id: 99,
+    name: 'Prof. Arcane',
+    pronouns: 'they/them',
+    appearance: { skin: '#fff', hair: 'short', hairColor: '#000', robeColor: '#6B4FBB', hat: 'cap' },
+    personality: 'Bookish' as const,
+    traits: [],
+    status: 'faculty' as const,
+    masteredSchools: ['arcane' as const],
+    career: 'teacher' as const,
+    careerState: 'active' as const,
+    workplaceRoomId: roomId,
+    needs: { hunger: 90, rest: 90, leisure: 90, composure: 90, health: 100 },
+    morale: 80,
+    readyDays: {},
+    enrolledDay: 1,
+    chronicle: [],
+    careerSetIds: []
+  });
+
   const s1 = makeState();
   const c1 = addRoom(s1, 'class_arcane', 1, 0, [
     { id: nextId++, defId: 'teachers_lectern', slotKind: 'required:teachers_lectern', damaged: false },
     { id: nextId++, defId: 'orrery_globe', slotKind: 'required:orrery_globe', damaged: false }
   ]);
-  s1.characters.push(student(1, c1.id));
+  s1.characters.push(student(1, c1.id), arcaneTeacher(c1.id));
   s1.bellIndex = 0;
   s1.reviewIndex = 9;
   const r1 = AnkicasterEngine.applyHonestReview(s1, 1, 3, 2000).state;
@@ -265,7 +285,7 @@ test('Structured effects: rest_bonus, storage_bonus, output_pct, damaged=half, a
     { id: nextId++, defId: 'orrery_globe', slotKind: 'required:orrery_globe', damaged: false },
     { id: nextId++, defId: 'bookshelf', slotKind: 'optional', damaged: false }
   ]);
-  s2.characters.push(student(1, c2.id));
+  s2.characters.push(student(1, c2.id), arcaneTeacher(c2.id));
   s2.bellIndex = 0;
   s2.reviewIndex = 9;
   const r2 = AnkicasterEngine.applyHonestReview(s2, 1, 3, 2000).state;
