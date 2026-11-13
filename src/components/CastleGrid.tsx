@@ -9,12 +9,13 @@
  */
 
 import React from 'react';
-import { PlacedRoom, FullGameState } from '../types/ankicaster';
+import { PlacedRoom, FullGameState, CreatureInstance } from '../types/ankicaster';
 import { AcademyCanvas, PlacementMode } from '../visual/AcademyCanvas';
 
 interface CastleGridProps {
   state: FullGameState;
   onSelectRoom: (room: PlacedRoom) => void;
+  onSelectCreature?: (creature: CreatureInstance) => void;
   selectedRoomId?: number;
   onResolveHazard?: (roomId: number, method: 'warder' | 'spell') => void;
   placement?: PlacementMode | null;

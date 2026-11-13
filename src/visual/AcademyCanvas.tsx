@@ -12,7 +12,7 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Application, TextureStyle } from 'pixi.js';
-import { FullGameState, PlacedRoom } from '../types/ankicaster';
+import { FullGameState, PlacedRoom, CreatureInstance } from '../types/ankicaster';
 import { VisualWorld } from './world/VisualWorld';
 import { castleCellToWorldX } from './layout/gridToWorld';
 import { ZoomIn, ZoomOut, Maximize2, Home, Move, Hammer, X as XIcon, Wand2 } from 'lucide-react';
@@ -21,15 +21,36 @@ import { AnkicasterEngine } from '../utils/engine';
 import { validatePlacement, roomLimitStatus, getGridSize, findAutoPlacement, PlacementCheck } from '../utils/placement';
 import { reviewsToGoText } from '../utils/construction';
 import { formatMaterialCost } from '../utils/resourceReport';
+import { tamingRequirement } from './creatures/creatureArt';
 
 TextureStyle.defaultOptions.scaleMode = 'nearest';
 
 /** Build a new room, or move an existing one, with the ghost placement tool. */
 export type PlacementMode = { kind: 'build'; defId: string } | { kind: 'move'; roomId: number };
 
+export function creatureHoverText(c: {
+  nickname: string;
+  defId: string;
+  status: CreatureInstance['status'];
+  tamingProgress: number;
+  bondLevel: 1 | 2 | 3;
+  hatchProgress: number;
+  unhomed: boolean;
+}): string {
+  if (c.unhomed) return 'Looking for a home';
+  if (c.status === 'loose') return `${c.nickname} · Loose! Click to view`;
+  if (c.status === 'egg') return `Hatching (${Math.floor(c.hatchProgress)}%)`;
+  if (c.status === 'wary') {
+    const left = Math.max(1, tamingRequirement(c.defId) - Math.floor(c.tamingProgress));
+    return `About ${left} honest review${left === 1 ? '' : 's'} to tame`;
+  }
+  return `${c.nickname} · ${'♥'.repeat(c.bondLevel)}`;
+}
+
 interface AcademyCanvasProps {
   state: FullGameState;
   onSelectRoom: (room: PlacedRoom) => void;
+  onSelectCreature?: (creature: CreatureInstance) => void;
   selectedRoomId?: number;
   onResolveHazard?: (roomId: number, method: 'warder' | 'spell') => void;
   placement?: PlacementMode | null;
@@ -63,6 +84,7 @@ function placementFootprint(state: FullGameState, mode: PlacementMode) {
 export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   state,
   onSelectRoom,
+  onSelectCreature,
   selectedRoomId,
   onResolveHazard,
   placement,
@@ -319,12 +341,20 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    // Hover on a construction site: "About N honest reviews to go" (Addendum 5.6)
+    // Hover on a creature or construction site (Addendum 5.6 & 8.1/8.3)
     if (!placementRef.current && !isDraggingRef.current && containerRef.current && worldRef.current) {
       const rect = containerRef.current.getBoundingClientRect();
-      const hit = worldRef.current.hitTestRoom(e.clientX - rect.left, e.clientY - rect.top);
-      const text = hit && hit.state === 'site' ? (hit.buildPaused ? `Paused · ${reviewsToGoText(hit)}` : reviewsToGoText(hit)) : null;
-      setHoverTip(prev => (text ? { x: e.clientX - rect.left, y: e.clientY - rect.top, text } : prev ? null : prev));
+      const px = e.clientX - rect.left;
+      const py = e.clientY - rect.top;
+      const cHit = worldRef.current.hitTestCreature(px, py);
+      if (cHit) {
+        const text = creatureHoverText(cHit);
+        setHoverTip({ x: px, y: py, text });
+      } else {
+        const hit = worldRef.current.hitTestRoom(px, py);
+        const text = hit && hit.state === 'site' ? (hit.buildPaused ? `Paused · ${reviewsToGoText(hit)}` : reviewsToGoText(hit)) : null;
+        setHoverTip(prev => (text ? { x: px, y: py, text } : prev ? null : prev));
+      }
     } else if (hoverTip) {
       setHoverTip(null);
     }
@@ -369,7 +399,16 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
 
+    const clickedCreature = world.hitTestCreature(clickX, clickY);
     const clickedRoom = world.hitTestRoom(clickX, clickY);
+    if (clickedCreature && onSelectCreature && (clickedCreature.status === 'loose' || clickedCreature.unhomed || !clickedRoom)) {
+      const inst = latestRef.current.state.creatures.find(cr => cr.id === clickedCreature.creatureId);
+      if (inst) {
+        onSelectCreature(inst);
+        return;
+      }
+    }
+
     if (clickedRoom) {
       onSelectRoom(clickedRoom);
     }

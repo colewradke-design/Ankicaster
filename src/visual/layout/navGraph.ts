@@ -42,16 +42,23 @@ export class NavGraph {
     const reachability = computeReachability(rooms);
     const reachableRooms = rooms.filter(r => r.state === 'built' && reachability.get(r.id)?.reachable);
 
-    // Front path node
+    const ehRoom = reachableRooms.find(r => r.defId === 'entrance_hall' && r.y === 0);
+    const ehBox = ehRoom ? roomToWorldBox(ehRoom, groundY) : null;
+    const frontPathX = ehBox ? ehBox.left + ehBox.width / 2 : castleCellToWorldX(3);
+
+    // Front path node anchored outside Entrance Hall doors
     const pathNodeId = 'path-front';
-    this.nodes.set(pathNodeId, {
+    const pathNodes: NavNode[] = [];
+    const frontNode: NavNode = {
       id: pathNodeId,
-      x: castleCellToWorldX(3),
+      x: frontPathX,
       y: groundY + 2,
       floor: 0,
       kind: 'path'
-    });
+    };
+    this.nodes.set(pathNodeId, frontNode);
     this.adj.set(pathNodeId, []);
+    pathNodes.push(frontNode);
 
     // 1. Create nodes for reachable rooms
     for (const r of reachableRooms) {
@@ -71,8 +78,21 @@ export class NavGraph {
         });
         this.adj.set(nodeId, []);
 
-        // Link to path
-        this.addEdge(nodeId, pathNodeId, 50);
+        // Path waypoint on the cobbled front path right in front of this plot
+        const plotPathId = `path-plot-${r.id}`;
+        const plotPathNode: NavNode = {
+          id: plotPathId,
+          x: nodeX,
+          y: groundY + 2,
+          floor: 0,
+          kind: 'path'
+        };
+        this.nodes.set(plotPathId, plotPathNode);
+        this.adj.set(plotPathId, []);
+        pathNodes.push(plotPathNode);
+
+        // 6px step between front path (groundY + 2) and plot floor line (groundY - 4)
+        this.addEdge(nodeId, plotPathId, 9);
       } else {
         // Castle room: can span multiple floors r.y .. r.y + r.h - 1
         for (let f = r.y; f < r.y + r.h; f++) {
@@ -98,12 +118,20 @@ export class NavGraph {
           }
         }
 
-        // If Entrance Hall floor 0, connect to front path
+        // If Entrance Hall floor 0, connect to front path (6px step down)
         if (r.defId === 'entrance_hall' && r.y === 0) {
           const ehNodeId = `room-${r.id}-f0`;
-          this.addEdge(ehNodeId, pathNodeId, 30);
+          this.addEdge(ehNodeId, pathNodeId, 9);
         }
       }
+    }
+
+    // Chain all front-path nodes horizontally left-to-right so agents walk smoothly along groundY + 2
+    pathNodes.sort((a, b) => a.x - b.x);
+    for (let i = 0; i < pathNodes.length - 1; i++) {
+      const a = pathNodes[i];
+      const b = pathNodes[i + 1];
+      this.addEdge(a.id, b.id, Math.max(1, Math.abs(b.x - a.x)));
     }
 
     // 2. Add Horizontal Edges between same-floor neighbours

@@ -484,10 +484,17 @@ export class Choreographer {
         // Move towards target
         const inj = agent.character?.injury?.type;
         const limp = inj === 'sprained' || inj === 'broken_bone';
-        const climbing = Math.abs(dy) > 2 && (() => {
-          const currentRoom = state.rooms.find(r => r.id === agent.currentRoomId);
-          return (currentRoom && (currentRoom.defId === 'spiral_stair' || currentRoom.defId === 'wizard_study')) || targetNode.kind === 'stair';
-        })();
+        const currentRoom = state.rooms.find(r => r.id === agent.currentRoomId);
+        const climbing = Math.abs(dy) > 2 && (
+          (currentRoom && (currentRoom.defId === 'spiral_stair' || currentRoom.defId === 'wizard_study')) ||
+          targetNode.kind === 'stair'
+        );
+        const pathStep = !climbing && Math.abs(dy) > 2 && Math.abs(dy) <= 10 && (
+          targetNode.kind === 'path' ||
+          targetNode.kind === 'plot' ||
+          currentRoom?.defId === 'entrance_hall' ||
+          currentRoom?.area === 'grounds'
+        );
         const px = climbing ? MOVE_SPEED.climb : limp ? MOVE_SPEED.limp : agent.anim === 'carry_walk' ? MOVE_SPEED.carry : MOVE_SPEED.walk;
         const speed = px * (deltaMs / 1000);
         if (Math.abs(dx) > 1) {
@@ -498,8 +505,11 @@ export class Choreographer {
           if (climbing) {
             agent.anim = 'climb';
             agent.y += (dy / dist) * Math.min(speed, Math.abs(dy));
+          } else if (pathStep) {
+            agent.anim = limp ? 'limp_walk' : 'walk';
+            agent.y += (dy / dist) * Math.min(speed, Math.abs(dy));
           } else {
-            // Never move vertically outside of a stair or Wizard's Study column
+            // Never move vertically outside of a stair, Wizard's Study column, or 6px front path step
             agent.y = targetNode.y;
             agent.currentFloor = targetNode.floor;
           }
@@ -655,10 +665,10 @@ export class Choreographer {
           path.push({
             id: `slot-${agent.id}`,
             roomId: targetRoomId,
-            floor: targetRoom.y,
+            floor: targetRoom.area === 'castle' ? targetRoom.y : 0,
             x: slotX,
             y: box.floorLineY,
-            kind: 'room_floor'
+            kind: targetRoom.area === 'grounds' ? 'plot' : 'room_floor'
           });
         }
 

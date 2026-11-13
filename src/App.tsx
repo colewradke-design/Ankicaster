@@ -903,6 +903,7 @@ export default function App() {
             setSelectedRoom(room);
             setState(prev => ({ ...prev, tutorial: applyTutorialAction(prev.tutorial, room.defId === 'wizard_study' ? 'open-study' : 'open-other') }));
           }}
+          onSelectCreature={() => handleOpenScreen('bestiary')}
           selectedRoomId={selectedRoom?.id}
           onResolveHazard={handleResolveHazard}
           placement={placement}

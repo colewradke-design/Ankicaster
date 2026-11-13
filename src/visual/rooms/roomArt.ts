@@ -21,6 +21,8 @@ import { drawFurniture, getFurnitureArt, furnitureBox, drawGhostSlot } from './f
 import { layoutRoomFurniture, floorLineFor, getRoomLayout, NO_FURNITURE_ROOMS } from '../layout/roomLayouts';
 import { CELL_H } from '../layout/gridToWorld';
 import { drawSignatureProp } from './level3Props';
+import { drawRoomUpgradeTrim, getRoomTrimTags } from './roomTrims';
+import { drawRiftGateArch, RiftGateVisualState } from './riftGateArt';
 
 export type Tier = 'bare' | 'plain' | 'cozy' | 'fine' | 'splendid';
 export const TIERS: Tier[] = ['bare', 'plain', 'cozy', 'fine', 'splendid'];
@@ -53,6 +55,8 @@ export interface RoomArtResult {
   missing: Array<{ left: number; top: number; w: number; h: number; role: string }>;
   /** True when the room id has its own dressing (A.1), not the generic category banner. */
   bespoke: boolean;
+  /** Per-room upgrade trim tags applied at this room's level (Part B). */
+  trimTags: string[];
 }
 
 export interface RoomArtOpts {
@@ -65,6 +69,11 @@ export interface RoomArtOpts {
   cropStage?: number;
   /** Storage Vault pile step 0..4. Omit to draw a mid pile (callers with no resource state). */
   vaultFill?: number;
+  /** Rift Gate visual state (used when defId === 'rift_gate'). */
+  riftState?: RiftGateVisualState;
+  riftDestId?: string;
+  riftPhaseRad?: number;
+  riftFlareAlpha?: number;
 }
 
 const STONE = PALETTE.stone.map(hex);
@@ -104,17 +113,16 @@ export function drawRoomInterior(g: Painter, room: PlacedRoom, box: Box, opts: R
   const tier = opts.tier ?? roomTier(room);
   const tint = roomTint(def, opts.robeColor);
   const gk = roomGlyph(def);
-  const res: RoomArtResult = { tier, emitters: [], animated: [], damaged: [], missing: [], bespoke: false };
+  const res: RoomArtResult = { tier, emitters: [], animated: [], damaged: [], missing: [], bespoke: false, trimTags: [] };
   if (room.area === 'grounds') {
-    res.bespoke = drawGroundsPlot(g, room, box, res.emitters, opts.cropStage ?? 3);
-    if (room.level >= 2) drawLevelTrim(g, box, room.level, tint, gk);
+    res.bespoke = drawGroundsPlot(g, room, box, res.emitters, opts.cropStage ?? 3, opts);
+    res.trimTags = drawRoomUpgradeTrim(g, room, box, tint, gk);
   } else {
     drawTierSkin(g, box, tier, tint, gk, room.id, res.emitters);
     res.bespoke = drawDressing(g, room, box, tint, gk, res.emitters, opts.cropStage ?? 3, opts.vaultFill);
     drawShell(g, room, box, tier, !!opts.hasLeftDoor, !!opts.hasRightDoor);
-    drawLevelTrim(g, box, room.level, tint, gk);
+    res.trimTags = drawRoomUpgradeTrim(g, room, box, tint, gk);
   }
-  if (room.level >= 3) drawSignatureProp(g, room.defId, box.left + box.width - 16, box.top + 20, tint);
   placeFurniture(g, room, box, tint, gk, res);
   if (tier === 'splendid') {
     let sparkles = 0;
@@ -128,6 +136,12 @@ function placeFurniture(g: Painter, room: PlacedRoom, box: Box, tint: number, gk
   const view = layoutRoomFurniture(room);
   const ceilingY = box.top + 3;
   for (const it of view.items) {
+    if (room.defId === 'rift_gate' && it.furniture.defId === 'gate_arch') {
+      if (it.furniture.damaged) {
+        res.damaged.push({ x: box.left + box.width / 2 + 26, y: box.floorLineY - 24 });
+      }
+      continue;
+    }
     const art = getFurnitureArt(it.furniture.defId);
     const fl = floorLineFor(box.floorLineY, it.floor);
     const x = Math.min(box.left + box.width - art.w / 2 - 2, Math.max(box.left + art.w / 2 + 2, box.left + it.x));
@@ -319,35 +333,44 @@ function drawShell(g: Painter, room: PlacedRoom, box: Box, tier: Tier, left: boo
   }
 }
 
-/** Level trims (Addendum 5.1 upgrade levels). L1 nothing; L2 moulding + crest; L3 gilded trim + finials. */
-export function drawLevelTrim(g: Painter, box: Box, level: number, tint: number, gk: string) {
+/** Level trims (Part B: delegates to per-room-type upgrade trims when defId is supplied). */
+export function drawLevelTrim(g: Painter, box: Box, level: number, tint: number, gk: string, defId?: string) {
   if (level < 2) return;
+  if (defId) {
+    const def = ROOM_DEFINITIONS[defId];
+    drawRoomUpgradeTrim(
+      g,
+      {
+        id: 0,
+        defId,
+        x: 0,
+        y: 0,
+        w: Math.max(1, Math.round(box.width / 64)),
+        h: Math.max(1, Math.round(box.height / 48)),
+        area: (def?.area as 'castle' | 'grounds') || 'castle',
+        level: Math.min(3, Math.max(1, level)) as 1 | 2 | 3,
+        state: 'built',
+        buildRequired: 0,
+        buildProgress: 0,
+        cleanliness: 100,
+        settings: {},
+        furniture: []
+      },
+      box,
+      tint,
+      gk
+    );
+    return;
+  }
   const L = box.left, T = box.top + 3, W = box.width;
   const c = level >= 3 ? GOLDS[2] : STONE[3];
   g.rect(L + 2, T, W - 4, 1.5).fill({ color: c });
   for (let x = L + 6; x < L + W - 4; x += 8) g.rect(x, T + 1.5, 2, 1.5).fill({ color: darken(c, 0.8) });
-  // crest in the top-right corner (keeps the centred label clear)
   const cx = L + W - 9, cy = T + 7;
   g.poly([cx - 4, cy - 4, cx + 4, cy - 4, cx + 4, cy + 1, cx, cy + 5, cx - 4, cy + 1]).fill({ color: level >= 3 ? GOLDS[1] : STONE[2] });
   glyph(g, gk, cx, cy, 2.2, level >= 3 ? GOLDS[3] : tint);
-  if (level >= 3) {
-    // Trim II: stained-glass window in the category colour, plus a crest banner.
-    const wx = L + 12, wy = T + 5;
-    g.rect(wx - 1, wy - 1, 11, 14).fill({ color: GOLDS[1] });
-    g.rect(wx, wy, 9, 12).fill({ color: tint });
-    g.rect(wx + 1, wy + 1, 3, 3).fill({ color: 0xffffff, alpha: 0.45 });
-    line(g, wx + 4.5, wy, wx + 4.5, wy + 12, GOLDS[2], 0.6);
-    line(g, wx, wy + 6, wx + 9, wy + 6, GOLDS[2], 0.6);
-    const bx = Math.min(L + W - 22, wx + 18);
-    g.rect(bx - 5, T, 10, 1.5).fill({ color: GOLDS[2] });
-    g.poly([bx - 4, T + 1.5, bx + 4, T + 1.5, bx + 4, T + 12, bx, T + 15, bx - 4, T + 12]).fill({ color: tint });
-    glyph(g, gk, bx, T + 7, 2, GOLDS[3]);
-    for (const fx of [L + 3, L + W - 3]) {
-      g.circle(fx, T + 2, 1.8).fill({ color: GOLDS[3] });
-      g.rect(fx - 0.75, T + 3, 1.5, box.floorLineY - T - 3).fill({ color: GOLDS[1], alpha: 0.6 });
-    }
-  }
 }
+export { getRoomTrimTags };
 
 // ---------------------------------------------------------------------------------------------
 // 2. Dressings (Appendix A.1 "Look"), one per room id
@@ -744,12 +767,12 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
 // Grounds plots (A.1: 64 x 96 per plot, ground line 48 px from the top, up to 48 px sky overhang)
 // ---------------------------------------------------------------------------------------------
 
-export function drawGroundsPlot(g: Painter, room: PlacedRoom, box: Box, em: Emitter[], cropStage = 3): boolean {
+export function drawGroundsPlot(g: Painter, room: PlacedRoom, box: Box, em: Emitter[], cropStage = 3, opts: RoomArtOpts = {}): boolean {
   const cs = Math.max(0, Math.min(3, cropStage));
-  const L = box.left, W = box.width, B = box.floorLineY, R = L + W, cx = L + W / 2, top = box.top;
+  const L = box.left, W = box.width, B = box.floorLineY, R = L + W, cx = L + W / 2;
   const s = room.id;
-  // grass bed + earth band
-  g.rect(L, top + 6, W, B - top - 6).fill({ color: 0x4a7d3a, alpha: 0.25 });
+  // ground turf strip + earth band (open sky above, no indoor box frame)
+  g.rect(L, B - 8, W, 8).fill({ color: 0x4a7d3a, alpha: 0.3 });
   g.rect(L, B, W, 4).fill({ color: 0x3a2a1e });
   g.rect(L, B - 1, W, 1.5).fill({ color: 0x6ba34f });
   const fence = (x0: number, x1: number) => {
@@ -849,8 +872,15 @@ export function drawGroundsPlot(g: Painter, room: PlacedRoom, box: Box, em: Emit
       em.push({ kind: 'sway', x: L + 30, y: B - 4, size: 2, color: 0x6ba34f });
       break;
     case 'rift_gate': {
-      g.rect(cx - 30, B - 3, 60, 3).fill({ color: STONE[1] });
-      em.push({ kind: 'portal', x: cx, y: B - 22, size: 14, color: 0x7d5ba6 });
+      const rState: RiftGateVisualState = opts.riftState ?? 'dormant';
+      drawRiftGateArch(g, box, rState, {
+        phaseRad: opts.riftPhaseRad ?? 0,
+        destinationId: opts.riftDestId,
+        flareAlpha: opts.riftFlareAlpha
+      });
+      if (rState !== 'dormant') {
+        em.push({ kind: 'portal', x: cx, y: B - 34, size: 14, color: 0x7d5ba6 });
+      }
       break;
     }
     case 'training_yard':
@@ -859,10 +889,11 @@ export function drawGroundsPlot(g: Painter, room: PlacedRoom, box: Box, em: Emit
       for (let i = 0; i < 3; i++) line(g, R - 16 + i * 4, B - 22, R - 16 + i * 4, B, SD_LINE, 1);
       break;
     default:
-      g.rect(L + 1, top + 4, W - 2, B - top - 4).stroke({ color: 0x6e4529, width: 1, alpha: 0.6 });
+      g.rect(L + 2, B - 2, W - 4, 2).fill({ color: 0x6e4529, alpha: 0.65 });
       return false;
   }
-  g.rect(L + 1, top + 4, W - 2, B - top - 4).stroke({ color: 0x6e4529, width: 1, alpha: 0.6 });
+  // Low turf/path border along the plot ground edge (never a sky box outline)
+  g.rect(L + 1, B - 1.5, W - 2, 1.5).fill({ color: 0x4a7d3a, alpha: 0.8 });
   return true;
 }
 const SD_LINE = 0x8a8994;

@@ -744,7 +744,7 @@ export function portraitLayout(look: DollLook): { cx: number; cy: number; faceDi
   return { cx: PORTRAIT_PX / 2, cy: PORTRAIT_PX / 2, faceDiameter: HEAD_R * 2 * PORTRAIT_SCALE, headOffset: a.head };
 }
 
-function zoomAbout(g: Painter, ox: number, oy: number, destX: number, destY: number, s: number): Painter {
+export function zoomAbout(g: Painter, ox: number, oy: number, destX: number, destY: number, s: number): Painter {
   const X = (x: number) => destX + (x - ox) * s;
   const Y = (y: number) => destY + (y - oy) * s;
   const self: Painter = {

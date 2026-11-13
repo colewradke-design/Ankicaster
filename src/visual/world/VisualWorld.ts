@@ -39,8 +39,12 @@ import { drawDirt, dirtLevel, drawLockHazard, drawPadlock, drawWrench, drawDirty
 import { drawEffect, VisualEffect, EFFECT_MS } from '../rooms/effects';
 import { reviewsToGo, siteFraction } from '../../utils/construction';
 import { hexToNum } from '../../utils/appearance';
-import { chooseBubble, drawBubble, bubbleLabel, BubbleKind } from '../agents/doll';
+import { chooseBubble, drawBubble, bubbleLabel, BubbleKind, appearanceToLayers, drawPortraitSource, zoomAbout } from '../agents/doll';
 import { CAPPED_RESOURCES, resourceLabel, storageCap } from '../../utils/resourceReport';
+import { CreatureChoreographer, CreatureVisualAgent } from '../creatures/creatureChoreographer';
+import { drawCreature, drawCreatureEgg, drawCreatureBubble, creatureSize, tamingRingFraction, tamingRequirement } from '../creatures/creatureArt';
+import { drawRiftGateArch, getRiftGateVisualState, RIFT_RETURN_FLARE_MS } from '../rooms/riftGateArt';
+import { CREATURE_DEFINITIONS } from '../../data/content';
 
 /** Fixed ambient rate (Addendum 5.5: 2-8 fps, never tied to reviews). 5 fps -> 0.8 s per 4-frame loop. */
 export const AMBIENT_FRAME_MS = 200;
@@ -85,6 +89,7 @@ export class VisualWorld {
   overlayLabels: OverlayLabel[] = [];
   overlayTexts = new Map<string, Text>();
   roomLabelsContainer = new Container();
+  riftGraphics = new Graphics();
   agentsGraphics = new Graphics();
   roofsGraphics = new Graphics();
   overlayGraphics = new Graphics();
@@ -96,6 +101,9 @@ export class VisualWorld {
   camera: Camera;
   navGraph: NavGraph;
   choreographer: Choreographer;
+  creatureChoreographer: CreatureChoreographer;
+  riftReturningUntilMs = 0;
+  private prevExpeditionActive = false;
 
   state?: FullGameState;
   reachability = new Map<number, ReachabilityInfo>();
@@ -116,6 +124,7 @@ export class VisualWorld {
     this.camera = new Camera(2);
     this.navGraph = new NavGraph([], 400);
     this.choreographer = new Choreographer(this.navGraph, 400);
+    this.creatureChoreographer = new CreatureChoreographer(this.navGraph, 400, 1600);
 
     // Setup hierarchy
     this.rootContainer.addChild(this.worldContainer);
@@ -123,6 +132,7 @@ export class VisualWorld {
 
     this.worldContainer.addChild(this.skyGraphics);
     this.worldContainer.addChild(this.castleGraphics);
+    this.worldContainer.addChild(this.riftGraphics);
     this.worldContainer.addChild(this.ambientGraphics);
     this.worldContainer.addChild(this.statusGraphics);
     this.worldContainer.addChild(this.fxGraphics);
@@ -207,10 +217,19 @@ export class VisualWorld {
       }
     }
 
-    // Update nav graph & choreographer
+    // Detect expedition active -> returned for 1.5s Veil-light flare
+    const hasActiveExp = !!(state.expeditions?.some(e => e.state === 'active'));
+    if (this.prevExpeditionActive && !hasActiveExp && !state.settings.reduceMotion) {
+      this.riftReturningUntilMs = this.clockMs + RIFT_RETURN_FLARE_MS;
+    }
+    this.prevExpeditionActive = hasActiveExp;
+
+    // Update nav graph & choreographers
     this.navGraph.build(state.rooms, this.groundY);
     this.choreographer.updateNavGraph(this.navGraph, this.groundY);
     this.choreographer.syncState(state, engineReach);
+    this.creatureChoreographer.updateBounds(this.navGraph, this.groundY, this.totalWorldWidth);
+    this.creatureChoreographer.syncState(state);
 
     // One-shot effects from state changes (never from review count or speed)
     this.detectEffects(state);
@@ -286,8 +305,36 @@ export class VisualWorld {
   renderWorldLayers() {
     if (!this.state) return;
 
-    // 1. Sky & earth band
+    // 1. Sky & earth band + front step & unlocked/locked grounds plots
     ForgeRenderer.drawSky(this.skyGraphics, this.totalWorldWidth, this.groundY + 120, this.groundY);
+
+    const wizTotal = Object.values(this.state.wizard?.levels || {}).reduce((s, n) => s + (n || 0), 0);
+    const unlockedPlotCount = 6 + (wizTotal >= 3 ? 4 : 0) + (wizTotal >= 20 ? 4 : 0);
+    const unlockedSet = new Set(unlockedPlotIndices(unlockedPlotCount));
+    const ehRoom = this.state.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built');
+    if (ehRoom) {
+      const ehBox = roomToWorldBox(ehRoom, this.groundY);
+      const stepCx = ehBox.left + ehBox.width / 2;
+      this.skyGraphics.rect(stepCx - 16, this.groundY - 4, 32, 5).fill({ color: 0x6b6a75 });
+      this.skyGraphics.rect(stepCx - 18, this.groundY - 1, 36, 3).fill({ color: 0x53525c });
+    }
+    for (let p = 0; p < GROUNDS_PLOTS_PER_SIDE * 2; p++) {
+      const occupied = this.state.rooms.some(r => r.area === 'grounds' && p >= r.x && p < r.x + r.w);
+      if (occupied) continue;
+      const pbox = roomToWorldBox({ x: p, y: 0, w: 1, h: 1, area: 'grounds' }, this.groundY);
+      if (unlockedSet.has(p)) {
+        // Unlocked empty plot: mown grass + low fence posts
+        this.skyGraphics.rect(pbox.left + 2, pbox.floorLineY - 3, pbox.width - 4, 3).fill({ color: 0x4e8b3a, alpha: 0.85 });
+        this.skyGraphics.rect(pbox.left + 3, pbox.floorLineY - 8, 2, 8).fill({ color: 0x6e4529 });
+        this.skyGraphics.rect(pbox.left + pbox.width - 5, pbox.floorLineY - 8, 2, 8).fill({ color: 0x6e4529 });
+        this.skyGraphics.rect(pbox.left + 4, pbox.floorLineY - 5, pbox.width - 8, 1).fill({ color: 0x8f6239, alpha: 0.7 });
+      } else {
+        // Locked grounds slot: subtle wild meadow tufts
+        for (let gx = pbox.left + 8; gx < pbox.left + pbox.width - 6; gx += 12) {
+          this.skyGraphics.rect(gx, pbox.floorLineY - 3, 2, 3).fill({ color: 0x3a6b2c, alpha: 0.5 });
+        }
+      }
+    }
 
     // 2. Castle & Grounds Rooms
     this.castleGraphics.clear();
@@ -305,6 +352,9 @@ export class VisualWorld {
     const rooms = this.state.rooms;
     const currentRoomIds = new Set<number>();
     let labelsCreated = false;
+    const activeExp = this.state.expeditions?.find(e => e.state === 'active');
+    const riftReturning = !this.state.settings.reduceMotion && this.clockMs < this.riftReturningUntilMs;
+    const riftVisualState = getRiftGateVisualState(this.state, riftReturning);
 
     for (const room of rooms) {
       currentRoomIds.add(room.id);
@@ -327,25 +377,36 @@ export class VisualWorld {
       }
 
       if (room.state === 'built') {
-        const art = drawRoomInterior(this.castleGraphics, room, box, { robeColor, hasLeftDoor, hasRightDoor, cropStage, vaultFill });
+        const art = drawRoomInterior(this.castleGraphics, room, box, {
+          robeColor,
+          hasLeftDoor,
+          hasRightDoor,
+          cropStage,
+          vaultFill,
+          riftState: room.defId === 'rift_gate' ? riftVisualState : undefined,
+          riftDestId: activeExp?.destinationId,
+          riftPhaseRad: 0,
+          riftFlareAlpha: riftReturning ? Math.max(0.25, (this.riftReturningUntilMs - this.clockMs) / RIFT_RETURN_FLARE_MS) : undefined
+        });
         const locked = (room.lockedUntilReviewIndex ?? -1) > (this.state.reviewIndex ?? 0);
         // Ambient loops run only in built, reachable, unlocked, finished rooms (Addendum 5.5)
         const unfinished = isRoomUnfinished(room);
         this.ambientGroups.push({ animate: isReachable && !locked && !unfinished, emitters: art.emitters, items: art.animated });
         const dirt = drawDirt(this.statusGraphics, room, box);
         if (locked) drawLockHazard(this.statusGraphics, room, box);
-        ForgeRenderer.drawRoomStatus(this.statusGraphics, box, isReachable, isSelected);
+        ForgeRenderer.drawRoomStatus(this.statusGraphics, box, isReachable, isSelected, room.area);
         for (const d of art.damaged) drawWrench(this.statusGraphics, d.x, d.y);
+        const badgeTop = room.defId === 'rift_gate' ? box.floorLineY - 90 : box.top;
         let bx = box.left + 9;
         if (locked) {
-          drawPadlock(this.statusGraphics, bx, box.top + 10);
+          drawPadlock(this.statusGraphics, bx, badgeTop + 10);
           const n = (room.lockedUntilReviewIndex ?? 0) - (this.state.reviewIndex ?? 0);
-          this.overlayLabels.push({ key: `lock:${room.id}`, text: `Locked for ${n} more review${n === 1 ? '' : 's'}`, wx: box.left + 3, wy: box.top + 19, color: 0xf6e08c, size: 10, align: 'left' });
+          this.overlayLabels.push({ key: `lock:${room.id}`, text: `Locked for ${n} more review${n === 1 ? '' : 's'}`, wx: box.left + 3, wy: badgeTop + 19, color: 0xf6e08c, size: 10, align: 'left' });
           bx += 16;
         }
         if (dirt >= 3) {
-          drawDirtyBadge(this.statusGraphics, bx, box.top + 10);
-          this.overlayLabels.push({ key: `dirty:${room.id}`, text: 'Dirty', wx: bx, wy: box.top + (locked ? 27 : 19), color: 0xe0c48a, size: 10, align: 'center' });
+          drawDirtyBadge(this.statusGraphics, bx, badgeTop + 10);
+          this.overlayLabels.push({ key: `dirty:${room.id}`, text: 'Dirty', wx: bx, wy: badgeTop + (locked ? 27 : 19), color: 0xe0c48a, size: 10, align: 'center' });
           bx += 22;
         }
         if (unfinished) {
@@ -353,14 +414,14 @@ export class VisualWorld {
           // that corner, so an unreachable room shows it with the left-hand badges instead.
           const right = isReachable;
           const ux = right ? box.left + box.width - 10 : bx;
-          const uy = box.top + 10 + (!right && locked ? 17 : 0);
+          const uy = badgeTop + 10 + (!right && locked ? 17 : 0);
           drawUnfinishedBadge(this.statusGraphics, ux, uy);
           this.overlayLabels.push({ key: `unfinished:${room.id}`, text: 'Unfinished', wx: right ? ux + 6 : ux - 6, wy: uy + 9, color: 0xf0b44a, size: 10, align: right ? 'right' : 'left' });
         }
       } else {
         const site = drawSite(this.castleGraphics, room, box, { robeColor });
         this.ambientGroups.push({ animate: !site.paused, emitters: site.emitters, items: [] });
-        ForgeRenderer.drawRoomStatus(this.statusGraphics, box, isReachable, isSelected);
+        ForgeRenderer.drawRoomStatus(this.statusGraphics, box, isReachable, isSelected, room.area);
         // Progress ring at the top-right + the same countdown the Build panel shows
         const rx = box.left + box.width - 10, ry = box.top + 11;
         drawRing(this.statusGraphics, rx, ry, 6, siteFraction(room), site.paused ? 0xb9b8c2 : 0x7dd87a);
@@ -397,7 +458,13 @@ export class VisualWorld {
       } else if (roomText.text !== roomName) {
         roomText.text = roomName;
       }
-      this.roomLabelAnchors.set(room.id, { cx: box.left + box.width / 2, top: box.top, width: box.width });
+      const labelTop =
+        room.area === 'grounds'
+          ? room.defId === 'rift_gate'
+            ? box.floorLineY - 98
+            : box.top - 16
+          : box.top;
+      this.roomLabelAnchors.set(room.id, { cx: box.left + box.width / 2, top: labelTop, width: box.width });
     }
     this.refreshLabelStyles(labelsCreated);
 
@@ -635,8 +702,89 @@ export class VisualWorld {
       }
     }
 
+    // Creature status overlays: wary "?" + taming ring, loose "!", hungry bowl, wizard paw charm, +N cap badge
+    const z = this.camera.zoom;
+    const ox = this.worldContainer.x;
+    const oy = this.worldContainer.y;
+    for (const cAgent of this.creatureChoreographer.agents.values()) {
+      const c = this.state.creatures.find(cr => cr.id === cAgent.creatureId);
+      if (!c || c.status === 'away') continue;
+      const { h } = creatureSize(c.defId);
+      const sx = ox + cAgent.x * z;
+      const sy = oy + (cAgent.y - h - 6) * z;
+      if (c.status === 'wary') {
+        drawCreatureBubble(this.overlayGraphics, 'wary', sx - 8, sy, 1);
+        drawRing(this.overlayGraphics, sx + 8, sy, 6, tamingRingFraction(c), 0x7dd87a);
+      } else if (c.status === 'loose') {
+        drawCreatureBubble(this.overlayGraphics, 'loose', sx, sy, 1);
+      } else if (c.status === 'tamed' && c.hungry) {
+        drawCreatureBubble(this.overlayGraphics, 'hungry', sx, sy, 1);
+      }
+    }
+
+    // Wizard-as-tamer paw charm in pen (VR-05)
+    for (const roomId of this.creatureChoreographer.wizardPawRooms) {
+      const r = this.state.rooms.find(rm => rm.id === roomId && rm.state === 'built');
+      if (!r) continue;
+      const rbox = roomToWorldBox(r, this.groundY);
+      drawCreatureBubble(this.overlayGraphics, 'paw', ox + (rbox.left + 12) * z, oy + (rbox.floorLineY - 12) * z, 1.4);
+    }
+
+    // Creature "+N" cap badges on crowded pens
+    for (const [roomId, extra] of this.creatureChoreographer.hiddenCounts.entries()) {
+      if (extra <= 0) continue;
+      const r = this.state.rooms.find(rm => rm.id === roomId);
+      if (!r) continue;
+      const rbox = roomToWorldBox(r, this.groundY);
+      labels.push({ key: `creatureCap:${roomId}`, text: `+${extra}`, wx: rbox.left + 7, wy: rbox.top + 3, color: 0xf7e39a, size: 10, align: 'left' });
+    }
+
+    // Rift Gate "away" expedition banner & team portrait chips
+    const activeExp = this.state.expeditions?.find(e => e.state === 'active');
+    const riftRoom = this.state.rooms.find(r => r.defId === 'rift_gate' && r.state === 'built');
+    if (activeExp && riftRoom) {
+      const rbox = roomToWorldBox(riftRoom, this.groundY);
+      const cxWorld = rbox.left + rbox.width / 2;
+      // "AWAY" sits cleanly inside the arch lintel plaque (archTop + 14..23 = floorLineY - 70..-61)
+      labels.push({ key: 'rift:away', text: 'AWAY', wx: cxWorld, wy: rbox.floorLineY - 70, color: 0xf6e08c, size: 7, align: 'center' });
+      const team = activeExp.teamIds.map(id => this.state!.characters.find(c => c.id === id)).filter((c): c is NonNullable<typeof c> => !!c);
+      const chipScale = Math.max(0.55, Math.min(1.25, z * 0.52));
+      const chipSize = 16 * chipScale;
+      const chipStep = chipSize + 3;
+      const pawExtra = activeExp.companionId ? 14 : 0;
+      const totalChipW = team.length * chipStep + pawExtra;
+      const stripY = oy + (rbox.floorLineY - 19) * z;
+      const stripX = ox + cxWorld * z - totalChipW / 2;
+      if (team.length > 0 || activeExp.companionId) {
+        this.overlayGraphics
+          .roundRect(stripX - 4, stripY - 3, totalChipW + 8, chipSize + 6, 5)
+          .fill({ color: 0x1b1822, alpha: 0.85 })
+          .stroke({ color: 0x9c86e0, width: 1, alpha: 0.9 });
+      }
+      team.forEach((member, idx) => {
+        const chipX = stripX + idx * chipStep;
+        const look = appearanceToLayers({
+          id: member.id,
+          status: member.status,
+          career: member.career,
+          careerState: member.careerState,
+          masteredSchools: member.masteredSchools,
+          currentSchool: member.currentSchool,
+          appearance: member.appearance,
+          anim: 'idle',
+          needs: member.needs,
+          morale: member.morale
+        });
+        drawPortraitSource(zoomAbout(this.overlayGraphics, 0, 0, chipX, stripY, chipScale), look);
+      });
+      if (activeExp.companionId) {
+        const cxChip = stripX + team.length * chipStep + 6;
+        const cyChip = stripY + chipSize / 2;
+        drawCreatureBubble(this.overlayGraphics, 'paw', cxChip, cyChip, Math.max(0.95, chipScale * 1.15));
+      }
+    }
+
     const live = new Set<string>();
-    const z = this.camera.zoom, ox = this.worldContainer.x, oy = this.worldContainer.y;
     for (const l of labels) {
       live.add(l.key);
       let t = this.overlayTexts.get(l.key);
@@ -722,15 +870,85 @@ export class VisualWorld {
 
     // One clock. A second callback with the same `now` adds nothing (stacked tickers, re-renders).
     this.choreographer.tick(gap, this.state, reduceMotion, nowMs);
+    this.creatureChoreographer.tick(gap, this.state, reduceMotion, this.choreographer.agents, nowMs);
+
+    // Animated Rift Gate portal surface & 1.5s return flare
+    this.riftGraphics.clear();
+    const builtRift = this.state.rooms.find(r => r.defId === 'rift_gate' && r.state === 'built');
+    if (builtRift) {
+      const activeExp = this.state.expeditions?.find(e => e.state === 'active');
+      const riftReturning = !reduceMotion && this.clockMs < this.riftReturningUntilMs;
+      const rState = getRiftGateVisualState(this.state, riftReturning);
+      if (rState !== 'dormant') {
+        const box = roomToWorldBox(builtRift, this.groundY);
+        const speed = rState === 'expedition_out' ? 2.4 : 0.8;
+        drawRiftGateArch(this.riftGraphics, box, rState, {
+          phaseRad: reduceMotion ? 0 : (this.clockMs / 1000) * speed,
+          destinationId: activeExp?.destinationId,
+          flareAlpha: riftReturning ? Math.max(0.25, (this.riftReturningUntilMs - this.clockMs) / RIFT_RETURN_FLARE_MS) : undefined
+        });
+      }
+    }
 
     // Fixed-rate ambience + one-shot effects (cosmetic only)
     this.renderAmbient(this.ambientFrameFor(reduceMotion));
     this.renderEffects(reduceMotion);
 
-    // Draw agents
+    // Draw characters & creatures sorted by baseline y
     this.agentsGraphics.clear();
+    const drawQueue: Array<{ y: number; draw: () => void }> = [];
     for (const agent of this.choreographer.agents.values()) {
-      ForgeRenderer.drawPaperDoll(this.agentsGraphics, agent);
+      drawQueue.push({
+        y: agent.y,
+        draw: () => ForgeRenderer.drawPaperDoll(this.agentsGraphics, agent)
+      });
+    }
+    for (const cAgent of this.creatureChoreographer.agents.values()) {
+      const c = this.state.creatures.find(cr => cr.id === cAgent.creatureId);
+      if (!c || c.status === 'away') continue;
+      const def = CREATURE_DEFINITIONS[cAgent.defId];
+      drawQueue.push({
+        y: cAgent.y,
+        draw: () => {
+          if (cAgent.status === 'egg') {
+            drawCreatureEgg(
+              this.agentsGraphics,
+              def?.rarity ?? 'common',
+              cAgent.x,
+              cAgent.y,
+              cAgent.hatchProgress,
+              this.clockMs,
+              reduceMotion
+            );
+          } else {
+            drawCreature(this.agentsGraphics, cAgent.defId, {
+              x: cAgent.x,
+              y: cAgent.y,
+              facing: cAgent.facing,
+              anim: cAgent.anim,
+              frame: cAgent.frame,
+              status: cAgent.status,
+              bondLevel: cAgent.bondLevel,
+              unhomed: cAgent.unhomed,
+              auraPhase: reduceMotion ? 0 : this.clockMs / 350
+            });
+          }
+        }
+      });
+    }
+    drawQueue.sort((a, b) => a.y - b.y);
+    for (const entry of drawQueue) entry.draw();
+
+    // Transient creature hatch / tamed / bond bursts
+    for (const b of this.creatureChoreographer.bursts) {
+      const p = Math.max(0, Math.min(1, (this.clockMs - b.startMs) / b.durationMs));
+      const bx = b.x;
+      const by = b.y - p * 10;
+      if (b.kind === 'hatch') {
+        this.agentsGraphics.circle(bx, by, 3 + p * 6).stroke({ color: 0xf7e39a, width: 1.5, alpha: 1 - p });
+      } else {
+        drawCreatureBubble(this.agentsGraphics, 'hearts', bx, by, 1.1, b.kind === 'tamed' ? 3 : 1);
+      }
     }
 
     // Apply Camera transform to worldContainer
@@ -745,6 +963,28 @@ export class VisualWorld {
 
     // Update overlay position sync
     this.renderOverlays();
+  }
+
+  hitTestCreature(screenX: number, screenY: number): CreatureVisualAgent | null {
+    if (!this.state) return null;
+    const worldX = (screenX - this.worldContainer.x) / this.camera.zoom;
+    const worldY = (screenY - this.worldContainer.y) / this.camera.zoom;
+
+    const list = Array.from(this.creatureChoreographer.agents.values()).reverse();
+    for (const cAgent of list) {
+      if (cAgent.status === 'away') continue;
+      const { w, h } = creatureSize(cAgent.defId);
+      const pad = 4;
+      if (
+        worldX >= cAgent.x - w / 2 - pad &&
+        worldX <= cAgent.x + w / 2 + pad &&
+        worldY >= cAgent.y - h - pad &&
+        worldY <= cAgent.y + pad
+      ) {
+        return cAgent;
+      }
+    }
+    return null;
   }
 
   hitTestRoom(screenX: number, screenY: number): PlacedRoom | null {

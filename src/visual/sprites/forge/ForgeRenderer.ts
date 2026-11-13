@@ -34,10 +34,15 @@ export class ForgeRenderer {
     g.rect(0, groundY, width, height - groundY).fill({ color: 0x3a2a1e }); // Earth
     g.rect(0, groundY - 2, width, 4).fill({ color: 0x4a7d3a }); // Grass line
 
-    // Cobblestone front path along ground line
-    for (let px = 0; px < width; px += 16) {
-      g.rect(px + 1, groundY, 14, 6).fill({ color: 0x5e5d66 });
+    // Cobblestone front path along ground line linking Entrance Hall doors to every grounds plot
+    g.rect(0, groundY - 1, width, 1).fill({ color: 0x3b3a40 });
+    g.rect(0, groundY, width, 7).fill({ color: 0x45444d });
+    for (let px = 0; px < width; px += 12) {
+      const shade = (px / 12) % 3 === 0 ? 0x6b6a75 : (px / 12) % 2 === 0 ? 0x5e5d66 : 0x53525c;
+      g.rect(px + 1, groundY + 1, 10, 4).fill({ color: shade });
+      g.rect(px + 2, groundY + 1, 8, 1).fill({ color: 0x8a8994, alpha: 0.45 });
     }
+    g.rect(0, groundY + 6, width, 1.5).fill({ color: 0x2a2533 });
   }
 
   /**
@@ -124,7 +129,23 @@ export class ForgeRenderer {
   }
 
   /** Unreachable dim + selection outline drawn above a room's furniture (status layer). */
-  static drawRoomStatus(g: Graphics, box: { left: number; top: number; width: number; height: number }, isReachable: boolean, isSelected: boolean) {
+  static drawRoomStatus(
+    g: Graphics,
+    box: { left: number; top: number; width: number; height: number },
+    isReachable: boolean,
+    isSelected: boolean,
+    area: 'castle' | 'grounds' = 'castle'
+  ) {
+    if (area === 'grounds') {
+      const groundBandH = Math.min(24, box.height);
+      const bandTop = box.top + box.height - groundBandH;
+      if (!isReachable) g.rect(box.left, bandTop, box.width, groundBandH).fill({ color: 0x202020, alpha: 0.4 });
+      if (isSelected) {
+        g.rect(box.left + 1, bandTop, box.width - 2, groundBandH - 1).stroke({ color: 0xf6e08c, width: 2 });
+        g.rect(box.left, box.top + box.height - 3, box.width, 3).fill({ color: 0xf6e08c, alpha: 0.7 });
+      }
+      return;
+    }
     if (!isReachable) g.rect(box.left, box.top, box.width, box.height).fill({ color: 0x202020, alpha: 0.4 });
     if (isSelected) g.rect(box.left - 2, box.top - 2, box.width + 4, box.height + 4).stroke({ color: 0xf6e08c, width: 3 });
     else g.rect(box.left, box.top, box.width, box.height).stroke({ color: 0x1b1822, width: 1 });
