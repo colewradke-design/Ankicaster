@@ -61,7 +61,7 @@ export interface CreatureVisualAgent {
   targetY: number;
   unhomed: boolean;
   tamingProgress: number;
-  bondLevel: 1 | 2 | 3;
+  bondLevel: 0 | 1 | 2 | 3;
   hungry: boolean;
   hatchProgress: number;
   tamerId?: number;
@@ -96,6 +96,11 @@ export function resolveCreatureRoom(
 ): { room: PlacedRoom | undefined; unhomed: boolean; subBayIndex: number } {
   const def = CREATURE_DEFINITIONS[c.defId];
   const habitats = def?.habitats ?? ['meadow'];
+
+  if (c.debugUnhomed) {
+    const eh = rooms.find(r => r.state === 'built' && r.defId === 'entrance_hall');
+    return { room: eh, unhomed: true, subBayIndex: 0 };
+  }
 
   if (c.roomId !== undefined) {
     const explicit = rooms.find(r => r.id === c.roomId && r.state === 'built');

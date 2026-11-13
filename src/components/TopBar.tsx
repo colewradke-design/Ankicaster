@@ -187,6 +187,16 @@ export const TopBar: React.FC<TopBarProps> = ({ state, onOpenScreen, onOpenRoom,
           {term && <span className="text-sky-300 ml-1">· {term}</span>}
         </span>
 
+        {state.debugUsed && (
+          <span
+            data-testid="debug-save-tag"
+            className="px-2 py-1 min-h-[32px] rounded-lg border border-amber-500/50 bg-amber-500/15 text-amber-200 text-[11px] font-bold uppercase tracking-wide"
+            title="This save was changed by the preview debug panel"
+          >
+            debug save
+          </span>
+        )}
+
         <span
           className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 min-h-[32px] rounded-lg border bg-slate-900/80 text-[13px] ${veilColor}`}
           title={`Veil ${veilBandLabel}: ${veil.strength}%. Daily upkeep ${veil.costToday} mana. Safe floor ${bankFloor} mana.`}

@@ -199,7 +199,7 @@ export interface CreatureDrawOpts {
   anim: CreatureAnim;
   frame: number;
   status: CreatureInstance['status'];
-  bondLevel?: 1 | 2 | 3;
+  bondLevel?: 0 | 1 | 2 | 3;
   unhomed?: boolean;
   auraPhase?: number;
 }

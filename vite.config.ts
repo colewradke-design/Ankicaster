@@ -1,15 +1,47 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import {defineConfig, loadEnv, type Plugin} from 'vite';
 
-export default defineConfig(() => {
+const DEBUG_STUB = '\0ankicaster-debug-stub';
+
+/**
+ * Preview (vite serve) compiles the creature debug panel in.
+ * `npm run build:addon` sets VITE_DEBUG_TOOLS=false so the panel module is
+ * replaced with an empty stub and cannot appear in addon/web.
+ */
+function debugToolsPlugin(debugOn: boolean): Plugin {
+  return {
+    name: 'ankicaster-debug-tools',
+    enforce: 'pre',
+    resolveId(source) {
+      if (debugOn) return null;
+      const id = source.replace(/\\/g, '/');
+      if (id.includes('CreatureDebugPanel')) return DEBUG_STUB;
+      return null;
+    },
+    load(id) {
+      if (id !== DEBUG_STUB) return null;
+      return 'export function CreatureDebugPanel(){return null}\n';
+    }
+  };
+}
+
+export default defineConfig(({command, mode}) => {
+  const fileEnv = loadEnv(mode, process.cwd(), 'VITE_');
+  const explicit = process.env.VITE_DEBUG_TOOLS ?? fileEnv.VITE_DEBUG_TOOLS;
+  const debugOn = explicit === 'false' ? false : explicit === 'true' ? true : command === 'serve';
+  process.env.VITE_DEBUG_TOOLS = debugOn ? 'true' : 'false';
+
   return {
     base: './',
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), debugToolsPlugin(debugOn)],
+    define: {
+      'import.meta.env.VITE_DEBUG_TOOLS': JSON.stringify(debugOn ? 'true' : 'false')
+    },
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname, '.'),
       },
     },
     server: {

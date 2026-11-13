@@ -314,7 +314,9 @@ export interface CreatureInstance {
   hatchProgress: number;
   tamingProgress: number;
   tamerId?: number;
-  bondLevel: 1 | 2 | 3;
+  /** Preview debug only. Forces the unhomed Entrance Hall bundle even if a habitat exists. */
+  debugUnhomed?: boolean;
+  bondLevel: 0 | 1 | 2 | 3;
   bondProgress: number;
   arrivedDay: number;
 }
@@ -589,4 +591,16 @@ export interface FullGameState {
   knownPlansVersion?: number;
   /** Guided tutorial. Missing on old saves means already done. */
   tutorial?: TutorialProgress;
+  /** Set when a preview debug action touched this save. Real play never sets it. */
+  debugUsed?: boolean;
+  /** Creature ids created by the preview debug panel. */
+  debugCreatureIds?: number[];
+  /** Room ids created by the preview debug panel. */
+  debugRoomIds?: number[];
+  /** Character ids created by the preview debug panel (stand-in masters). */
+  debugCharacterIds?: number[];
+  /** Expedition ids created by the preview debug panel. */
+  debugExpeditionIds?: number[];
+  /** The debug panel locked the Rift Gate to preview the dormant arch. */
+  debugRiftLock?: boolean;
 }

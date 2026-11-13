@@ -35,6 +35,7 @@ import { ScreenId, SCREEN_DEFS, getAcademyMenuScreens } from './ui/screens';
 import { CastleGrid } from './components/CastleGrid';
 import { DemolishConfirm } from './components/DemolishConfirm';
 import type { PlacementMode } from './visual/AcademyCanvas';
+import { CreatureDebugPanel } from './debug/CreatureDebugPanel';
 import { normalizeAppearance } from './utils/appearance';
 import { wizardOrbQuote } from './utils/formulas';
 import { FlashcardReviewer } from './components/FlashcardReviewer';
@@ -1530,6 +1531,9 @@ export default function App() {
         }}
         onClose={() => { setIsCreationModalOpen(false); setLookOnly(false); }}
       />}
+      {import.meta.env.VITE_DEBUG_TOOLS === 'true' ? (
+        <CreatureDebugPanel state={state} onChange={setState} />
+      ) : null}
     </div>
   );
 }

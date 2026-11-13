@@ -33,7 +33,7 @@ export function creatureHoverText(c: {
   defId: string;
   status: CreatureInstance['status'];
   tamingProgress: number;
-  bondLevel: 1 | 2 | 3;
+  bondLevel: 0 | 1 | 2 | 3;
   hatchProgress: number;
   unhomed: boolean;
 }): string {
