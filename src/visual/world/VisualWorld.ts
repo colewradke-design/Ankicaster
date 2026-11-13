@@ -42,7 +42,7 @@ import { hexToNum } from '../../utils/appearance';
 import { chooseBubble, drawBubble, bubbleLabel, BubbleKind, appearanceToLayers, drawPortraitSource, zoomAbout } from '../agents/doll';
 import { CAPPED_RESOURCES, resourceLabel, storageCap } from '../../utils/resourceReport';
 import { CreatureChoreographer, CreatureVisualAgent } from '../creatures/creatureChoreographer';
-import { drawCreature, drawCreatureEgg, drawCreatureBubble, creatureSize, tamingRingFraction, tamingRequirement } from '../creatures/creatureArt';
+import { drawCreature, drawCreatureArrival, drawCreatureBubble, creatureSize, tamingRingFraction, tamingRequirement } from '../creatures/creatureArt';
 import { drawRiftGateArch, getRiftGateVisualState, RIFT_RETURN_FLARE_MS } from '../rooms/riftGateArt';
 import { CREATURE_DEFINITIONS } from '../../data/content';
 
@@ -911,15 +911,16 @@ export class VisualWorld {
         y: cAgent.y,
         draw: () => {
           if (cAgent.status === 'egg') {
-            drawCreatureEgg(
-              this.agentsGraphics,
-              def?.rarity ?? 'common',
-              cAgent.x,
-              cAgent.y,
-              cAgent.hatchProgress,
-              this.clockMs,
+            drawCreatureArrival(this.agentsGraphics, {
+              defId: cAgent.defId,
+              origin: def?.origin ?? cAgent.origin,
+              rarity: def?.rarity ?? 'common',
+              x: cAgent.x,
+              y: cAgent.y,
+              hatchProgress: cAgent.hatchProgress,
+              clockMs: this.clockMs,
               reduceMotion
-            );
+            });
           } else {
             drawCreature(this.agentsGraphics, cAgent.defId, {
               x: cAgent.x,

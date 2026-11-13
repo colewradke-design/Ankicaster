@@ -66,6 +66,7 @@ import {
   BellNote, commitBell, ensureLedger, glassworksConversion, logResourceChange, logResourceDiff,
   resourceSnapshot, storageCap as storageCapOf, weavingOutput
 } from './resourceReport';
+import { syncDiscoveredCreatures } from './creatures';
 
 export { isRoomUnlocked, planHint as blueprintLockHint, isStructure };
 
@@ -316,6 +317,7 @@ export class AnkicasterEngine {
         }
       }
     }
+    syncDiscoveredCreatures(next);
 
     // 6. Advance Active Expeditions
     for (const exp of next.expeditions) {
@@ -1348,7 +1350,8 @@ export class AnkicasterEngine {
     // 3. Reset characters (students & faculty)
     next.characters = [];
 
-    // 4. Remove ALL creatures (GDD Item 41)
+    // 4. Record discoveries in Bestiary then remove creatures (GDD Item 41)
+    syncDiscoveredCreatures(next);
     next.creatures = [];
 
     // 5. Reset rooms and materials back to starting layout & stock (BR-34 / F36)
@@ -1380,6 +1383,7 @@ export class AnkicasterEngine {
     // next.alumniGallery
     // next.achievements
     // next.allCards
+    // next.discoveredCreatures
 
     next.settings.termLengthDays = termLengthDays;
     next.termStartDateMs = now;
@@ -2156,6 +2160,7 @@ export class AnkicasterEngine {
     out.tutorial = phaseOk
       ? { phase, step: Math.max(0, Math.floor(out.tutorial.step) || 0), part: Math.max(0, Math.floor(out.tutorial.part) || 0) }
       : { phase: 'done', step: 0, part: 0 };
+    syncDiscoveredCreatures(out);
     return out;
   }
 
@@ -2668,6 +2673,28 @@ export class AnkicasterEngine {
   }
 
   /**
+   * Release a creature from the Academy while preserving its species in discoveredCreatures.
+   */
+  static releaseCreature(
+    state: FullGameState,
+    creatureId: number
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const next = structuredClone(state);
+    const idx = next.creatures.findIndex(c => c.id === creatureId);
+    if (idx === -1) return { state, success: false, error: 'Creature not found.' };
+    syncDiscoveredCreatures(next);
+    const [removed] = next.creatures.splice(idx, 1);
+    const def = CREATURE_DEFINITIONS[removed.defId];
+    next.notices.push({
+      id: `release-${removed.id}-${Date.now()}`,
+      time: Date.now(),
+      type: 'creature',
+      text: `Released ${removed.nickname} (${def?.name || removed.defId}) back to the wild.`
+    });
+    return { state: next, success: true };
+  }
+
+  /**
    * Queue Wizard Arcane Study Session (BR-05, BR-06)
    */
   static queueWizardSession(
@@ -2946,6 +2973,7 @@ export class AnkicasterEngine {
         bondProgress: 0,
         arrivedDay: next.day
       });
+      syncDiscoveredCreatures(next);
       message = 'Creature lure was successful! A wild creature arrived outside your habitat.';
     }
 
@@ -3410,6 +3438,7 @@ export class AnkicasterEngine {
         summary = 'The matter was handled gracefully by the Academy staff.';
     }
 
+    syncDiscoveredCreatures(next);
     next.notices.push({
       id: `evt-${Date.now()}`,
       time: Date.now(),

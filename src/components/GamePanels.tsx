@@ -16,6 +16,18 @@
 import { roomLimitStatus } from '../utils/placement';
 import { WizardPortrait } from './WizardPortrait';
 import { CharacterPortrait } from './CharacterPortrait';
+import { CreaturePortrait } from './CreaturePortrait';
+import {
+  HABITAT_LABELS,
+  ORIGIN_LABELS,
+  arrivalStage,
+  arrivalStageLabel,
+  compatiblePenNames,
+  getDiscoveredCreatureIds,
+  isRoamingCompanion,
+  originLabel
+} from '../utils/creatures';
+import type { CreatureRarity, HabitatType } from '../types/ankicaster';
 import React, { useEffect, useState } from 'react';
 import {
   FullGameState,
@@ -896,139 +908,335 @@ export const CardDraftPanel: React.FC<{
   );
 };
 
-// ==========================================
-// 6. BESTIARY & CREATURES PANEL (40 SPECIES)
-// ==========================================
+const RARITY_ORDER: Record<CreatureRarity, number> = {
+  common: 0,
+  uncommon: 1,
+  rare: 2,
+  epic: 3,
+  legendary: 4
+};
+
+const RARITY_STYLE: Record<CreatureRarity, { frame: string; badge: string }> = {
+  common: { frame: 'border-slate-700', badge: 'bg-slate-800 text-slate-300 border-slate-700' },
+  uncommon: { frame: 'border-emerald-700/60', badge: 'bg-emerald-950/80 text-emerald-300 border-emerald-700/50' },
+  rare: { frame: 'border-sky-600/60', badge: 'bg-sky-950/80 text-sky-300 border-sky-600/50' },
+  epic: { frame: 'border-purple-600/70', badge: 'bg-purple-950/80 text-purple-300 border-purple-600/50' },
+  legendary: { frame: 'border-amber-500/70', badge: 'bg-amber-950/80 text-amber-300 border-amber-500/50' }
+};
+
 export const BestiaryPanel: React.FC<{
   state: FullGameState;
   onFeedCreature: (creatureId: number) => void;
   onAssignTamer: (creatureId: number, tamerId: number) => void;
 }> = ({ state, onFeedCreature, onAssignTamer }) => {
-  const { creatures, characters, resources } = state;
-  const [filter, setFilter] = useState<'all' | 'tamed' | 'wary' | 'loose'>('all');
+  const creatures = state.creatures || [];
+  const characters = state.characters || [];
+  const [statusFilter, setStatusFilter] = useState<'all' | 'tamed' | 'wary' | 'loose' | 'egg'>('all');
+  const [habitatFilter, setHabitatFilter] = useState<'all' | HabitatType>('all');
+  const [rarityFilter, setRarityFilter] = useState<'all' | CreatureRarity>('all');
+
+  const discovered = getDiscoveredCreatureIds(state);
+  const allSpecies = Object.values(CREATURE_DEFINITIONS).sort(
+    (a, b) => RARITY_ORDER[a.rarity] - RARITY_ORDER[b.rarity] || a.name.localeCompare(b.name)
+  );
+  const filteredBook = allSpecies.filter(def => {
+    if (habitatFilter !== 'all' && !def.habitats.includes(habitatFilter)) return false;
+    if (rarityFilter !== 'all' && def.rarity !== rarityFilter) return false;
+    return true;
+  });
 
   const tamers = characters.filter(c => c.career === 'tamer');
-  const filtered = creatures.filter(c => filter === 'all' || c.status === filter);
+  const filteredOwned = creatures.filter(c => statusFilter === 'all' || c.status === statusFilter);
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between bg-slate-900/80 p-5 rounded-2xl border border-emerald-900/40 shadow-lg">
+      <div className="flex items-center justify-between gap-4 flex-wrap bg-slate-900/80 p-5 rounded-2xl border border-emerald-900/40 shadow-lg">
         <div>
           <h3 className="text-base font-bold text-emerald-300 flex items-center gap-2">
             <PawPrint className="w-5 h-5" /> The Academy Bestiary &amp; Menagerie
           </h3>
-          <p className="text-xs text-slate-400 mt-1" title="40 species (GDD 22). Tamed creatures grant passive buffs, help clean, and join Rift expeditions.">Tamed creatures give buffs ⓘ</p>
+          <p className="text-xs text-slate-400 mt-1" title="40 species (GDD 22). Tamed creatures grant passive buffs, help clean, and join Rift expeditions.">
+            Collector&apos;s Book &amp; Companions · Tamed creatures give buffs ⓘ
+          </p>
         </div>
-        <div className="text-right">
-          <div className="text-xs text-slate-400">Total In Menagerie</div>
-          <div className="text-xl font-bold text-emerald-400">{creatures.length} Creatures</div>
+        <div className="flex items-center gap-5 text-right">
+          <div>
+            <div className="text-xs text-slate-400">Bestiary</div>
+            <div className="text-xl font-bold text-amber-300" data-testid="bestiary-discovered-count">
+              Discovered {discovered.size} / 40
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-slate-400">In Academy</div>
+            <div className="text-xl font-bold text-emerald-400">{creatures.length}</div>
+          </div>
         </div>
       </div>
 
-      {/* Filter Tabs */}
-      <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
-        {(['all', 'tamed', 'wary', 'loose'] as const).map(f => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold capitalize transition ${
-              filter === f
-                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            {f}
-          </button>
-        ))}
-      </div>
+      {/* Owned Menagerie Care */}
+      {creatures.length > 0 && (
+        <section className="space-y-3" data-testid="bestiary-owned-section">
+          <div className="flex items-center justify-between gap-2 flex-wrap border-b border-slate-800 pb-2">
+            <h4 className="text-sm font-bold text-slate-200">In Your Academy</h4>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {(['all', 'tamed', 'wary', 'egg', 'loose'] as const).map(f => (
+                <button
+                  key={f}
+                  onClick={() => setStatusFilter(f)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold capitalize transition ${
+                    statusFilter === f
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {f === 'egg' ? 'Arriving' : f}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      {/* Creatures Grid */}
-      {filtered.length === 0 ? (
-        <div className="text-center py-12 text-xs text-slate-500 bg-slate-900/40 rounded-xl border border-dashed border-slate-800">
-          No creatures in this category yet. Explore the Rift or draft Creature Lures to attract magical familiars!
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map(c => {
-            const def = CREATURE_DEFINITIONS[c.defId];
-            if (!def) return null;
+          {filteredOwned.length === 0 ? (
+            <div className="text-center py-6 text-xs text-slate-500 bg-slate-900/40 rounded-xl border border-dashed border-slate-800">
+              No creatures in this category right now.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredOwned.map(c => {
+                const def = c?.defId ? CREATURE_DEFINITIONS[c.defId] : undefined;
+                if (!def) return null;
+                const roaming = isRoamingCompanion(c);
 
-            return (
-              <div key={c.id} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow space-y-3">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-bold text-sm text-slate-100 flex items-center gap-1.5">
-                      <span>{c.nickname}</span>
-                      <span className="text-xs text-slate-400">({def.name})</span>
-                    </span>
-                    <span className={`text-xs px-2 py-0.5 rounded font-bold uppercase ${
-                      c.status === 'tamed'
-                        ? 'bg-emerald-500/20 text-emerald-300'
-                        : c.status === 'wary'
-                        ? 'bg-amber-500/20 text-amber-300'
-                        : 'bg-rose-500/20 text-rose-300'
-                    }`}>
-                      {c.status}
-                    </span>
-                  </div>
-
-                  <div className="text-xs text-slate-300 leading-relaxed">{def.buffDescription}</div>
-
-                  {/* Taming Progress for Wary Creatures */}
-                  {c.status === 'wary' && (
-                    <div className="mt-2 space-y-1">
-                      <div className="flex justify-between text-xs text-slate-400">
-                        <span>Taming Progress:</span>
-                        <span>{c.tamingProgress} / {def.tamingReviews} reviews</span>
-                      </div>
-                      <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden border border-slate-700">
-                        <div
-                          className="bg-amber-400 h-full transition-all"
-                          style={{ width: `${Math.min(100, (c.tamingProgress / def.tamingReviews) * 100)}%` }}
+                return (
+                  <div key={c.id} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow space-y-3">
+                    <div className="space-y-2">
+                      <div className="flex items-start gap-2.5">
+                        <CreaturePortrait
+                          defId={c.defId}
+                          variant={c.status === 'egg' ? 'egg' : 'adult'}
+                          hatchProgress={c.hatchProgress}
+                          status={c.status}
+                          bondLevel={c.bondLevel}
+                          size={44}
                         />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="font-bold text-sm text-slate-100 truncate">
+                              {c.nickname}
+                              <span className="text-xs font-normal text-slate-400"> ({def.name})</span>
+                            </span>
+                            <span className={`text-[11px] px-2 py-0.5 rounded font-bold uppercase shrink-0 ${
+                              c.status === 'tamed'
+                                ? 'bg-emerald-500/20 text-emerald-300'
+                                : c.status === 'wary'
+                                ? 'bg-amber-500/20 text-amber-300'
+                                : c.status === 'egg'
+                                ? 'bg-sky-500/20 text-sky-300'
+                                : 'bg-rose-500/20 text-rose-300'
+                            }`}>
+                              {c.status === 'egg' ? originLabel(def.origin, c.defId) : c.status}
+                            </span>
+                          </div>
+                          {roaming && (
+                            <span className="inline-block mt-1 text-[11px] px-1.5 py-0.5 rounded bg-emerald-950/60 border border-emerald-700/40 text-emerald-300">
+                              Roaming companion (0 pen slots)
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="text-xs text-slate-300 leading-relaxed">{def.buffDescription}</div>
+
+                      {c.status === 'egg' && (
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-xs text-slate-400">
+                            <span>{arrivalStageLabel(arrivalStage(c.hatchProgress || 0))}</span>
+                            <span>{Math.round(c.hatchProgress || 0)}%</span>
+                          </div>
+                          <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden border border-slate-700">
+                            <div className="bg-sky-400 h-full transition-all" style={{ width: `${Math.min(100, c.hatchProgress || 0)}%` }} />
+                          </div>
+                        </div>
+                      )}
+
+                      {c.status === 'wary' && (
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-xs text-slate-400">
+                            <span>Taming Progress:</span>
+                            <span>{c.tamingProgress} / {def.tamingReviews} reviews</span>
+                          </div>
+                          <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden border border-slate-700">
+                            <div
+                              className="bg-amber-400 h-full transition-all"
+                              style={{ width: `${Math.min(100, (c.tamingProgress / def.tamingReviews) * 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {c.status === 'tamed' && (
+                        <div className="text-xs text-amber-300 flex items-center gap-1">
+                          <Heart className="w-3.5 h-3.5 fill-amber-400" />
+                          <span>Bond Level {c.bondLevel}/3 ({c.bondProgress} bond points)</span>
+                        </div>
+                      )}
+
+                      <div className="text-xs text-slate-400">
+                        Diet: {Object.entries(def.diet).map(([k, v]) => `${v} ${k}`).join(', ')}
                       </div>
                     </div>
-                  )}
 
-                  {/* Bond Level for Tamed Creatures */}
-                  {c.status === 'tamed' && (
-                    <div className="mt-2 text-xs text-amber-300 flex items-center gap-1">
-                      <Heart className="w-3.5 h-3.5 fill-amber-400" />
-                      <span>Bond Level {c.bondLevel}/3 ({c.bondProgress} bond points)</span>
+                    <div className="flex items-center gap-2 pt-2 border-t border-slate-800">
+                      <button
+                        onClick={() => onFeedCreature(c.id)}
+                        className="flex-1 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-200 border border-emerald-500/40 rounded-xl text-xs font-bold transition"
+                      >
+                        Feed Diet
+                      </button>
+                      {c.status === 'wary' && tamers.length > 0 && (
+                        <select
+                          value={c.tamerId || ''}
+                          onChange={e => onAssignTamer(c.id, Number(e.target.value))}
+                          className="bg-slate-950 border border-slate-700 rounded-xl text-xs p-1.5 text-slate-200"
+                        >
+                          <option value="">Assign Tamer...</option>
+                          {tamers.map(t => (
+                            <option key={t.id} value={t.id}>{t.name}</option>
+                          ))}
+                        </select>
+                      )}
                     </div>
-                  )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
 
-                  {/* Diet specification */}
-                  <div className="mt-2 text-xs text-slate-400">
-                    Diet: {Object.entries(def.diet).map(([k, v]) => `${v} ${k}`).join(', ')}
+      {/* Collector's Book: All 40 Species */}
+      <section className="space-y-3" data-testid="bestiary-book">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-2">
+          <h4 className="text-sm font-bold text-amber-200">Collector&apos;s Book (All 40 Species)</h4>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              aria-label="Filter by habitat"
+              data-testid="bestiary-habitat-filter"
+              value={habitatFilter}
+              onChange={e => setHabitatFilter(e.target.value as 'all' | HabitatType)}
+              className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200"
+            >
+              <option value="all">All habitats</option>
+              {(Object.keys(HABITAT_LABELS) as HabitatType[]).map(h => (
+                <option key={h} value={h}>{HABITAT_LABELS[h].badge} {HABITAT_LABELS[h].label}</option>
+              ))}
+            </select>
+            <select
+              aria-label="Filter by rarity"
+              data-testid="bestiary-rarity-filter"
+              value={rarityFilter}
+              onChange={e => setRarityFilter(e.target.value as 'all' | CreatureRarity)}
+              className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200 capitalize"
+            >
+              <option value="all">All rarities</option>
+              {(['common', 'uncommon', 'rare', 'epic', 'legendary'] as CreatureRarity[]).map(r => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {filteredBook.map(def => {
+            const isDiscovered = discovered.has(def.id);
+            const rStyle = RARITY_STYLE[def.rarity];
+            const ownedCount = creatures.filter(c => c.defId === def.id).length;
+
+            if (!isDiscovered) {
+              return (
+                <div
+                  key={def.id}
+                  data-testid={`bestiary-entry-${def.id}`}
+                  data-discovered="false"
+                  className={`bg-slate-950/80 border ${rStyle.frame} p-3.5 rounded-xl flex items-center gap-3`}
+                >
+                  <CreaturePortrait variant="unknown" size={48} />
+                  <div className="flex-1 min-w-0 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono font-bold text-sm text-slate-500">???</span>
+                      <span className={`text-[11px] px-2 py-0.5 rounded border capitalize font-bold ${rStyle.badge}`}>
+                        {def.rarity}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {def.habitats.map(h => (
+                        <span key={h} className="text-[11px] px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400">
+                          {HABITAT_LABELS[h].badge} {HABITAT_LABELS[h].label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            const pens = compatiblePenNames(def);
+            return (
+              <div
+                key={def.id}
+                data-testid={`bestiary-entry-${def.id}`}
+                data-discovered="true"
+                className={`bg-slate-900 border ${rStyle.frame} p-3.5 rounded-xl flex flex-col justify-between gap-2.5 shadow`}
+              >
+                <div className="flex items-start gap-3">
+                  <CreaturePortrait defId={def.id} variant="adult" size={48} />
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                      <span className="font-bold text-sm text-slate-100">{def.name}</span>
+                      <span className={`text-[11px] px-2 py-0.5 rounded border capitalize font-bold ${rStyle.badge}`}>
+                        {def.rarity}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1 flex-wrap text-[11px] text-slate-300">
+                      <span className="capitalize px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800">{def.school}</span>
+                      {def.habitats.map(h => (
+                        <span key={h} className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800">
+                          {HABITAT_LABELS[h].badge} {HABITAT_LABELS[h].label}
+                        </span>
+                      ))}
+                      {ownedCount > 0 && (
+                        <span className="px-1.5 py-0.5 rounded bg-emerald-950/70 border border-emerald-700/40 text-emerald-300 font-bold">
+                          ×{ownedCount}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 pt-2 border-t border-slate-800">
-                  <button
-                    onClick={() => onFeedCreature(c.id)}
-                    className="flex-1 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-200 border border-emerald-500/40 rounded-xl text-xs font-bold transition"
-                  >
-                    Feed Diet
-                  </button>
-                  {c.status === 'wary' && tamers.length > 0 && (
-                    <select
-                      value={c.tamerId || ''}
-                      onChange={e => onAssignTamer(c.id, Number(e.target.value))}
-                      className="bg-slate-950 border border-slate-700 rounded-xl text-xs p-1.5 text-slate-200"
-                    >
-                      <option value="">Assign Tamer...</option>
-                      {tamers.map(t => (
-                        <option key={t.id} value={t.id}>{t.name}</option>
-                      ))}
-                    </select>
-                  )}
+                <div className="text-[11px] text-slate-400 flex flex-wrap gap-x-2.5 gap-y-0.5">
+                  <span>Movement: <strong className="text-slate-200 capitalize">{def.movement}</strong></span>
+                  <span>Origin: <strong className="text-slate-200">{ORIGIN_LABELS[def.origin]}</strong></span>
+                  <span>Taming: <strong className="text-slate-200">{def.tamingReviews} rev</strong></span>
+                </div>
+
+                <div className="text-[11px] font-medium text-emerald-300/90">
+                  {def.roamsFreely ? 'Roams freely once tamed (0 pen slots)' : 'Lives in pen'}
+                </div>
+
+                <div className="text-xs text-slate-200 leading-snug">
+                  <span className="text-slate-400">Buff: </span>{def.buffDescription}
+                </div>
+                <div className="text-[11px] text-rose-300/80 leading-snug">
+                  <span className="text-slate-500">Trouble: </span>{def.troubleDescription}
+                </div>
+                <div className="text-[11px] text-slate-400 leading-snug">
+                  <span>Diet: {Object.entries(def.diet).map(([k, v]) => `${v} ${k}`).join(', ')}</span>
+                  <span className="block text-slate-500 mt-0.5">Pens: {pens.join(', ')}</span>
                 </div>
               </div>
             );
           })}
         </div>
-      )}
+      </section>
     </div>
   );
 };

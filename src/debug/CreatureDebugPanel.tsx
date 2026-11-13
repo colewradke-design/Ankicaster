@@ -9,6 +9,7 @@ import {
   clearDebugCreatures,
   fillPensPastCap,
   patchDebugCreature,
+  setDiscoveryDebug,
   setRiftDebug,
   simulateHonestReviews,
   spawnDebugCreature,
@@ -16,6 +17,7 @@ import {
   type DebugCreatureStatus,
   type RiftDebugMode
 } from './creatureDebug';
+import { ORIGIN_LABELS, arrivalStage, arrivalStageLabel, originLabel } from '../utils/creatures';
 
 export const CREATURE_DEBUG_PANEL_MARKER = 'ankicaster-creature-debug-panel-v4';
 
@@ -44,6 +46,8 @@ export function CreatureDebugPanel({
 
   const allSpecies = useMemo(speciesList, []);
   const selected = state.creatures.find(c => c.id === selectedId);
+  const pickerDef = CREATURE_DEFINITIONS[speciesId];
+  const selectedDef = selected ? CREATURE_DEFINITIONS[selected.defId] : undefined;
 
   const apply = (result: { state: FullGameState; message: string; creatureId?: number }) => {
     if (result.creatureId !== undefined) setSelectedId(result.creatureId);
@@ -92,6 +96,13 @@ export function CreatureDebugPanel({
                 <option key={def.id} value={def.id}>{def.name}</option>
               ))}
             </select>
+            {pickerDef && (
+              <div className="text-[11px] text-slate-400">
+                Move: <strong className="text-slate-200">{pickerDef.movement}</strong> · Origin:{' '}
+                <strong className="text-slate-200">{ORIGIN_LABELS[pickerDef.origin]}</strong> ·{' '}
+                <strong className="text-emerald-300">{pickerDef.roamsFreely ? 'Roams freely' : 'Pen'}</strong>
+              </div>
+            )}
           </label>
           <label className="block space-y-1">
             <span className="text-slate-300">Status</span>
@@ -152,8 +163,11 @@ export function CreatureDebugPanel({
                   className="w-full"
                 />
               </label>
-              <label className="block">
-                Egg {Math.round(selected.hatchProgress)}%
+              <label className="block space-y-1">
+                <span>
+                  {originLabel(selectedDef?.origin, selected.defId)} {Math.round(selected.hatchProgress)}% ·{' '}
+                  {arrivalStageLabel(arrivalStage(selected.hatchProgress))}
+                </span>
                 <input
                   type="range"
                   min={0}
@@ -162,6 +176,18 @@ export function CreatureDebugPanel({
                   onChange={e => apply(patchDebugCreature(state, selected.id, { hatchProgress: Number(e.target.value) }))}
                   className="w-full"
                 />
+                <div className="grid grid-cols-5 gap-1">
+                  {[10, 30, 50, 70, 90].map((pct, idx) => (
+                    <button
+                      key={pct}
+                      type="button"
+                      onClick={() => apply(patchDebugCreature(state, selected.id, { hatchProgress: pct }))}
+                      className="py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] font-mono"
+                    >
+                      S{idx + 1} ({pct}%)
+                    </button>
+                  ))}
+                </div>
               </label>
               <label className="block">
                 Bond {selected.bondLevel}
@@ -209,6 +235,14 @@ export function CreatureDebugPanel({
             <button type="button" onClick={() => apply(fillPensPastCap(state))} className="py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 font-bold">
               Fill pens past cap
             </button>
+            <div className="grid grid-cols-2 gap-1.5">
+              <button type="button" onClick={() => apply(setDiscoveryDebug(state, 'all'))} className="py-1.5 rounded-lg bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-700/50 text-emerald-200 font-bold">
+                Discover all 40
+              </button>
+              <button type="button" onClick={() => apply(setDiscoveryDebug(state, 'reset'))} className="py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 font-bold">
+                Reset discovery
+              </button>
+            </div>
           </div>
 
           <div className="space-y-1.5 border-t border-slate-800 pt-2">

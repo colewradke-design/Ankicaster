@@ -11,9 +11,12 @@
  */
 
 import { CREATURE_DEFINITIONS } from '../../data/content';
-import type { CreatureInstance, CreatureDefinition } from '../../types/ankicaster';
+import type { CreatureInstance, CreatureDefinition, CreatureOrigin } from '../../types/ankicaster';
+import { arrivalStage, arrivalStageLabel, originLabel } from '../../utils/creatures';
 import { PALETTE } from '../sprites/forge/palettes';
 import { Painter, hex, line, darken, mix, glyph } from '../rooms/painter';
+
+export { arrivalStage, arrivalStageLabel, originLabel };
 
 export type CreatureAnim = 'idle' | 'move' | 'eat' | 'sleep' | 'trouble';
 
@@ -45,13 +48,16 @@ export function tamingRingFraction(creature: Pick<CreatureInstance, 'defId' | 't
   return Math.max(0, Math.min(1, (creature.tamingProgress ?? 0) / req));
 }
 
-export function eggWobbleOffset(hatchProgress: number, clockMs: number, reduceMotion: boolean): number {
-  if (reduceMotion || hatchProgress < 50) return 0;
-  const period = hatchProgress > 90 ? 2000 : 6000;
+/** Only stage 4 (80–100%, about to emerge) wiggles softly; freeze when reduceMotion is active. */
+export function arrivalWobbleOffset(hatchProgress: number, clockMs: number, reduceMotion: boolean): number {
+  if (reduceMotion || arrivalStage(hatchProgress) < 4) return 0;
+  const period = 2000;
   const phase = ((clockMs % period) + period) % period;
   if (phase > 450) return 0;
   return Math.sin((phase / 450) * Math.PI * 3) * 1.4;
 }
+
+export const eggWobbleOffset = arrivalWobbleOffset;
 
 const RARITY_EGG_COLOR: Record<CreatureDefinition['rarity'], { shell: number; spot: number; rim: number }> = {
   common: { shell: 0xe3dbce, spot: 0xc2b29b, rim: 0x8a7d6d },
@@ -60,6 +66,220 @@ const RARITY_EGG_COLOR: Record<CreatureDefinition['rarity'], { shell: number; sp
   epic: { shell: 0xb9a6ff, spot: 0x6b4fbb, rim: 0x3b2678 },
   legendary: { shell: 0xf7e39a, spot: 0xe8752a, rim: 0x8f5518 }
 };
+
+export interface CreatureArrivalDrawOpts {
+  defId?: string;
+  origin?: CreatureOrigin;
+  rarity?: CreatureDefinition['rarity'];
+  x: number;
+  y: number;
+  hatchProgress: number;
+  clockMs: number;
+  reduceMotion: boolean;
+}
+
+export function drawCreatureArrival(g: Painter, opts: CreatureArrivalDrawOpts): void {
+  const def = opts.defId ? CREATURE_DEFINITIONS[opts.defId] : undefined;
+  const origin: CreatureOrigin = opts.origin ?? def?.origin ?? 'egg';
+  const rarity: CreatureDefinition['rarity'] = opts.rarity ?? def?.rarity ?? 'common';
+  const stage = arrivalStage(opts.hatchProgress);
+  const cols = RARITY_EGG_COLOR[rarity] ?? RARITY_EGG_COLOR.common;
+  const wobble = arrivalWobbleOffset(opts.hatchProgress, opts.clockMs, opts.reduceMotion);
+  const x = opts.x;
+  const y = opts.y;
+  const ex = x + wobble;
+
+  if (origin === 'sapling') {
+    // Terracotta pot + soil mound (NO egg shape)
+    g.rect(x - 4.5, y - 4.5, 9, 4.5).fill({ color: 0x9e5430 });
+    g.rect(x - 5.2, y - 5.5, 10.4, 1.4).fill({ color: 0xb86a42 });
+    g.ellipse(x, y - 5.4, 4.2, 1.2).fill({ color: 0x4a3121 });
+
+    if (stage === 0) {
+      // 0-20%: seed tip barely poking from soil
+      g.circle(ex, y - 6.0, 1.3).fill({ color: 0xc9a45c });
+    } else if (stage === 1) {
+      // 20-40%: tender green shoot
+      line(g, ex, y - 5.5, ex, y - 9.0, 0x4e8b3a, 1.2);
+      g.ellipse(ex + 1.5, y - 8.8, 1.8, 0.9).fill({ color: 0x9ccb72 });
+    } else if (stage === 2) {
+      // 40-60%: twin leafy stem
+      line(g, ex, y - 5.5, ex, y - 10.5, 0x4e8b3a, 1.4);
+      g.ellipse(ex - 2.3, y - 8.6, 2.2, 1.1).fill({ color: 0x7db861 });
+      g.ellipse(ex + 2.3, y - 9.6, 2.2, 1.1).fill({ color: 0x9ccb72 });
+    } else if (stage === 3) {
+      // 60-80%: woody mini-branch & glowing bud
+      line(g, ex, y - 5.5, ex, y - 11.8, 0x6e4529, 1.8);
+      line(g, ex, y - 9.2, ex - 3.2, y - 11.4, 0x4e8b3a, 1.1);
+      g.circle(ex - 3.4, y - 11.5, 1.8).fill({ color: 0x7db861 });
+      g.circle(ex + 2.8, y - 11.0, 1.9).fill({ color: 0x9ccb72 });
+      g.circle(ex, y - 12.6, 1.4).fill({ color: cols.spot });
+    } else {
+      // 80-100%: luminous crown + peeking eyes + gentle sway
+      line(g, ex, y - 5.5, ex, y - 12.6, 0x6e4529, 2.0);
+      g.circle(ex, y - 13.0, 3.6).fill({ color: 0x4e8b3a });
+      g.circle(ex - 2.6, y - 11.8, 2.2).fill({ color: 0x7db861 });
+      g.circle(ex + 2.6, y - 11.8, 2.2).fill({ color: 0x9ccb72 });
+      g.circle(ex - 0.9, y - 9.0, 0.6).fill({ color: 0xf7e39a });
+      g.circle(ex + 1.0, y - 9.0, 0.6).fill({ color: 0xf7e39a });
+    }
+    return;
+  }
+
+  if (origin === 'litter') {
+    // Cozy woven basket & blanket (NO egg shape)
+    g.ellipse(x, y - 2.0, 6.8, 2.4).fill({ color: 0x8f6239 });
+    g.rect(x - 6.2, y - 4.4, 12.4, 2.8).fill({ color: 0xb8864c });
+    g.ellipse(x, y - 4.4, 5.8, 1.6).fill({ color: 0xd97a9a });
+
+    if (stage === 0) {
+      // 0-20%: tucked blanket bundle
+      g.ellipse(ex, y - 5.0, 3.8, 1.8).fill({ color: cols.shell });
+    } else if (stage === 1) {
+      // 20-40%: curled fur tuft + ear tip
+      g.ellipse(ex, y - 5.4, 4.2, 2.2).fill({ color: cols.spot });
+      g.poly([ex - 2.4, y - 6.8, ex - 1.5, y - 9.2, ex - 0.2, y - 7.0]).fill({ color: cols.rim });
+    } else if (stage === 2) {
+      // 40-60%: sleeping pup silhouette with tail curl
+      g.ellipse(ex - 0.5, y - 5.6, 4.0, 2.3).fill({ color: cols.spot });
+      g.circle(ex + 2.2, y - 6.2, 2.0).fill({ color: cols.shell });
+      g.ellipse(ex - 3.6, y - 5.8, 1.8, 1.0).fill({ color: cols.shell });
+    } else if (stage === 3) {
+      // 60-80%: ears up + Zzz dream mote
+      g.ellipse(ex - 0.4, y - 5.8, 4.2, 2.5).fill({ color: cols.spot });
+      g.circle(ex + 2.3, y - 6.8, 2.2).fill({ color: cols.shell });
+      g.poly([ex + 1.2, y - 8.4, ex + 2.0, y - 10.4, ex + 2.8, y - 8.4]).fill({ color: cols.rim });
+      g.circle(ex + 4.8, y - 10.2, 0.7).fill({ color: 0x9cd4ff });
+    } else {
+      // 80-100%: pup peeking alertly over basket rim + wiggle
+      g.ellipse(ex, y - 5.8, 4.2, 2.4).fill({ color: cols.spot });
+      g.circle(ex + 1.8, y - 7.6, 2.4).fill({ color: cols.shell });
+      g.poly([ex + 0.4, y - 9.2, ex + 1.2, y - 11.4, ex + 2.2, y - 9.2]).fill({ color: cols.rim });
+      g.poly([ex + 2.2, y - 9.0, ex + 3.2, y - 11.2, ex + 3.8, y - 8.8]).fill({ color: cols.rim });
+      g.circle(ex + 1.6, y - 7.8, 0.55).fill({ color: 0x1b1822 });
+      g.circle(ex + 2.9, y - 7.8, 0.55).fill({ color: 0x1b1822 });
+    }
+    return;
+  }
+
+  if (origin === 'cocoon') {
+    // Perched twig + silk cocoon (NO egg shape)
+    line(g, x - 6.5, y - 1.5, x + 6.5, y - 3.2, 0x6e4529, 1.5);
+    if (stage === 0) {
+      g.ellipse(ex, y - 4.4, 2.8, 3.2).fill({ color: 0xd8eef7 });
+    } else if (stage === 1) {
+      g.ellipse(ex, y - 5.6, 3.3, 4.4).fill({ color: 0xc9b7ff });
+      line(g, ex - 2.6, y - 4.6, ex + 2.6, y - 5.2, 0xeef1f5, 0.8);
+      line(g, ex - 2.4, y - 6.8, ex + 2.4, y - 6.2, 0xeef1f5, 0.8);
+    } else if (stage === 2) {
+      g.ellipse(ex, y - 6.0, 3.6, 4.8).fill({ color: cols.rim });
+      g.ellipse(ex, y - 6.0, 2.8, 3.8).fill({ color: 0xeef1f5 });
+      g.circle(ex, y - 6.0, 1.5).fill({ color: cols.spot, alpha: 0.75 });
+    } else if (stage === 3) {
+      g.ellipse(ex, y - 6.2, 3.8, 5.0).fill({ color: cols.rim });
+      g.ellipse(ex, y - 6.2, 3.0, 4.2).fill({ color: cols.shell });
+      line(g, ex - 0.6, y - 9.8, ex + 0.6, y - 3.6, 0xf7e39a, 1.0);
+    } else {
+      // Emerging wingtip & antennae
+      g.ellipse(ex, y - 6.0, 3.8, 4.8).fill({ color: cols.rim });
+      g.ellipse(ex - 2.8, y - 8.6, 2.2, 1.4).fill({ color: cols.spot });
+      g.ellipse(ex + 2.8, y - 8.6, 2.2, 1.4).fill({ color: cols.spot });
+      line(g, ex - 0.8, y - 10.0, ex - 2.2, y - 12.2, 0xf7e39a, 0.8);
+      line(g, ex + 0.8, y - 10.0, ex + 2.2, y - 12.2, 0xf7e39a, 0.8);
+    }
+    return;
+  }
+
+  if (origin === 'geode') {
+    // Mineral stone cluster (NO egg shape)
+    if (stage === 0) {
+      g.poly([ex - 5, y, ex - 4, y - 5, ex, y - 7, ex + 4.5, y - 4.5, ex + 5, y]).fill({ color: 0x5e5d66 });
+    } else if (stage === 1) {
+      g.poly([ex - 5.2, y, ex - 4.2, y - 5.5, ex + 0.2, y - 7.8, ex + 4.8, y - 5, ex + 5.2, y]).fill({ color: 0x6b6a75 });
+      line(g, ex - 1.5, y - 6.5, ex + 1.8, y - 2.4, cols.spot, 0.9);
+    } else if (stage === 2) {
+      g.poly([ex - 5.5, y, ex - 4.4, y - 6, ex, y - 8.6, ex + 5, y - 5.5, ex + 5.5, y]).fill({ color: 0x6b6a75 });
+      g.poly([ex - 1.4, y - 7.8, ex + 0.8, y - 10.4, ex + 2.0, y - 6.8]).fill({ color: cols.shell });
+    } else if (stage === 3) {
+      g.poly([ex - 5.5, y, ex - 4.6, y - 6.2, ex, y - 8.8, ex + 5.2, y - 5.6, ex + 5.5, y]).fill({ color: 0x4f4e59 });
+      g.ellipse(ex, y - 4.6, 2.8, 2.6).fill({ color: cols.rim });
+      g.poly([ex - 1.8, y - 7.5, ex - 0.2, y - 11.2, ex + 1.2, y - 7.0]).fill({ color: cols.shell });
+      g.poly([ex + 0.6, y - 7.0, ex + 2.4, y - 10.2, ex + 3.2, y - 6.2]).fill({ color: cols.spot });
+    } else {
+      // Cracked open crystal core + glowing eyes
+      g.poly([ex - 5.6, y, ex - 4.8, y - 6.4, ex, y - 9.0, ex + 5.2, y - 5.8, ex + 5.6, y]).fill({ color: 0x4f4e59 });
+      g.ellipse(ex, y - 4.8, 3.4, 3.0).fill({ color: cols.spot });
+      g.poly([ex - 1.8, y - 7.8, ex, y - 11.8, ex + 1.6, y - 7.5]).fill({ color: 0x9cd4ff });
+      g.circle(ex - 1.0, y - 4.8, 0.65).fill({ color: 0xffffff });
+      g.circle(ex + 1.1, y - 4.8, 0.65).fill({ color: 0xffffff });
+    }
+    return;
+  }
+
+  if (origin === 'wisp') {
+    // Rune plinth + floating ethereal ember/mote (NO egg shape)
+    g.ellipse(x, y - 1.2, 6.0, 1.8).fill({ color: 0x3b2678 });
+    g.ellipse(x, y - 1.6, 4.4, 1.1).fill({ color: 0x6b4fbb });
+
+    if (stage === 0) {
+      g.circle(ex, y - 5.2, 1.8).fill({ color: cols.shell, alpha: 0.7 });
+    } else if (stage === 1) {
+      g.circle(ex, y - 6.4, 2.6).fill({ color: cols.spot, alpha: 0.55 });
+      g.circle(ex, y - 6.4, 1.5).fill({ color: cols.shell });
+    } else if (stage === 2) {
+      g.circle(ex, y - 7.2, 3.2).fill({ color: cols.spot, alpha: 0.6 });
+      g.circle(ex, y - 7.2, 2.0).fill({ color: cols.shell });
+      g.circle(ex - 3.2, y - 9.0, 0.8).fill({ color: 0xf7e39a });
+      g.circle(ex + 3.0, y - 5.4, 0.8).fill({ color: 0x9cd4ff });
+    } else if (stage === 3) {
+      g.ellipse(ex, y - 7.6, 5.2, 1.6).stroke({ color: 0x9cd4ff, width: 0.8 });
+      g.circle(ex, y - 7.8, 2.8).fill({ color: cols.spot });
+      g.circle(ex, y - 7.8, 1.7).fill({ color: 0xffffff, alpha: 0.85 });
+    } else {
+      // Winged glowing wisp with bright eyes
+      g.ellipse(ex - 3.0, y - 9.0, 2.0, 1.1).fill({ color: 0x9cd4ff, alpha: 0.8 });
+      g.ellipse(ex + 3.0, y - 9.0, 2.0, 1.1).fill({ color: 0x9cd4ff, alpha: 0.8 });
+      g.circle(ex, y - 8.2, 3.4).fill({ color: cols.spot });
+      g.circle(ex, y - 8.4, 2.2).fill({ color: cols.shell });
+      g.circle(ex - 0.8, y - 8.4, 0.55).fill({ color: 0x1b1822 });
+      g.circle(ex + 0.9, y - 8.4, 0.55).fill({ color: 0x1b1822 });
+    }
+    return;
+  }
+
+  // Default 'egg' origin — 5 visual stages across 0-20, 20-40, 40-60, 60-80, 80-100%
+  // Straw nest base
+  g.ellipse(x, y - 1.5, 6.5, 2.2).fill({ color: 0x9e7738 });
+  g.ellipse(x, y - 2, 5.5, 1.5).fill({ color: 0xc9a45c });
+  for (let i = -4; i <= 4; i += 2) {
+    line(g, x + i, y - 1, x + i + (i % 4 === 0 ? 1 : -1), y - 3.2, 0xe0c48a, 0.7);
+  }
+  // Egg silhouette
+  const eggScale = stage === 0 ? 0.92 : 1;
+  g.ellipse(ex, y - 6.2, 4.2 * eggScale, 5.4 * eggScale).fill({ color: cols.rim });
+  g.ellipse(ex, y - 6.3, 3.6 * eggScale, 4.8 * eggScale).fill({ color: cols.shell });
+  if (stage >= 1) {
+    g.circle(ex - 1.2, y - 5.2, 0.9).fill({ color: cols.spot });
+    g.circle(ex + 1.3, y - 7.8, 0.8).fill({ color: cols.spot });
+  }
+  const shineAlpha = opts.reduceMotion ? 0.65 : stage < 2 ? 0.55 + 0.35 * Math.sin(opts.clockMs / 400) : 0.75;
+  g.ellipse(ex - 1.3, y - 8.4, 0.8, 1.5).fill({ color: 0xffffff, alpha: Math.max(0.2, Math.min(1, shineAlpha)) });
+  if (stage === 2) {
+    // Stage 2 (40-60%): hairline crack
+    line(g, ex - 1.4, y - 6.8, ex + 0.6, y - 5.8, 0x1b1822, 0.7);
+  } else if (stage === 3) {
+    // Stage 3 (60-80%): branching crack + warm inner glint
+    line(g, ex - 2.0, y - 6.8, ex - 0.2, y - 5.6, 0x1b1822, 0.85);
+    line(g, ex - 0.2, y - 5.6, ex + 1.6, y - 7.0, 0x1b1822, 0.85);
+    g.circle(ex + 0.1, y - 6.0, 0.7).fill({ color: 0xf7e39a, alpha: 0.8 });
+  } else if (stage >= 4) {
+    // Stage 4 (80-100%): wide fracture + peeking eye glint + wobble
+    line(g, ex - 2.4, y - 7.0, ex - 0.4, y - 5.5, 0x1b1822, 0.95);
+    line(g, ex - 0.4, y - 5.5, ex + 1.5, y - 7.2, 0x1b1822, 0.95);
+    line(g, ex + 1.5, y - 7.2, ex + 2.6, y - 5.8, 0x1b1822, 0.95);
+    g.circle(ex + 0.4, y - 6.1, 0.75).fill({ color: 0xffffff });
+  }
+}
 
 export function drawCreatureEgg(
   g: Painter,
@@ -70,29 +290,7 @@ export function drawCreatureEgg(
   clockMs: number,
   reduceMotion: boolean
 ): void {
-  const cols = RARITY_EGG_COLOR[rarity] ?? RARITY_EGG_COLOR.common;
-  const wobble = eggWobbleOffset(hatchProgress, clockMs, reduceMotion);
-  const ex = x + wobble;
-  // Straw nest base (12 x 5)
-  g.ellipse(x, y - 1.5, 6.5, 2.2).fill({ color: 0x9e7738 });
-  g.ellipse(x, y - 2, 5.5, 1.5).fill({ color: 0xc9a45c });
-  for (let i = -4; i <= 4; i += 2) {
-    line(g, x + i, y - 1, x + i + (i % 4 === 0 ? 1 : -1), y - 3.2, 0xe0c48a, 0.7);
-  }
-  // Egg silhouette (10 x 12)
-  g.ellipse(ex, y - 6.2, 4.2, 5.4).fill({ color: cols.rim });
-  g.ellipse(ex, y - 6.3, 3.6, 4.8).fill({ color: cols.shell });
-  g.circle(ex - 1.2, y - 5.2, 0.9).fill({ color: cols.spot });
-  g.circle(ex + 1.3, y - 7.8, 0.8).fill({ color: cols.spot });
-  // Slight shine (<50 still / subtle glint on loop)
-  const shineAlpha = reduceMotion ? 0.65 : hatchProgress < 50 ? 0.55 + 0.35 * Math.sin(clockMs / 400) : 0.7;
-  g.ellipse(ex - 1.3, y - 8.4, 0.8, 1.5).fill({ color: 0xffffff, alpha: Math.max(0.2, Math.min(1, shineAlpha)) });
-  // >90% crack line
-  if (hatchProgress > 90) {
-    line(g, ex - 2.2, y - 6.8, ex - 0.3, y - 5.6, 0x1b1822, 0.9);
-    line(g, ex - 0.3, y - 5.6, ex + 1.4, y - 7.1, 0x1b1822, 0.9);
-    line(g, ex + 1.4, y - 7.1, ex + 2.5, y - 5.9, 0x1b1822, 0.9);
-  }
+  drawCreatureArrival(g, { origin: 'egg', rarity, x, y, hatchProgress, clockMs, reduceMotion });
 }
 
 type BodyArchetype =

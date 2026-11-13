@@ -10,6 +10,7 @@ import type { Character, CreatureInstance, FullGameState, HabitatType, PlacedRoo
 import { AnkicasterEngine } from '../utils/engine';
 import { findAutoPlacement, getGridSize, validatePlacement } from '../utils/placement';
 import { allFurnitureIds, fillRequiredFixtures } from '../utils/requiredFurniture';
+import { ONE_BY_ONE_PEN_CAP, syncDiscoveredCreatures } from '../utils/creatures';
 
 export type DebugCreatureStatus = CreatureInstance['status'] | 'unhomed';
 
@@ -114,6 +115,7 @@ function ensureDebugTamer(state: FullGameState): number {
 function rememberCreature(state: FullGameState, creature: CreatureInstance) {
   state.creatures = [...state.creatures, creature];
   state.debugCreatureIds = [...(state.debugCreatureIds || []), creature.id];
+  syncDiscoveredCreatures(state);
 }
 
 function habitatRoomDef(defId: string): string | undefined {
@@ -276,15 +278,15 @@ export function spawnHabitatSet(state: FullGameState): DebugResult {
   };
 }
 
-/** 1×1 gloom hutch past the 6-cap, plus enough creatures to pass the global 40 cap. */
+/** 1×1 gloom hutch past the 3-cap, plus enough creatures to pass the global 40 cap. */
 export function fillPensPastCap(state: FullGameState): DebugResult {
   const next = touch(state);
   const err = placeDebugRoom(next, 'gloom_hutch');
   if (err) return { state: next, message: err };
   const room = builtRoom(next, 'gloom_hutch');
-  const add = (status: CreatureInstance['status'], n: number, hatch = 100) => {
+  const add = (status: CreatureInstance['status'], n: number, hatch = 100, defId = 'velvet_bat_swarm') => {
     for (let i = 0; i < n; i++) {
-      const creature = makeDebugCreature(next, 'duskmouse', status, {
+      const creature = makeDebugCreature(next, defId, status, {
         roomId: status === 'loose' ? undefined : room?.id,
         hatchProgress: hatch,
         nickname: `Cap ${status} ${state.creatures.length + next.creatures.length}`
@@ -293,13 +295,27 @@ export function fillPensPastCap(state: FullGameState): DebugResult {
       rememberCreature(next, creature);
     }
   };
-  add('tamed', 8);
-  add('egg', 1, 40);
-  add('loose', 1);
-  add('tamed', 34);
+  add('wary', 8);
+  add('egg', 1, 40, 'duskmouse');
+  add('loose', 1, 100, 'duskmouse');
+  add('tamed', 34, 100, 'bramblefox');
   return {
     state: next,
-    message: 'Filled the Gloom Hutch past 6 and the map past 40. Eggs and loose stay visible; the rest show +N.'
+    message: `Filled the Gloom Hutch past ${ONE_BY_ONE_PEN_CAP} and the map past 40. Eggs and loose stay visible; the rest show +N.`
+  };
+}
+
+export function setDiscoveryDebug(state: FullGameState, mode: 'all' | 'reset'): DebugResult {
+  const next = touch(state);
+  if (mode === 'all') {
+    next.discoveredCreatures = Object.keys(CREATURE_DEFINITIONS);
+    return { state: next, message: 'Bestiary unlocked: all 40 species discovered.' };
+  }
+  next.discoveredCreatures = [];
+  syncDiscoveredCreatures(next);
+  return {
+    state: next,
+    message: `Reset Bestiary discoveries (${(next.discoveredCreatures || []).length} currently in Academy kept).`
   };
 }
 

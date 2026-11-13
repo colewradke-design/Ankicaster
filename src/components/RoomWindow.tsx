@@ -21,12 +21,22 @@ import { requiredSlotStatus, requiredInstallOption, costText, unaffordable } fro
 import { AnkicasterEngine } from '../utils/engine';
 import { WizardPortrait } from './WizardPortrait';
 import { CharacterPortrait } from './CharacterPortrait';
+import { CreaturePortrait } from './CreaturePortrait';
 import { FullGameState, PlacedRoom } from '../types/ankicaster';
-import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS, SPELL_DEFINITIONS } from '../data/content';
+import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS, SPELL_DEFINITIONS, CREATURE_DEFINITIONS } from '../data/content';
 import { calculateRoomQuality, calculateFacultyLimit, wizardOrbQuote } from '../utils/formulas';
 import { HAZARD_DISPEL_MANA_COST } from '../utils/engine';
 import { ScreenId, SCREEN_DEFS, getRoomScreens } from '../ui/screens';
 import { ScreenIcon } from './ScreenIcon';
+import {
+  HABITAT_LABELS,
+  arrivalStage,
+  arrivalStageLabel,
+  getPenOccupants,
+  originLabel,
+  penAcceptedHabitats,
+  penCreatureCapacity
+} from '../utils/creatures';
 
 export const Chip: React.FC<{ icon?: React.ReactNode; label: string; value: React.ReactNode; title?: string; tone?: string }> = ({
   icon, label, value, title, tone = 'text-slate-100'
@@ -378,6 +388,145 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                     <span className="text-[12px] text-slate-200">{c.name}</span>
                   </div>
                 ))}
+              </div>
+            );
+          })()}
+
+          {/* Pen Occupants (Habitat rooms) */}
+          {(() => {
+            const acceptedHabitats = penAcceptedHabitats(room.defId);
+            if (acceptedHabitats.length === 0) return null;
+            const occupants = getPenOccupants(state, room);
+            const cap = penCreatureCapacity(room);
+            return (
+              <div className="bg-slate-950/60 border border-emerald-900/40 rounded-xl p-3 space-y-2.5" data-testid="pen-occupants">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[13px] font-bold text-emerald-300">Occupants</span>
+                    <span
+                      data-testid="pen-occupancy-count"
+                      className="text-[12px] font-mono px-2 py-0.5 rounded bg-emerald-950/70 border border-emerald-700/40 text-emerald-200"
+                    >
+                      {occupants.length} / {cap}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {acceptedHabitats.map(h => (
+                      <span
+                        key={h}
+                        className="text-[11px] px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-300"
+                        title={`Accepts ${HABITAT_LABELS[h].label} creatures`}
+                      >
+                        {HABITAT_LABELS[h].badge} {HABITAT_LABELS[h].label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {occupants.length === 0 ? (
+                  <div className="text-[12px] text-slate-500">
+                    Empty pen. Roaming companions wander the Academy once tamed and do not take pen slots.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {occupants.map(c => {
+                      const cDef = c?.defId ? CREATURE_DEFINITIONS[c.defId] : undefined;
+                      const req = Math.max(1, cDef?.tamingReviews ?? 40);
+                      const statusLabel = c.status === 'egg'
+                        ? `${originLabel(cDef?.origin, c.defId)} · ${Math.round(c.hatchProgress || 0)}%`
+                        : c.status;
+                      const dietText = cDef?.diet
+                        ? Object.entries(cDef.diet).map(([k, v]) => `${v} ${k}`).join(', ')
+                        : '—';
+                      return (
+                        <div
+                          key={c.id}
+                          data-testid="pen-occupant-card"
+                          className="flex items-start gap-2.5 bg-slate-900/90 border border-slate-800 rounded-lg p-2.5 text-[12px]"
+                        >
+                          <CreaturePortrait
+                            defId={c.defId}
+                            variant={c.status === 'egg' ? 'egg' : 'adult'}
+                            hatchProgress={c.hatchProgress}
+                            status={c.status}
+                            bondLevel={c.bondLevel}
+                            size={40}
+                          />
+                          <div className="flex-1 min-w-0 space-y-1">
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <span className="font-bold text-slate-100 truncate">
+                                {c.nickname || cDef?.name || 'Creature'}
+                                {cDef?.name && c.nickname !== cDef.name && (
+                                  <span className="font-normal text-slate-400"> ({cDef.name})</span>
+                                )}
+                              </span>
+                              <div className="flex items-center gap-1">
+                                {c.hungry && (
+                                  <span className="px-1.5 py-0.5 rounded bg-rose-500/20 border border-rose-500/40 text-rose-300 font-bold text-[11px]">
+                                    Hungry
+                                  </span>
+                                )}
+                                <span className={`px-1.5 py-0.5 rounded font-bold uppercase text-[11px] ${
+                                  c.status === 'tamed'
+                                    ? 'bg-emerald-500/20 text-emerald-300'
+                                    : c.status === 'wary'
+                                    ? 'bg-amber-500/20 text-amber-300'
+                                    : 'bg-sky-500/20 text-sky-300'
+                                }`}>
+                                  {statusLabel}
+                                </span>
+                              </div>
+                            </div>
+
+                            {c.status === 'egg' && (
+                              <div className="space-y-0.5">
+                                <div className="flex justify-between text-[11px] text-slate-400">
+                                  <span>{arrivalStageLabel(arrivalStage(c.hatchProgress || 0))}</span>
+                                  <span>{Math.round(c.hatchProgress || 0)}%</span>
+                                </div>
+                                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                                  <div className="bg-sky-400 h-full" style={{ width: `${Math.min(100, c.hatchProgress || 0)}%` }} />
+                                </div>
+                              </div>
+                            )}
+
+                            {c.status === 'wary' && (
+                              <div className="space-y-0.5">
+                                <div className="flex justify-between text-[11px] text-slate-400">
+                                  <span>Taming</span>
+                                  <span>{c.tamingProgress || 0} / {req} reviews</span>
+                                </div>
+                                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                                  <div className="bg-amber-400 h-full" style={{ width: `${Math.min(100, ((c.tamingProgress || 0) / req) * 100)}%` }} />
+                                </div>
+                              </div>
+                            )}
+
+                            {c.status === 'tamed' && (
+                              <div className="text-[11px] text-amber-300">
+                                Bond {'♥'.repeat(c.bondLevel ?? 1)} ({c.bondLevel ?? 1}/3)
+                              </div>
+                            )}
+
+                            <div className="text-[11px] text-slate-400">
+                              <span className="text-slate-500">Diet:</span> {dietText}
+                            </div>
+                            {cDef?.buffDescription && (
+                              <div className="text-[11px] text-emerald-300/90">
+                                <span className="text-slate-500">Buff:</span> {cDef.buffDescription}
+                              </div>
+                            )}
+                            {cDef?.troubleDescription && (
+                              <div className="text-[11px] text-rose-300/80">
+                                <span className="text-slate-500">Trouble:</span> {cDef.troubleDescription}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             );
           })()}

@@ -289,12 +289,38 @@ export interface PlacedFurniture {
 
 export type HabitatType = 'meadow' | 'tide' | 'sky' | 'gloom' | 'ember' | 'crystal';
 
+export type CreatureMovement =
+  | 'scurry'
+  | 'hop'
+  | 'trot'
+  | 'waddle'
+  | 'slither'
+  | 'fly'
+  | 'glide'
+  | 'swim'
+  | 'hover'
+  | 'rooted'
+  | 'crawl';
+
+export type CreatureOrigin =
+  | 'egg'
+  | 'sapling'
+  | 'litter'
+  | 'cocoon'
+  | 'geode'
+  | 'wisp';
+
+export type CreatureRarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
+
 export interface CreatureDefinition {
   id: string;
   name: string;
   school: SchoolType;
-  rarity: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
+  rarity: CreatureRarity;
   habitats: HabitatType[];
+  movement: CreatureMovement;
+  origin: CreatureOrigin;
+  roamsFreely: boolean;
   tamingReviews: number;
   diet: Record<string, number>;
   buffDescription: string;
@@ -539,6 +565,8 @@ export interface FullGameState {
   cardSets: CardSet[];
   allCards: Record<number, AnkiCardSnapshot>;
   creatures: CreatureInstance[];
+  /** Species IDs discovered by the player (persists even after release or new term). */
+  discoveredCreatures?: string[];
   expeditions: ActiveExpedition[];
   potions: PotionRecipe[];
   hand: DraftCard[];

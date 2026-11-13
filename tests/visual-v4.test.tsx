@@ -25,7 +25,8 @@ import {
   CreatureChoreographer,
   MAX_VISIBLE_CREATURES,
   ONE_BY_ONE_PEN_CAP,
-  getPenRect
+  getPenRect,
+  penCreatureCapacity
 } from '../src/visual/creatures/creatureChoreographer.ts';
 import {
   INDOOR_ONLY_TRIM_TAGS,
@@ -256,19 +257,16 @@ test('taming ring fraction matches engine requirement per rarity and hover toolt
   }
 });
 
-test('egg wobble thresholds (<50, 50-90, >90) and reduceMotion freeze', () => {
-  // <50%: still
-  for (const t of [0, 100, 1500, 3000, 6100]) {
-    assert.equal(eggWobbleOffset(25, t, false), 0, `<50% egg must not wobble at ${t}ms`);
+test('egg arrival wobble (stage 4 >=80%) and reduceMotion freeze', () => {
+  // Stages 0-3 (<80%): still
+  for (const pct of [10, 30, 50, 70]) {
+    for (const t of [0, 100, 1500, 2120, 6100]) {
+      assert.equal(eggWobbleOffset(pct, t, false), 0, `<80% arrival (${pct}%) must not wobble at ${t}ms`);
+    }
   }
-  // 50-90%: wobbles on 6s cadence
-  assert.ok(Math.abs(eggWobbleOffset(70, 120, false)) > 0.01, '70% egg wobbles during active 6s window');
-  assert.equal(eggWobbleOffset(70, 2120, false), 0, '70% egg is still at 2.12s');
-  assert.ok(Math.abs(eggWobbleOffset(70, 6120, false)) > 0.01, '70% egg wobbles again at 6s');
-
-  // >90%: wobbles on 2s cadence + crack lines
-  assert.ok(Math.abs(eggWobbleOffset(95, 2120, false)) > 0.01, '95% egg wobbles on 2s cadence');
-  assert.equal(eggWobbleOffset(95, 2120, true), 0, 'reduceMotion freezes egg wobble');
+  // Stage 4 (>=80%): wobbles on 2s cadence and freezes with reduceMotion
+  assert.ok(Math.abs(eggWobbleOffset(95, 2120, false)) > 0.01, '95% arrival wobbles on 2s cadence');
+  assert.equal(eggWobbleOffset(95, 2120, true), 0, 'reduceMotion freezes arrival wobble');
 });
 
 test('loose creatures stay strictly inside world bounds over 1000 ticks and walk home when recaptured', () => {
@@ -276,7 +274,7 @@ test('loose creatures stay strictly inside world bounds over 1000 ticks and walk
   const eh = state.rooms.find(r => r.defId === 'entrance_hall')!;
   const paddock = makeRoom(50, 'meadow_paddock', 1, 0);
   state.rooms.push(paddock);
-  const looseCritter = makeCreature(7, 'bramblefox', { status: 'loose', roomId: paddock.id });
+  const looseCritter = makeCreature(7, 'mossback_tortoise', { status: 'loose', roomId: paddock.id });
   state.creatures = [looseCritter];
 
   const groundY = getGroundY(5);
@@ -331,9 +329,9 @@ test('6 habitat movement styles produce measurably distinct behaviors', () => {
     { habitat: 'meadow', defId: 'mossback_tortoise', roomDef: 'meadow_paddock' },
     { habitat: 'tide', defId: 'puddlewyrm', roomDef: 'tide_tank' },
     { habitat: 'sky', defId: 'dawn_finch', roomDef: 'aviary' },
-    { habitat: 'gloom', defId: 'duskmouse', roomDef: 'gloom_hutch' },
-    { habitat: 'ember', defId: 'cinder_newt', roomDef: 'ember_pit' },
-    { habitat: 'crystal', defId: 'inkling_wisp', roomDef: 'crystal_vivarium' }
+    { habitat: 'gloom', defId: 'velvet_bat_swarm', roomDef: 'gloom_hutch' },
+    { habitat: 'ember', defId: 'bellows_toad', roomDef: 'ember_pit' },
+    { habitat: 'crystal', defId: 'geode_golem', roomDef: 'crystal_vivarium' }
   ];
 
   const state = createInitialGameState();
@@ -403,10 +401,10 @@ test('creature caps enforce <=6 in 1x1 pen without hiding eggs/loose and <=40 gl
   const hutch = makeRoom(50, 'gloom_hutch', 2, 0);
   state.rooms.push(hutch);
 
-  // 8 wary/tamed + 1 egg + 1 loose in the 1x1 hutch
+  // 8 wary/penned + 1 egg + 1 loose in the 1x1 hutch
   const list: CreatureInstance[] = [];
   for (let i = 1; i <= 8; i++) {
-    list.push(makeCreature(i, 'duskmouse', { status: 'tamed', roomId: hutch.id }));
+    list.push(makeCreature(i, 'velvet_bat_swarm', { status: 'wary', roomId: hutch.id }));
   }
   list.push(makeCreature(9, 'duskmouse', { status: 'egg', hatchProgress: 30, roomId: hutch.id }));
   list.push(makeCreature(10, 'duskmouse', { status: 'loose', roomId: hutch.id }));
@@ -419,7 +417,7 @@ test('creature caps enforce <=6 in 1x1 pen without hiding eggs/loose and <=40 gl
 
   assert.equal(cc.agents.has(9), true, 'egg is never hidden by pen cap');
   assert.equal(cc.agents.has(10), true, 'loose creature is never hidden by pen cap');
-  assert.equal(cc.hiddenCounts.get(hutch.id), 8 - ONE_BY_ONE_PEN_CAP, '+N badge count matches collapsed extras');
+  assert.equal(cc.hiddenCounts.get(hutch.id), 8 - penCreatureCapacity(hutch), '+N badge count matches collapsed extras');
 
   // Global cap test: 50 creatures across a 3x2 menagerie -> <= 40 agents drawn
   const menagerie = makeRoom(60, 'menagerie', 0, 1);

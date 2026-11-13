@@ -22,6 +22,7 @@ import { validatePlacement, roomLimitStatus, getGridSize, findAutoPlacement, Pla
 import { reviewsToGoText } from '../utils/construction';
 import { formatMaterialCost } from '../utils/resourceReport';
 import { tamingRequirement } from './creatures/creatureArt';
+import { arrivalStage, arrivalStageLabel, originLabel } from '../utils/creatures';
 
 TextureStyle.defaultOptions.scaleMode = 'nearest';
 
@@ -39,7 +40,11 @@ export function creatureHoverText(c: {
 }): string {
   if (c.unhomed) return 'Looking for a home';
   if (c.status === 'loose') return `${c.nickname} · Loose! Click to view`;
-  if (c.status === 'egg') return `Hatching (${Math.floor(c.hatchProgress)}%)`;
+  if (c.status === 'egg') {
+    const label = originLabel(undefined, c.defId);
+    const stageText = arrivalStageLabel(arrivalStage(c.hatchProgress));
+    return `${label} · ${Math.floor(c.hatchProgress)}% (${stageText})`;
+  }
   if (c.status === 'wary') {
     const left = Math.max(1, tamingRequirement(c.defId) - Math.floor(c.tamingProgress));
     return `About ${left} honest review${left === 1 ? '' : 's'} to tame`;

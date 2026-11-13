@@ -2,36 +2,39 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * Creature Choreographer & Habitat Behaviour
- * Implements Addendum Section 8, VR-01, VR-03, VR-04, VR-05, VR-09 & Milestone V4:
+ * Creature Choreographer & Per-Species Behaviour
  * - Never mutates FullGameState and never imports engine.ts
  * - Zero `away` creatures drawn or tracked
- * - Eggs placed in matching built habitat -> Storage Vault -> Entrance Hall
- * - Unhomed creatures (no matching habitat & no roomId) placed outside Entrance Hall doors with bundle
- * - 6 distinct habitat movement styles (meadow, tide, sky, gloom, ember, crystal)
- * - Loose creatures strictly clamped inside world bounds [16, totalWorldWidth - 16] x [topBound, groundY - 4]
- *   and walk/float home along NavGraph when recaptured (loose -> tamed/wary)
- * - Global cap <= 40 visible creature agents; 1x1 pen cap > 6 hides excess wary/tamed and reports +N
+ * - Per-species `movement` (11 types): scurry, hop, trot, waddle, slither, fly, glide, swim, hover, rooted, crawl
+ * - Tamed `roamsFreely` companions need 0 pen slots, wander castle floors/stairs & grounds via NavGraph, nap in occupied rooms, and follow their tamer
+ * - Pre-tamed (`egg` status) rendered via origin-specific 5-stage arrival art
+ * - Pen caps: <= 3 visible in 1x1 pens (`ONE_BY_ONE_PEN_CAP`), <= 5 visible in larger pens (`LARGE_PEN_CAP`), <= 40 globally (never hiding egg or loose)
  */
 
-import { CREATURE_DEFINITIONS, ROOM_DEFINITIONS } from '../../data/content';
-import type { CreatureInstance, FullGameState, HabitatType, PlacedRoom } from '../../types/ankicaster';
+import { CREATURE_DEFINITIONS } from '../../data/content';
+import type {
+  CreatureInstance,
+  CreatureMovement,
+  CreatureOrigin,
+  FullGameState,
+  HabitatType,
+  PlacedRoom
+} from '../../types/ankicaster';
+import {
+  ONE_BY_ONE_PEN_CAP,
+  LARGE_PEN_CAP,
+  HABITAT_TO_ROOM_DEF,
+  penCreatureCapacity,
+  resolveAllCreatureRooms,
+  isRoamingCompanion
+} from '../../utils/creatures';
 import { roomToWorldBox, getGroundY } from '../layout/gridToWorld';
 import { NavGraph, NavNode } from '../layout/navGraph';
 import type { VisualAgent } from '../agents/Choreographer';
 import type { CreatureAnim } from './creatureArt';
 
+export { ONE_BY_ONE_PEN_CAP, LARGE_PEN_CAP, HABITAT_TO_ROOM_DEF, penCreatureCapacity };
 export const MAX_VISIBLE_CREATURES = 40;
-export const ONE_BY_ONE_PEN_CAP = 6;
-
-export const HABITAT_TO_ROOM_DEF: Record<HabitatType, string[]> = {
-  meadow: ['meadow_paddock', 'menagerie'],
-  tide: ['tide_tank', 'pond', 'menagerie'],
-  sky: ['aviary', 'menagerie'],
-  gloom: ['gloom_hutch', 'menagerie'],
-  ember: ['ember_pit', 'menagerie'],
-  crystal: ['crystal_vivarium', 'menagerie']
-};
 
 export interface PenRect {
   left: number;
@@ -48,9 +51,13 @@ export interface CreatureVisualAgent {
   nickname: string;
   status: CreatureInstance['status'];
   habitat: HabitatType;
+  movement: CreatureMovement;
+  origin: CreatureOrigin;
+  roaming: boolean;
   roomId?: number;
   x: number;
   y: number;
+  anchorX: number;
   facing: 'L' | 'R';
   anim: CreatureAnim;
   frame: number;
@@ -69,8 +76,20 @@ export interface CreatureVisualAgent {
   /** Non-empty while returning home after loose -> tamed/wary. */
   returnPath: NavNode[];
   returnPathIdx: number;
-  /** Optional loose wandering target point. */
+  /** NavGraph path while roaming castle & grounds as a companion. */
+  roamPath: NavNode[];
+  roamPathIdx: number;
+  roamNapTimerMs: number;
+  /** Optional loose wandering switch timer. */
   looseNextSwitchMs: number;
+  /** Real flight phases for fly / glide species (takeoff -> cruise -> land -> perch). */
+  flightMode?: 'perch' | 'takeoff' | 'cruise' | 'land';
+  flightPhaseMs?: number;
+  cruiseY?: number;
+  /** Hop arc progress for hop species. */
+  hopProgress?: number;
+  hopStartX?: number;
+  hopDir?: 1 | -1;
 }
 
 export interface CreatureBurst {
@@ -88,62 +107,21 @@ function hashSeed(id: number, salt = 0): number {
   return (x >>> 0) / 4294967296;
 }
 
-/** Determine matching habitat room or fallback for an egg / wary / tamed creature. */
+/** Backwards-compatible single-creature resolver delegating to shared deterministic helper. */
 export function resolveCreatureRoom(
   c: CreatureInstance,
   rooms: PlacedRoom[],
   occupancyCount: Map<number, number>
 ): { room: PlacedRoom | undefined; unhomed: boolean; subBayIndex: number } {
-  const def = CREATURE_DEFINITIONS[c.defId];
-  const habitats = def?.habitats ?? ['meadow'];
-
-  if (c.debugUnhomed) {
-    const eh = rooms.find(r => r.state === 'built' && r.defId === 'entrance_hall');
-    return { room: eh, unhomed: true, subBayIndex: 0 };
+  const dummyList = [c];
+  const map = resolveAllCreatureRooms(dummyList, rooms);
+  const res = map.get(c.id);
+  if (!res) return { room: undefined, unhomed: true, subBayIndex: 0 };
+  if (res.room && (occupancyCount.get(res.room.id) ?? 0) >= penCreatureCapacity(res.room)) {
+    const others = rooms.filter(r => r.state === 'built' && r.defId === res.room!.defId && (occupancyCount.get(r.id) ?? 0) < penCreatureCapacity(r));
+    if (others.length > 0) return { room: others[0], unhomed: false, subBayIndex: 0 };
   }
-
-  if (c.roomId !== undefined) {
-    const explicit = rooms.find(r => r.id === c.roomId && r.state === 'built');
-    if (explicit) {
-      const bayIdx = habitats.indexOf(habitats[0]);
-      return { room: explicit, unhomed: false, subBayIndex: Math.max(0, bayIdx) };
-    }
-  }
-
-  // Eggs: matching habitat if capacity permits -> storage_vault -> entrance_hall
-  const findHabitat = (): { room: PlacedRoom; bay: number } | undefined => {
-    for (const h of habitats) {
-      const preferredDefs = HABITAT_TO_ROOM_DEF[h] ?? ['menagerie'];
-      for (const defId of preferredDefs) {
-        const candidates = rooms.filter(r => r.state === 'built' && r.defId === defId);
-        for (const r of candidates) {
-          const cap = ROOM_DEFINITIONS[r.defId]?.capacity?.creatures ?? (r.defId === 'menagerie' ? 12 : 4);
-          const count = occupancyCount.get(r.id) ?? 0;
-          if (count < cap) {
-            const bay = r.defId === 'menagerie' ? Math.max(0, r.settings?.modules?.indexOf(h) ?? 0) : 0;
-            return { room: r, bay };
-          }
-        }
-      }
-    }
-    return undefined;
-  };
-
-  if (c.status === 'egg') {
-    const hab = findHabitat();
-    if (hab) return { room: hab.room, unhomed: false, subBayIndex: hab.bay };
-    const vault = rooms.find(r => r.state === 'built' && r.defId === 'storage_vault');
-    if (vault) return { room: vault, unhomed: false, subBayIndex: 0 };
-    const eh = rooms.find(r => r.state === 'built' && r.defId === 'entrance_hall');
-    return { room: eh, unhomed: !eh, subBayIndex: 0 };
-  }
-
-  // Wary / tamed without valid roomId: find matching habitat, otherwise unhomed outside Entrance Hall
-  const hab = findHabitat();
-  if (hab) return { room: hab.room, unhomed: false, subBayIndex: hab.bay };
-
-  const eh = rooms.find(r => r.state === 'built' && r.defId === 'entrance_hall');
-  return { room: eh, unhomed: true, subBayIndex: 0 };
+  return { room: res.room, unhomed: res.unhomed, subBayIndex: res.subBayIndex };
 }
 
 /** Exact pen/water/sky bounds for a creature inside a room. */
@@ -182,7 +160,6 @@ export function getPenRect(room: PlacedRoom, groundY: number, habitat: HabitatTy
     skyTopY = box.top - 12;
     isWater = true;
   } else if (room.defId === 'aviary') {
-    // Aviary allows soaring arcs into the 48px sky overhang above the plot/room
     skyTopY = box.top - 36;
   } else if (room.defId === 'meadow_paddock') {
     left = box.left + 6;
@@ -203,7 +180,7 @@ export function getPenRect(room: PlacedRoom, groundY: number, habitat: HabitatTy
 
 export class CreatureChoreographer {
   agents = new Map<number, CreatureVisualAgent>();
-  /** Extra creatures collapsed behind a "+N" badge per room (Section 8.6). */
+  /** Extra creatures collapsed behind a "+N" badge per room. */
   hiddenCounts = new Map<number, number>();
   /** Rooms where the Wizard serves as Common creature tamer (shows paw charm per VR-05). */
   wizardPawRooms = new Set<number>();
@@ -259,6 +236,19 @@ export class CreatureChoreographer {
     };
   }
 
+  private nearestNavNode(fromX: number, fromY: number): NavNode | undefined {
+    let best: NavNode | undefined;
+    let bestD = Infinity;
+    for (const n of this.navGraph.nodes.values()) {
+      const d = Math.hypot(n.x - fromX, n.y - fromY);
+      if (d < bestD) {
+        bestD = d;
+        best = n;
+      }
+    }
+    return best;
+  }
+
   private computeReturnPath(fromX: number, fromY: number, targetRoom: PlacedRoom): NavNode[] {
     let destNode: NavNode | undefined;
     for (const n of this.navGraph.nodes.values()) {
@@ -268,25 +258,16 @@ export class CreatureChoreographer {
       }
     }
     if (!destNode) return [];
-
-    let startNode: NavNode | undefined;
-    let bestD = Infinity;
-    for (const n of this.navGraph.nodes.values()) {
-      const d = Math.hypot(n.x - fromX, n.y - fromY);
-      if (d < bestD) {
-        bestD = d;
-        startNode = n;
-      }
-    }
+    const startNode = this.nearestNavNode(fromX, fromY);
     if (!startNode) return [];
-    const path = this.navGraph.findPath(startNode.id, destNode.id);
-    return path;
+    return this.navGraph.findPath(startNode.id, destNode.id);
   }
 
   /**
    * Synchronize creatures cleanly against read-only state:
    * - Never spawns or keeps `away` creatures
-   * - Applies 1x1 pen (>6) & global (<=40) visibility caps (never hiding egg or loose)
+   * - Tamed `roamsFreely` companions need 0 pen slots & wander via NavGraph
+   * - Pen visibility caps: <= 3 in 1x1 pens, <= 5 in larger pens, <= 40 globally (never hiding egg or loose)
    * - Emits hatch / bond / recapture transitions
    */
   syncState(state: FullGameState): void {
@@ -294,11 +275,11 @@ export class CreatureChoreographer {
     this.wizardPawRooms.clear();
 
     const creatures = state.creatures || [];
-    const occupancy = new Map<number, number>();
     const rooms = state.rooms || [];
     const topBound = this.topWorldBound(state);
+    const resolutionMap = resolveAllCreatureRooms(creatures, rooms);
 
-    // Priority sort: loose & eggs ALWAYS drawn first (Section 8.6)
+    // Priority sort: loose & eggs ALWAYS drawn first
     const prioritized = [...creatures]
       .filter(c => c.status !== 'away')
       .sort((a, b) => {
@@ -310,36 +291,39 @@ export class CreatureChoreographer {
       creature: CreatureInstance;
       room: PlacedRoom | undefined;
       unhomed: boolean;
+      roaming: boolean;
       bay: number;
     }> = [];
     const penVisibleCount = new Map<number, number>();
 
     for (const c of prioritized) {
       if (c.status === 'loose') {
-        visible.push({ creature: c, room: undefined, unhomed: false, bay: 0 });
+        visible.push({ creature: c, room: undefined, unhomed: false, roaming: false, bay: 0 });
         continue;
       }
-      const resolved = resolveCreatureRoom(c, rooms, occupancy);
-      const room = resolved.room;
-      if (room && !resolved.unhomed && c.status !== 'egg') {
-        const isOneByOne = room.w === 1 && room.h === 1;
+      const resolved = resolutionMap.get(c.id);
+      const room = resolved?.room;
+      const unhomed = !!resolved?.unhomed;
+      const roaming = !!resolved?.roaming && isRoamingCompanion(c);
+      const bay = resolved?.subBayIndex ?? 0;
+
+      if (room && !unhomed && !roaming && c.status !== 'egg') {
+        const cap = penCreatureCapacity(room);
         const already = penVisibleCount.get(room.id) ?? 0;
-        if (isOneByOne && already >= ONE_BY_ONE_PEN_CAP) {
+        if (already >= cap) {
           this.hiddenCounts.set(room.id, (this.hiddenCounts.get(room.id) ?? 0) + 1);
           continue;
         }
         penVisibleCount.set(room.id, already + 1);
-        occupancy.set(room.id, (occupancy.get(room.id) ?? 0) + 1);
-      } else if (room && !resolved.unhomed) {
-        occupancy.set(room.id, (occupancy.get(room.id) ?? 0) + 1);
       }
+
       if (visible.length >= MAX_VISIBLE_CREATURES) {
-        if (room && !resolved.unhomed) {
+        if (room && !unhomed && !roaming) {
           this.hiddenCounts.set(room.id, (this.hiddenCounts.get(room.id) ?? 0) + 1);
         }
         continue;
       }
-      visible.push({ creature: c, room, unhomed: resolved.unhomed, bay: resolved.subBayIndex });
+      visible.push({ creature: c, room, unhomed, roaming, bay });
     }
 
     const activeIds = new Set<number>();
@@ -349,6 +333,8 @@ export class CreatureChoreographer {
       activeIds.add(c.id);
       const def = CREATURE_DEFINITIONS[c.defId];
       const primaryHabitat: HabitatType = def?.habitats?.[0] ?? 'meadow';
+      const movement: CreatureMovement = def?.movement ?? 'trot';
+      const origin: CreatureOrigin = def?.origin ?? 'egg';
       const prevStatus = this.prevStatuses.get(c.id);
       const prevBond = this.prevBonds.get(c.id);
       this.prevStatuses.set(c.id, c.status);
@@ -367,7 +353,6 @@ export class CreatureChoreographer {
       const reduceMotion = !!state.settings?.reduceMotion;
 
       if (!existing) {
-        // Compute initial spawn coordinates
         let sx = 400;
         let sy = this.groundY - 4;
         let tx = sx;
@@ -387,33 +372,47 @@ export class CreatureChoreographer {
             sx = tx = box.left + 12 + hashSeed(c.id, 2) * 18;
             sy = ty = box.floorLineY;
           }
+        } else if (item.roaming) {
+          const explicit = c.roomId !== undefined ? rooms.find(r => r.id === c.roomId && r.state === 'built') : undefined;
+          const startRoom = explicit || rooms.find(r => r.state === 'built' && r.defId === 'entrance_hall') || rooms.find(r => r.state === 'built');
+          if (startRoom) {
+            const box = roomToWorldBox(startRoom, this.groundY);
+            sx = tx = box.left + box.width * (0.25 + 0.5 * hashSeed(c.id, 4));
+            sy = ty = box.floorLineY;
+          }
         } else if (item.room) {
           const pen = getPenRect(item.room, this.groundY, primaryHabitat, item.bay);
           const span = Math.max(4, pen.right - pen.left);
           if (c.status === 'wary') {
-            // Keep toward back/corner of pen
             sx = tx = pen.right - Math.min(span * 0.25, 10 + hashSeed(c.id, 3) * 8);
+          } else if (movement === 'rooted') {
+            sx = tx = pen.left + span * (0.32 + 0.36 * hashSeed(c.id, 4));
           } else {
             sx = tx = pen.left + span * (0.2 + 0.6 * hashSeed(c.id, 4));
           }
           sy = ty = pen.isWater ? (pen.topY + pen.floorY) / 2 : pen.floorY;
         }
 
+        const isFlyer = movement === 'fly' || movement === 'glide';
         this.agents.set(c.id, {
           creatureId: c.id,
           defId: c.defId,
           nickname: c.nickname,
           status: c.status,
           habitat: primaryHabitat,
+          movement,
+          origin,
+          roaming: item.roaming,
           roomId: item.room?.id,
           x: sx,
           y: sy,
+          anchorX: sx,
           facing: hashSeed(c.id, 5) > 0.5 ? 'R' : 'L',
           anim: 'idle',
           frame: 0,
           phase: hashSeed(c.id, 6) * Math.PI * 2,
-          stateTimerMs: 1500 + hashSeed(c.id, 7) * 3500,
-          resting: primaryHabitat === 'gloom',
+          stateTimerMs: isFlyer ? 400 + hashSeed(c.id, 7) * 700 : 1000 + hashSeed(c.id, 7) * 2000,
+          resting: movement === 'scurry' || isFlyer,
           targetX: tx,
           targetY: ty,
           unhomed: item.unhomed,
@@ -425,12 +424,20 @@ export class CreatureChoreographer {
           wizardTamingPaw: wizardPaw,
           returnPath: [],
           returnPathIdx: 0,
-          looseNextSwitchMs: 12000 + hashSeed(c.id, 8) * 16000
+          roamPath: [],
+          roamPathIdx: 0,
+          roamNapTimerMs: 0,
+          looseNextSwitchMs: 12000 + hashSeed(c.id, 8) * 16000,
+          flightMode: isFlyer ? 'perch' : undefined,
+          flightPhaseMs: 0
         });
       } else {
         existing.status = c.status;
         existing.nickname = c.nickname;
         existing.habitat = primaryHabitat;
+        existing.movement = movement;
+        existing.origin = origin;
+        existing.roaming = item.roaming;
         existing.roomId = item.room?.id;
         existing.unhomed = item.unhomed;
         existing.tamingProgress = c.tamingProgress ?? 0;
@@ -440,7 +447,6 @@ export class CreatureChoreographer {
         existing.tamerId = c.tamerId;
         existing.wizardTamingPaw = wizardPaw;
 
-        // Status transitions (Section 8)
         if (!reduceMotion && prevStatus === 'egg' && c.status === 'wary') {
           this.bursts.push({ creatureId: c.id, kind: 'hatch', x: existing.x, y: existing.y - 8, startMs: this.clockMs, durationMs: 1000 });
         }
@@ -451,39 +457,46 @@ export class CreatureChoreographer {
           this.bursts.push({ creatureId: c.id, kind: 'bond', x: existing.x, y: existing.y - 10, startMs: this.clockMs, durationMs: 1200 });
         }
 
-        // Recapture: loose -> tamed | wary -> walk/float back home cleanly
-        if (prevStatus === 'loose' && (c.status === 'tamed' || c.status === 'wary') && item.room) {
-          if (reduceMotion) {
-            const pen = getPenRect(item.room, this.groundY, primaryHabitat, item.bay);
-            existing.x = existing.targetX = (pen.left + pen.right) / 2;
-            existing.y = existing.targetY = pen.isWater ? (pen.topY + pen.floorY) / 2 : pen.floorY;
+        if (prevStatus === 'loose' && (c.status === 'tamed' || c.status === 'wary')) {
+          if (item.roaming) {
+            // Roaming companion recaptured: snaps/walks back into roam nav cleanly
             existing.returnPath = [];
             existing.returnPathIdx = 0;
-          } else {
-            const route = this.computeReturnPath(existing.x, existing.y, item.room);
-            const pen = getPenRect(item.room, this.groundY, primaryHabitat, item.bay);
-            const homeX = c.status === 'wary' ? pen.right - 6 : (pen.left + pen.right) / 2;
-            const homeY = pen.isWater ? (pen.topY + pen.floorY) / 2 : pen.floorY;
-            existing.returnPath = [
-              ...route,
-              { id: `pen-${c.id}`, roomId: item.room.id, x: homeX, y: homeY, floor: item.room.y, kind: 'room_floor' }
-            ];
-            existing.returnPathIdx = 0;
+            existing.roamPath = [];
+            existing.roamPathIdx = 0;
+          } else if (item.room) {
+            if (reduceMotion) {
+              const pen = getPenRect(item.room, this.groundY, primaryHabitat, item.bay);
+              existing.x = existing.targetX = existing.anchorX = (pen.left + pen.right) / 2;
+              existing.y = existing.targetY = pen.isWater ? (pen.topY + pen.floorY) / 2 : pen.floorY;
+              existing.returnPath = [];
+              existing.returnPathIdx = 0;
+            } else {
+              const route = this.computeReturnPath(existing.x, existing.y, item.room);
+              const pen = getPenRect(item.room, this.groundY, primaryHabitat, item.bay);
+              const homeX = c.status === 'wary' ? pen.right - 6 : (pen.left + pen.right) / 2;
+              const homeY = pen.isWater ? (pen.topY + pen.floorY) / 2 : pen.floorY;
+              existing.anchorX = homeX;
+              existing.returnPath = [
+                ...route,
+                { id: `pen-${c.id}`, roomId: item.room.id, x: homeX, y: homeY, floor: item.room.y, kind: 'room_floor' }
+              ];
+              existing.returnPathIdx = 0;
+            }
           }
-        } else if (c.status !== 'loose' && existing.returnPath.length === 0) {
-          // Ensure non-loose creatures live inside their room's pen if moved/resized
+        } else if (c.status !== 'loose' && !item.roaming && existing.returnPath.length === 0) {
           if (item.unhomed) {
             const eh = rooms.find(r => r.defId === 'entrance_hall');
             if (eh) {
               const box = roomToWorldBox(eh, this.groundY);
-              existing.x = existing.targetX = box.left + 12 + hashSeed(c.id, 2) * 18;
+              existing.x = existing.targetX = existing.anchorX = box.left + 12 + hashSeed(c.id, 2) * 18;
               existing.y = existing.targetY = box.floorLineY;
             }
           } else if (item.room) {
             const pen = getPenRect(item.room, this.groundY, primaryHabitat, item.bay);
             const clampX = Math.max(pen.left, Math.min(pen.right, existing.x));
             if (Math.abs(clampX - existing.x) > 12 || Math.abs(existing.y - pen.floorY) > 64) {
-              existing.x = existing.targetX = (pen.left + pen.right) / 2;
+              existing.x = existing.targetX = existing.anchorX = (pen.left + pen.right) / 2;
               existing.y = existing.targetY = pen.isWater ? (pen.topY + pen.floorY) / 2 : pen.floorY;
             }
           }
@@ -491,14 +504,12 @@ export class CreatureChoreographer {
       }
     }
 
-    // Remove away or removed creatures immediately
     for (const id of Array.from(this.agents.keys())) {
       if (!activeIds.has(id)) {
         this.agents.delete(id);
       }
     }
 
-    // Also prune prevStatuses for deleted creatures (not for away creatures, unless deleted)
     const stateIds = new Set(creatures.map(c => c.id));
     for (const id of Array.from(this.prevStatuses.keys())) {
       if (!stateIds.has(id)) {
@@ -520,7 +531,6 @@ export class CreatureChoreographer {
       this.clockMs += gap;
     }
 
-    // Sync first if map hasn't been initialized yet
     if (this.agents.size === 0 && (state.creatures?.length ?? 0) > 0) {
       this.syncState(state);
     }
@@ -542,6 +552,18 @@ export class CreatureChoreographer {
           agent.y = end.y;
           agent.returnPath = [];
           agent.returnPathIdx = 0;
+        }
+        if (agent.roamPath.length > 0) {
+          agent.roamPath = [];
+          agent.roamPathIdx = 0;
+        }
+        if (agent.flightMode && agent.flightMode !== 'perch') {
+          const r = agent.roomId !== undefined ? rooms.find(rm => rm.id === agent.roomId) : undefined;
+          if (r) {
+            const pen = getPenRect(r, this.groundY, agent.habitat);
+            agent.y = pen.floorY;
+          }
+          agent.flightMode = 'perch';
         }
         continue;
       }
@@ -587,21 +609,25 @@ export class CreatureChoreographer {
 
       // 3. Loose creatures wander across reachable world inside strict bounds
       if (agent.status === 'loose') {
-        this.tickLooseCreature(agent, gap, state, topBound);
+        this.tickLooseCreature(agent, gap, topBound);
         continue;
       }
 
-      // 4. Pen behaviour (6 distinct habitats)
+      // 4. Tamed roaming companions wander castle & grounds freely, nap in occupied rooms, follow tamer
+      if (agent.roaming && agent.status === 'tamed') {
+        this.tickRoamingCompanion(agent, gap, state, charAgents);
+        continue;
+      }
+
+      // 5. Pen behaviour (per-species movement)
       const room = agent.roomId !== undefined ? rooms.find(r => r.id === agent.roomId) : undefined;
       if (!room) continue;
       const pen = getPenRect(room, this.groundY, agent.habitat, Math.floor(hashSeed(agent.creatureId, 9) * 3));
 
-      // Check if assigned tamer is in the same room (Section 8.1/8.3)
       const tamerAgent = agent.tamerId ? charAgents?.get(`char-${agent.tamerId}`) : undefined;
       const tamerPresent = !!(tamerAgent && tamerAgent.currentRoomId === room.id);
 
       if (agent.status === 'wary') {
-        // Wary creatures keep toward the back corner of their pen
         const backX = pen.right - Math.min(10, (pen.right - pen.left) * 0.25);
         agent.targetX = backX;
         agent.facing = 'L';
@@ -617,7 +643,6 @@ export class CreatureChoreographer {
         continue;
       }
 
-      // Hungry tamed creature waits near front of pen
       if (agent.hungry) {
         const frontX = pen.left + Math.min(14, (pen.right - pen.left) * 0.28);
         const dx = frontX - agent.x;
@@ -633,7 +658,6 @@ export class CreatureChoreographer {
         continue;
       }
 
-      // Tamer present -> tamed creature approaches tamer toward pen front
       if (tamerPresent && tamerAgent) {
         const approachX = Math.max(pen.left, Math.min(pen.right, tamerAgent.x));
         const dx = approachX - agent.x;
@@ -649,28 +673,168 @@ export class CreatureChoreographer {
         continue;
       }
 
-      // Habitat-specific movement patterns
-      this.tickHabitatBehavior(agent, pen, gap);
+      this.tickMovementBehavior(agent, pen, gap);
     }
   }
 
-  private tickHabitatBehavior(agent: CreatureVisualAgent, pen: PenRect, gapMs: number): void {
+  private tickRoamingCompanion(
+    agent: CreatureVisualAgent,
+    gapMs: number,
+    state: FullGameState,
+    charAgents?: Map<string, VisualAgent>
+  ): void {
+    const dt = gapMs / 1000;
+
+    if (agent.hungry) {
+      // Hungry companion lingers near entrance hall or refectory
+      agent.anim = 'idle';
+      agent.frame = Math.floor(this.clockMs / 260) % 4;
+      if (agent.roamPath.length === 0) {
+        const ref = state.rooms.find(r => r.state === 'built' && (r.defId === 'refectory' || r.defId === 'entrance_hall'));
+        if (ref) agent.roamPath = this.computeReturnPath(agent.x, agent.y, ref);
+        agent.roamPathIdx = 0;
+      }
+      if (agent.roamPath.length > 0 && agent.roamPathIdx < agent.roamPath.length) {
+        this.stepAlongRoamPath(agent, dt, gapMs, state);
+      }
+      return;
+    }
+
+    if (agent.roamNapTimerMs > 0) {
+      agent.roamNapTimerMs -= gapMs;
+      agent.anim = 'sleep';
+      agent.frame = Math.floor(this.clockMs / 400) % 2;
+      return;
+    }
+
+    if (agent.roamPath.length > 0 && agent.roamPathIdx < agent.roamPath.length) {
+      this.stepAlongRoamPath(agent, dt, gapMs, state);
+      return;
+    }
+
+    agent.stateTimerMs -= gapMs;
+    agent.anim = 'idle';
+    agent.frame = Math.floor(this.clockMs / 300) % 4;
+    if (agent.stateTimerMs > 0) return;
+
+    // Pick next roaming target across built castle rooms & grounds via NavGraph
+    const startNode = this.nearestNavNode(agent.x, agent.y);
+    if (!startNode || this.navGraph.nodes.size === 0) {
+      agent.stateTimerMs = 1500;
+      return;
+    }
+
+    const tamerAgent = agent.tamerId ? charAgents?.get(`char-${agent.tamerId}`) : undefined;
+    const seed = Math.floor(this.clockMs / 400) + agent.creatureId * 13;
+    const rPick = hashSeed(agent.creatureId, seed);
+
+    let destNode: NavNode | undefined;
+
+    // Sometimes follow tamer to their current room
+    if (tamerAgent?.currentRoomId && rPick < 0.4) {
+      const tamerNodes = Array.from(this.navGraph.nodes.values()).filter(n => n.roomId === tamerAgent.currentRoomId);
+      if (tamerNodes.length > 0) {
+        destNode = tamerNodes[Math.floor(hashSeed(agent.creatureId, seed + 1) * tamerNodes.length)];
+      }
+    }
+
+    if (!destNode) {
+      const occupiedRoomIds = new Set<number>();
+      for (const ch of state.characters || []) {
+        if (ch.bedRoomId) occupiedRoomIds.add(ch.bedRoomId);
+        if (ch.seatRoomId) occupiedRoomIds.add(ch.seatRoomId);
+        if (ch.workplaceRoomId) occupiedRoomIds.add(ch.workplaceRoomId);
+      }
+      for (const a of charAgents?.values() ?? []) {
+        if (a.currentRoomId) occupiedRoomIds.add(a.currentRoomId);
+      }
+
+      const candidates = Array.from(this.navGraph.nodes.values()).filter(n => n.id !== startNode.id);
+      const preferred = candidates.filter(n => n.roomId !== undefined && occupiedRoomIds.has(n.roomId));
+      const pool = preferred.length > 0 && rPick < 0.72 ? preferred : candidates;
+      if (pool.length > 0) {
+        destNode = pool[Math.floor(hashSeed(agent.creatureId, seed + 2) * pool.length)];
+      }
+    }
+
+    if (destNode) {
+      const path = this.navGraph.findPath(startNode.id, destNode.id);
+      if (path.length > 0) {
+        agent.roamPath = path;
+        agent.roamPathIdx = 0;
+        agent.stateTimerMs = 2000;
+        return;
+      }
+    }
+    agent.stateTimerMs = 1200;
+  }
+
+  private stepAlongRoamPath(agent: CreatureVisualAgent, dt: number, gapMs: number, state: FullGameState): void {
+    const wp = agent.roamPath[agent.roamPathIdx];
+    const dx = wp.x - agent.x;
+    const dy = wp.y - agent.y;
+    const dist = Math.hypot(dx, dy);
+    const baseSpeed = agent.movement === 'scurry' ? 42 : agent.movement === 'hop' ? 28 : agent.movement === 'hover' ? 24 : 26;
+    const speed = baseSpeed * dt;
+
+    if (dist <= 3) {
+      agent.x = wp.x;
+      agent.y = wp.y;
+      agent.roamPathIdx++;
+      if (agent.roamPathIdx >= agent.roamPath.length) {
+        agent.roamPath = [];
+        agent.roamPathIdx = 0;
+        const arrivedRoom = wp.roomId !== undefined ? state.rooms.find(r => r.id === wp.roomId && r.area === 'castle') : undefined;
+        const hasPeople = arrivedRoom && state.characters.some(c => c.bedRoomId === arrivedRoom.id || c.seatRoomId === arrivedRoom.id || c.workplaceRoomId === arrivedRoom.id);
+        if (hasPeople && hashSeed(agent.creatureId, Math.floor(this.clockMs / 500)) < 0.55) {
+          agent.roamNapTimerMs = 2200 + hashSeed(agent.creatureId, Math.floor(this.clockMs / 300)) * 2200;
+          agent.anim = 'sleep';
+        } else {
+          agent.stateTimerMs = 1200 + hashSeed(agent.creatureId, Math.floor(this.clockMs / 300)) * 1800;
+          agent.anim = 'idle';
+        }
+      }
+      return;
+    }
+
+    if (Math.abs(dx) > 0.4) agent.facing = dx > 0 ? 'R' : 'L';
+    agent.x += (dx / dist) * Math.min(speed, dist);
+    const hopOffset = agent.movement === 'hop' && Math.abs(dy) < 2 ? -Math.abs(Math.sin(this.clockMs / 140)) * 4.5 : 0;
+    const hoverOffset = agent.movement === 'hover' && Math.abs(dy) < 2 ? -5 - Math.sin(this.clockMs / 250) * 1.5 : 0;
+    agent.y += (dy / dist) * Math.min(speed, dist) + hopOffset * 0 + hoverOffset * 0;
+    agent.anim = 'move';
+    agent.frame = Math.floor(this.clockMs / (agent.movement === 'scurry' ? 100 : 160)) % 6;
+  }
+
+  /**
+   * 11 distinct per-species movements:
+   * scurry, hop, trot, waddle, slither, fly, glide, swim, hover, rooted, crawl
+   */
+  private tickMovementBehavior(agent: CreatureVisualAgent, pen: PenRect, gapMs: number): void {
     const dt = gapMs / 1000;
     const cx = (pen.left + pen.right) / 2;
     const spanX = Math.max(8, pen.right - pen.left);
     const rx = spanX * 0.38;
 
-    switch (agent.habitat) {
-      case 'tide': {
-        // Continuous smooth figure-eight / oval swim loop strictly inside water rect
+    switch (agent.movement) {
+      case 'rooted': {
+        // Stays planted in soil/spot: total displacement from home anchor <= 2px
+        const anchor = Math.max(pen.left + 2, Math.min(pen.right - 2, agent.anchorX || cx));
+        agent.anchorX = anchor;
+        agent.x = anchor + Math.sin(this.clockMs / 900 + agent.phase) * 0.8;
+        agent.y = pen.floorY;
+        agent.anim = 'idle';
+        agent.frame = Math.floor(this.clockMs / 450) % 2;
+        break;
+      }
+
+      case 'swim': {
         agent.phase += dt * 1.45;
         const nextX = cx + Math.sin(agent.phase) * rx;
         const midY = (pen.topY + pen.floorY) / 2;
         const ry = Math.max(2, (pen.floorY - pen.topY) * 0.36);
         const nextY = midY + Math.sin(agent.phase * 2) * ry;
-        if (Math.abs(nextX - agent.x) > 0.05) {
-          agent.facing = nextX > agent.x ? 'R' : 'L';
-        }
+        if (Math.abs(nextX - agent.x) > 0.05) agent.facing = nextX > agent.x ? 'R' : 'L';
         agent.x = Math.max(pen.left, Math.min(pen.right, nextX));
         agent.y = Math.max(pen.topY, Math.min(pen.floorY, nextY));
         agent.anim = 'move';
@@ -678,86 +842,9 @@ export class CreatureChoreographer {
         break;
       }
 
-      case 'sky': {
-        // Perches with periodic smooth vertical arcing flights into sky overhang
-        agent.stateTimerMs -= gapMs;
-        if (agent.resting) {
-          agent.y = pen.floorY;
-          agent.anim = 'idle';
-          agent.frame = Math.floor(this.clockMs / 280) % 4;
-          if (agent.stateTimerMs <= 0) {
-            agent.resting = false;
-            agent.phase = 0; // flight progress 0..1
-            agent.stateTimerMs = 2200;
-            const flip = agent.x > cx ? 0.25 : 0.75;
-            agent.targetX = pen.left + spanX * (flip + (hashSeed(agent.creatureId, Math.floor(this.clockMs / 1000)) - 0.5) * 0.2);
-          }
-        } else {
-          agent.phase = Math.min(1, agent.phase + dt / 1.8);
-          const dx = agent.targetX - agent.x;
-          if (Math.abs(dx) > 0.4) agent.facing = dx > 0 ? 'R' : 'L';
-          agent.x += dx * Math.min(1, dt * 2.2);
-          const arcHeight = Math.max(18, pen.floorY - pen.skyTopY);
-          agent.y = pen.floorY - Math.sin(agent.phase * Math.PI) * arcHeight;
-          agent.anim = 'move';
-          agent.frame = Math.floor(this.clockMs / 110) % 6;
-          if (agent.phase >= 1) {
-            agent.y = pen.floorY;
-            agent.resting = true;
-            agent.stateTimerMs = 1800 + hashSeed(agent.creatureId, Math.floor(this.clockMs / 500)) * 2200;
-          }
-        }
-        break;
-      }
-
-      case 'gloom': {
-        // Long stationary lurks in shadow corner punctuated by fast horizontal darts
-        agent.stateTimerMs -= gapMs;
-        if (agent.resting) {
-          agent.y = pen.floorY;
-          agent.anim = 'idle';
-          agent.frame = Math.floor(this.clockMs / 400) % 4;
-          if (agent.stateTimerMs <= 0) {
-            agent.resting = false;
-            agent.targetX = agent.x < cx ? pen.right - 2 : pen.left + 2;
-            agent.stateTimerMs = 1200;
-          }
-        } else {
-          const dx = agent.targetX - agent.x;
-          if (Math.abs(dx) <= 2 || agent.stateTimerMs <= 0) {
-            agent.x = Math.max(pen.left, Math.min(pen.right, agent.targetX));
-            agent.resting = true;
-            agent.stateTimerMs = 2400 + hashSeed(agent.creatureId, Math.floor(this.clockMs / 500)) * 3200;
-            agent.anim = 'idle';
-          } else {
-            agent.facing = dx > 0 ? 'R' : 'L';
-            agent.x += Math.sign(dx) * Math.min(48 * dt, Math.abs(dx));
-            agent.y = pen.floorY;
-            agent.anim = 'move';
-            agent.frame = Math.floor(this.clockMs / 95) % 6;
-          }
-        }
-        break;
-      }
-
-      case 'ember': {
-        // Basks near warm brazier/coals center with rhythmic low hops
-        agent.phase += dt * 2.2;
-        const hop = Math.max(0, Math.sin(agent.phase)) > 0.65 ? Math.abs(Math.sin(agent.phase * 3)) * 4.5 : 0;
-        const targetOffset = Math.sin(agent.phase * 0.4) * Math.min(12, rx * 0.7);
-        const nextX = cx + targetOffset;
-        if (Math.abs(nextX - agent.x) > 0.05) agent.facing = nextX > agent.x ? 'R' : 'L';
-        agent.x = Math.max(pen.left, Math.min(pen.right, nextX));
-        agent.y = pen.floorY - hop;
-        agent.anim = hop > 0.5 ? 'move' : 'idle';
-        agent.frame = Math.floor(this.clockMs / 200) % 4;
-        break;
-      }
-
-      case 'crystal': {
-        // Continuous sinusoidal hover & elliptical orbital drift around geode
+      case 'hover': {
         agent.phase += dt * 1.65;
-        const hoverY = pen.floorY - 9 - Math.sin(agent.phase * 1.4) * 4.5;
+        const hoverY = pen.floorY - 9 - Math.sin(agent.phase * 1.4) * 3.5;
         const orbitX = cx + Math.cos(agent.phase * 0.75) * rx;
         if (Math.abs(orbitX - agent.x) > 0.05) agent.facing = orbitX > agent.x ? 'R' : 'L';
         agent.x = Math.max(pen.left, Math.min(pen.right, orbitX));
@@ -767,32 +854,207 @@ export class CreatureChoreographer {
         break;
       }
 
-      case 'meadow':
-      default: {
-        // Horizontal walk along grass with periodic graze/eat pauses
+      case 'fly':
+      case 'glide': {
+        // Real flight: perch -> takeoff -> steady-altitude cruise -> descend to perch. NEVER a giant jump arc!
+        const isGlide = agent.movement === 'glide';
+        const availSky = Math.max(18, pen.floorY - pen.skyTopY);
+        const targetCruiseY = pen.floorY - Math.min(34, Math.max(22, availSky * 0.52));
+        if (!agent.flightMode) agent.flightMode = 'perch';
+        if (agent.cruiseY === undefined) agent.cruiseY = targetCruiseY;
+
+        agent.stateTimerMs -= gapMs;
+        if (agent.flightMode === 'perch') {
+          agent.y = pen.floorY;
+          agent.anim = 'idle';
+          agent.frame = Math.floor(this.clockMs / 320) % 4;
+          if (agent.stateTimerMs <= 0) {
+            agent.flightMode = 'takeoff';
+            agent.flightPhaseMs = 0;
+            agent.cruiseY = targetCruiseY;
+            const pick = hashSeed(agent.creatureId, Math.floor(this.clockMs / 500) + 1);
+            agent.targetX = agent.x > cx ? pen.left + spanX * (0.1 + pick * 0.25) : pen.right - spanX * (0.1 + pick * 0.25);
+            agent.facing = agent.targetX >= agent.x ? 'R' : 'L';
+          }
+        } else if (agent.flightMode === 'takeoff') {
+          agent.flightPhaseMs = (agent.flightPhaseMs ?? 0) + gapMs;
+          const u = Math.min(1, agent.flightPhaseMs / 360);
+          agent.y = pen.floorY + (agent.cruiseY - pen.floorY) * u;
+          agent.x += Math.sign(agent.targetX - agent.x) * Math.min(18 * dt, Math.abs(agent.targetX - agent.x));
+          agent.anim = 'move';
+          agent.frame = Math.floor(this.clockMs / (isGlide ? 190 : 100)) % 6;
+          if (u >= 1) {
+            agent.flightMode = 'cruise';
+            agent.stateTimerMs = isGlide ? 2200 : 1800;
+          }
+        } else if (agent.flightMode === 'cruise') {
+          const speed = isGlide ? 16 : 26;
+          const dx = agent.targetX - agent.x;
+          if (Math.abs(dx) <= 2) {
+            agent.targetX = agent.x > cx ? pen.left + 2 : pen.right - 2;
+          }
+          const dirX = agent.targetX - agent.x;
+          if (Math.abs(dirX) > 0.2) agent.facing = dirX > 0 ? 'R' : 'L';
+          agent.x = Math.max(pen.left, Math.min(pen.right, agent.x + Math.sign(dirX) * Math.min(speed * dt, Math.abs(dirX))));
+          const rippleAmp = isGlide ? 0.8 : 1.5;
+          const rippleSpeed = isGlide ? 340 : 170;
+          agent.y = agent.cruiseY + Math.sin(this.clockMs / rippleSpeed + agent.phase) * rippleAmp;
+          agent.anim = 'move';
+          agent.frame = Math.floor(this.clockMs / (isGlide ? 240 : 105)) % 6;
+          if (agent.stateTimerMs <= 0) {
+            agent.flightMode = 'land';
+            agent.flightPhaseMs = 0;
+          }
+        } else {
+          // land smoothly back onto floor perch
+          agent.flightPhaseMs = (agent.flightPhaseMs ?? 0) + gapMs;
+          const u = Math.min(1, agent.flightPhaseMs / 360);
+          const startY = agent.cruiseY;
+          agent.y = startY + (pen.floorY - startY) * u;
+          agent.anim = 'move';
+          agent.frame = Math.floor(this.clockMs / 180) % 6;
+          if (u >= 1) {
+            agent.y = pen.floorY;
+            agent.flightMode = 'perch';
+            agent.stateTimerMs = (isGlide ? 2200 : 1600) + hashSeed(agent.creatureId, Math.floor(this.clockMs / 400)) * 1600;
+          }
+        }
+        break;
+      }
+
+      case 'scurry': {
         agent.stateTimerMs -= gapMs;
         if (agent.resting) {
           agent.y = pen.floorY;
-          agent.anim = agent.stateTimerMs > 1200 ? 'eat' : 'idle';
-          agent.frame = Math.floor(this.clockMs / 320) % 2;
+          agent.anim = 'idle';
+          agent.frame = Math.floor(this.clockMs / 360) % 4;
+          if (agent.stateTimerMs <= 0) {
+            agent.resting = false;
+            agent.targetX = agent.x < cx ? pen.right - 2 : pen.left + 2;
+            agent.stateTimerMs = 1100;
+          }
+        } else {
+          const dx = agent.targetX - agent.x;
+          if (Math.abs(dx) <= 2 || agent.stateTimerMs <= 0) {
+            agent.x = Math.max(pen.left, Math.min(pen.right, agent.targetX));
+            agent.resting = true;
+            agent.stateTimerMs = 2000 + hashSeed(agent.creatureId, Math.floor(this.clockMs / 500)) * 2800;
+            agent.anim = 'idle';
+          } else {
+            agent.facing = dx > 0 ? 'R' : 'L';
+            agent.x += Math.sign(dx) * Math.min(52 * dt, Math.abs(dx));
+            agent.y = pen.floorY;
+            agent.anim = 'move';
+            agent.frame = Math.floor(this.clockMs / 85) % 6;
+          }
+        }
+        break;
+      }
+
+      case 'hop': {
+        // Short ground hops (<= 8px tall) with quick floor pauses
+        agent.stateTimerMs -= gapMs;
+        if (agent.resting) {
+          agent.y = pen.floorY;
+          agent.anim = 'idle';
+          agent.frame = Math.floor(this.clockMs / 320) % 4;
+          if (agent.stateTimerMs <= 0) {
+            agent.resting = false;
+            agent.hopProgress = 0;
+            agent.hopStartX = agent.x;
+            const hopSpan = Math.min(18, spanX * 0.35);
+            const goRight = agent.x < pen.left + 6 ? true : agent.x > pen.right - 6 ? false : hashSeed(agent.creatureId, Math.floor(this.clockMs / 300)) > 0.5;
+            agent.hopDir = goRight ? 1 : -1;
+            agent.facing = goRight ? 'R' : 'L';
+            agent.targetX = Math.max(pen.left, Math.min(pen.right, agent.x + agent.hopDir * hopSpan));
+          }
+        } else {
+          agent.hopProgress = Math.min(1, (agent.hopProgress ?? 0) + dt / 0.42);
+          const u = agent.hopProgress;
+          const sx = agent.hopStartX ?? agent.x;
+          agent.x = sx + (agent.targetX - sx) * u;
+          agent.y = pen.floorY - Math.sin(u * Math.PI) * 6.5;
+          agent.anim = 'move';
+          agent.frame = Math.floor(this.clockMs / 130) % 4;
+          if (u >= 1) {
+            agent.y = pen.floorY;
+            agent.resting = true;
+            agent.stateTimerMs = 600 + hashSeed(agent.creatureId, Math.floor(this.clockMs / 350)) * 900;
+          }
+        }
+        break;
+      }
+
+      case 'slither': {
+        // Smooth low floor wave patrol
+        if (Math.abs(agent.targetX - agent.x) <= 2 || agent.targetX < pen.left || agent.targetX > pen.right) {
+          agent.targetX = agent.x >= cx ? pen.left + 3 : pen.right - 3;
+        }
+        const dx = agent.targetX - agent.x;
+        agent.facing = dx >= 0 ? 'R' : 'L';
+        agent.x = Math.max(pen.left, Math.min(pen.right, agent.x + Math.sign(dx) * Math.min(18 * dt, Math.abs(dx))));
+        agent.y = pen.floorY;
+        agent.anim = 'move';
+        agent.frame = Math.floor(this.clockMs / 140) % 6;
+        break;
+      }
+
+      case 'waddle':
+      case 'crawl': {
+        const speed = agent.movement === 'crawl' ? 8.5 : 10.5;
+        agent.stateTimerMs -= gapMs;
+        if (agent.resting) {
+          agent.y = pen.floorY;
+          agent.anim = agent.movement === 'waddle' && agent.stateTimerMs > 1000 ? 'eat' : 'idle';
+          agent.frame = Math.floor(this.clockMs / 340) % 2;
           if (agent.stateTimerMs <= 0) {
             agent.resting = false;
             const pick = hashSeed(agent.creatureId, Math.floor(this.clockMs / 700));
             agent.targetX = pen.left + pick * spanX;
-            agent.stateTimerMs = 4500;
+            agent.stateTimerMs = 5000;
           }
         } else {
           const dx = agent.targetX - agent.x;
           if (Math.abs(dx) <= 2 || agent.stateTimerMs <= 0) {
             agent.resting = true;
-            agent.stateTimerMs = 2000 + hashSeed(agent.creatureId, Math.floor(this.clockMs / 400)) * 2600;
+            agent.stateTimerMs = 1800 + hashSeed(agent.creatureId, Math.floor(this.clockMs / 400)) * 2000;
+            agent.anim = 'idle';
+          } else {
+            agent.facing = dx > 0 ? 'R' : 'L';
+            agent.x += Math.sign(dx) * Math.min(speed * dt, Math.abs(dx));
+            agent.y = pen.floorY;
+            agent.anim = 'move';
+            agent.frame = Math.floor(this.clockMs / 210) % 6;
+          }
+        }
+        break;
+      }
+
+      case 'trot':
+      default: {
+        agent.stateTimerMs -= gapMs;
+        if (agent.resting) {
+          agent.y = pen.floorY;
+          agent.anim = agent.stateTimerMs > 1100 ? 'eat' : 'idle';
+          agent.frame = Math.floor(this.clockMs / 290) % 2;
+          if (agent.stateTimerMs <= 0) {
+            agent.resting = false;
+            const pick = hashSeed(agent.creatureId, Math.floor(this.clockMs / 650));
+            agent.targetX = pen.left + pick * spanX;
+            agent.stateTimerMs = 3600;
+          }
+        } else {
+          const dx = agent.targetX - agent.x;
+          if (Math.abs(dx) <= 2 || agent.stateTimerMs <= 0) {
+            agent.resting = true;
+            agent.stateTimerMs = 1500 + hashSeed(agent.creatureId, Math.floor(this.clockMs / 450)) * 1800;
             agent.anim = 'eat';
           } else {
             agent.facing = dx > 0 ? 'R' : 'L';
-            agent.x += Math.sign(dx) * Math.min(16 * dt, Math.abs(dx));
+            agent.x += Math.sign(dx) * Math.min(22 * dt, Math.abs(dx));
             agent.y = pen.floorY;
             agent.anim = 'move';
-            agent.frame = Math.floor(this.clockMs / 180) % 6;
+            agent.frame = Math.floor(this.clockMs / 155) % 6;
           }
         }
         break;
@@ -803,7 +1065,6 @@ export class CreatureChoreographer {
   private tickLooseCreature(
     agent: CreatureVisualAgent,
     gapMs: number,
-    state: FullGameState,
     topBound: number
   ): void {
     const dt = gapMs / 1000;
@@ -832,7 +1093,7 @@ export class CreatureChoreographer {
     const dx = agent.targetX - agent.x;
     const dy = agent.targetY - agent.y;
     const dist = Math.hypot(dx, dy);
-    const speed = (agent.habitat === 'gloom' ? 42 : agent.habitat === 'sky' ? 36 : 26) * dt;
+    const speed = (agent.movement === 'scurry' ? 42 : agent.movement === 'fly' ? 36 : 26) * dt;
     if (dist > 0.5) {
       if (Math.abs(dx) > 0.5) agent.facing = dx > 0 ? 'R' : 'L';
       const next = this.clampWorldPoint(
