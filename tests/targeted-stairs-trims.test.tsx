@@ -16,6 +16,7 @@ import { computeReachability } from '../src/utils/reachability.ts';
 import { NavGraph } from '../src/visual/layout/navGraph.ts';
 import { Choreographer } from '../src/visual/agents/Choreographer.ts';
 import { CreatureChoreographer, getPenRect } from '../src/visual/creatures/creatureChoreographer.ts';
+import { drawCreature } from '../src/visual/creatures/creatureArt.ts';
 import { getGroundY, getTotalWorldWidth, roomToWorldBox } from '../src/visual/layout/gridToWorld.ts';
 import { CREATURE_PEN_IDS, drawRoomInterior, TIERS } from '../src/visual/rooms/roomArt.ts';
 import { drawRoomUpgradeTrim, getRoomTrimTags, INDOOR_ONLY_TRIM_TAGS } from '../src/visual/rooms/roomTrims.ts';
@@ -394,3 +395,136 @@ test('All 7 creature pens have unique L2 & L3 trim tags and L3 strictly adds ont
     );
   }
 });
+
+test('Aviary getPenRect skyTopY is inside cage, perches match painted bars, and flyers perch/takeoff/cruise/land cleanly', () => {
+  const groundY = getGroundY(3);
+  const aviary = makeRoom(2, 'aviary', 2, 0);
+  const aviary2 = makeRoom(3, 'aviary', 4, 0);
+  const box = roomToWorldBox(aviary, groundY);
+  const pen = getPenRect(aviary, groundY, 'sky');
+  const pen2 = getPenRect(aviary2, groundY, 'sky');
+
+  assert.equal(pen.skyTopY, box.top + 10, 'skyTopY is inside cage at box.top + 10');
+  assert.ok(pen.perches && pen.perches.length === 2, 'Aviary exposes 2 perch points');
+  assert.deepEqual(pen.perches[0], { x: box.left + 10, y: box.top + 33 });
+  assert.deepEqual(pen.perches[1], { x: box.left + box.width - 14, y: box.top + 57 });
+
+  const state = createInitialGameState();
+  state.rooms = [makeRoom(1, 'entrance_hall', 0, 0), aviary, aviary2];
+  state.creatures = [
+    makeCreature(1, 'dawn_finch', { status: 'tamed', roomId: aviary.id }),
+    makeCreature(2, 'mistfeather_owl', { status: 'tamed', roomId: aviary.id }),
+    makeCreature(3, 'star_heron', { status: 'tamed', roomId: aviary.id }),
+    makeCreature(4, 'hush_raven', { status: 'tamed', roomId: aviary2.id }),
+    makeCreature(5, 'orrery_moth', { status: 'tamed', roomId: aviary2.id })
+  ];
+
+  const nav = new NavGraph(state.rooms, groundY);
+  const cc = new CreatureChoreographer(nav, groundY, getTotalWorldWidth(8));
+  cc.syncState(state);
+
+  const penFor = (id: number) => (id <= 3 ? pen : pen2);
+
+  // Every bird & moth spawns perched on one of the two painted bars, NOT on floorLineY
+  for (const id of [1, 2, 3, 4, 5]) {
+    const a = cc.agents.get(id)!;
+    const p = penFor(id);
+    assert.equal(a.flightMode, 'perch');
+    const onBar = p.perches!.some(b => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5);
+    assert.equal(onBar, true, `${a.defId} spawns perched on a bar (${a.x}, ${a.y}), not floor (${p.floorY})`);
+  }
+
+  const cruiseHeights = new Map<number, number[]>();
+  for (const id of [1, 2, 3, 4, 5]) cruiseHeights.set(id, []);
+
+  for (let i = 0; i < 300; i++) {
+    cc.tick(100, state, false);
+    for (const id of [1, 2, 3, 4, 5]) {
+      const a = cc.agents.get(id)!;
+      const p = penFor(id);
+      assert.ok(a.x >= p.left - 0.1 && a.x <= p.right + 0.1, `${a.defId} stays horizontally inside cage`);
+      assert.ok(a.y >= box.top + 18 - 0.1 && a.y <= p.floorY + 0.1, `${a.defId} stays >= 8px below skyTopY/roof`);
+      if (a.flightMode === 'cruise') {
+        cruiseHeights.get(id)!.push(a.y);
+      } else if (a.flightMode === 'perch') {
+        const onBar = p.perches!.some(b => Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) < 1);
+        assert.equal(onBar, true, `${a.defId} perched on a bar (${a.x}, ${a.y}), not floor (${p.floorY})`);
+      }
+    }
+  }
+
+  // Distinct cruise altitudes across multiple birds (never one shared horizontal line)
+  const avgCruiseYs = [1, 2, 3, 4].map(id => {
+    const ys = cruiseHeights.get(id)!;
+    assert.ok(ys.length > 5, `bird ${id} entered cruise`);
+    assert.ok(Math.max(...ys) - Math.min(...ys) <= 2.0, `bird ${id} cruises horizontally without jump arc`);
+    return ys.reduce((s, v) => s + v, 0) / ys.length;
+  });
+  const distinctLines = new Set(avgCruiseYs.map(y => Math.round(y * 10)));
+  assert.ok(distinctLines.size >= 3, `Expected varied cruise lines across birds, got ${avgCruiseYs.map(y => y.toFixed(1))}`);
+
+  // Reduce motion freezes Aviary flyers on a perch bar (not floorLineY)
+  const rmState = createInitialGameState();
+  rmState.settings.reduceMotion = true;
+  rmState.rooms = [makeRoom(1, 'entrance_hall', 0, 0), aviary];
+  rmState.creatures = [makeCreature(10, 'dawn_finch', { status: 'tamed', roomId: aviary.id })];
+  const ccRm = new CreatureChoreographer(nav, groundY, getTotalWorldWidth(8));
+  ccRm.syncState(rmState);
+  ccRm.tick(500, rmState, true);
+  const frozen = ccRm.agents.get(10)!;
+  assert.equal(frozen.flightMode, 'perch');
+  assert.equal(frozen.anim, 'idle');
+  assert.equal(
+    pen.perches!.some(b => Math.abs(frozen.x - b.x) < 0.5 && Math.abs(frozen.y - b.y) < 0.5),
+    true,
+    'reduceMotion keeps bird frozen on perch bar'
+  );
+});
+
+test('Dawn finch, owls, heron, and raven draw flapping wings in flight and folded wings on perch without jump arc', () => {
+  const birdIds = ['dawn_finch', 'mistfeather_owl', 'chronoflare_owl', 'star_heron', 'hush_raven'];
+  for (const defId of birdIds) {
+    const perchRec = makeOpRecorder();
+    drawCreature(perchRec.p, defId, {
+      x: 50,
+      y: 80,
+      facing: 'R',
+      anim: 'idle',
+      frame: 0,
+      status: 'tamed',
+      flightMode: 'perch'
+    });
+    assert.deepEqual(perchRec.problems, [], `${defId} perch clean`);
+
+    const flightPolys: string[] = [];
+    for (const mode of ['takeoff', 'cruise', 'land'] as const) {
+      const f0 = makeOpRecorder();
+      const f3 = makeOpRecorder();
+      drawCreature(f0.p, defId, {
+        x: 50,
+        y: 80,
+        facing: 'R',
+        anim: 'move',
+        frame: 1,
+        status: 'tamed',
+        flightMode: mode
+      });
+      drawCreature(f3.p, defId, {
+        x: 50,
+        y: 80,
+        facing: 'R',
+        anim: 'move',
+        frame: 4,
+        status: 'tamed',
+        flightMode: mode
+      });
+      assert.deepEqual(f0.problems, [], `${defId} ${mode} frame 1 clean`);
+      assert.deepEqual(f3.problems, [], `${defId} ${mode} frame 4 clean`);
+      assert.notEqual(f0.ops.join('|'), perchRec.ops.join('|'), `${defId} ${mode} differs from folded perch pose`);
+      assert.notEqual(f0.ops.join('|'), f3.ops.join('|'), `${defId} ${mode} flaps wings across frames`);
+      flightPolys.push(f0.ops.join('|'));
+    }
+    assert.equal(flightPolys.length, 3);
+  }
+});
+

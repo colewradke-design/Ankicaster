@@ -43,6 +43,7 @@ export interface PenRect {
   floorY: number;
   skyTopY: number;
   isWater: boolean;
+  perches?: Array<{ x: number; y: number }>;
 }
 
 export interface CreatureVisualAgent {
@@ -87,6 +88,7 @@ export interface CreatureVisualAgent {
   flightPhaseMs?: number;
   cruiseY?: number;
   perchY?: number;
+  flightStartX?: number;
   flightStartY?: number;
   /** Hop arc progress for hop species. */
   hopProgress?: number;
@@ -135,6 +137,7 @@ export function getPenRect(room: PlacedRoom, groundY: number, habitat: HabitatTy
   let floorY = box.floorLineY;
   let skyTopY = topY;
   let isWater = false;
+  let perches: Array<{ x: number; y: number }> | undefined;
 
   if (room.defId === 'menagerie') {
     const bays = Math.max(1, room.w);
@@ -167,9 +170,14 @@ export function getPenRect(room: PlacedRoom, groundY: number, habitat: HabitatTy
   } else if (room.defId === 'aviary') {
     left = box.left + 8;
     right = box.left + box.width - 8;
-    // Stay strictly inside the tall Aviary interior (never through roof or walls)
-    topY = box.top + 18;
-    skyTopY = topY;
+    // Stay strictly inside the cage (never above the roof)
+    topY = box.top + 10;
+    skyTopY = box.top + 10;
+    // Two perch bars matching the painted bars in roomArt.ts (T = box.top + 3: [L + 10, T + 30], [R - 14, T + 54])
+    perches = [
+      { x: box.left + 10, y: box.top + 33 },
+      { x: box.left + box.width - 14, y: box.top + 57 }
+    ];
   } else if (room.defId === 'meadow_paddock') {
     left = box.left + 6;
     right = box.left + box.width - 6;
@@ -184,7 +192,7 @@ export function getPenRect(room: PlacedRoom, groundY: number, habitat: HabitatTy
     left = mid - 6;
     right = mid + 6;
   }
-  return { left, right, topY, floorY, skyTopY, isWater };
+  return { left, right, topY, floorY, skyTopY, isWater, perches };
 }
 
 export class CreatureChoreographer {
@@ -394,15 +402,28 @@ export class CreatureChoreographer {
           const span = Math.max(4, pen.right - pen.left);
           if (c.status === 'wary') {
             sx = tx = pen.right - Math.min(span * 0.25, 10 + hashSeed(c.id, 3) * 8);
+            sy = ty = pen.isWater ? (pen.topY + pen.floorY) / 2 : pen.floorY;
+          } else if ((movement === 'fly' || movement === 'glide') && pen.perches && pen.perches.length > 0) {
+            const bar = pen.perches[Math.floor(hashSeed(c.id, 13) * pen.perches.length)];
+            sx = tx = bar.x;
+            sy = ty = bar.y;
           } else if (movement === 'rooted') {
             sx = tx = pen.left + span * (0.32 + 0.36 * hashSeed(c.id, 4));
+            sy = ty = pen.isWater ? (pen.topY + pen.floorY) / 2 : pen.floorY;
           } else {
             sx = tx = pen.left + span * (0.2 + 0.6 * hashSeed(c.id, 4));
+            sy = ty = pen.isWater ? (pen.topY + pen.floorY) / 2 : pen.floorY;
           }
-          sy = ty = pen.isWater ? (pen.topY + pen.floorY) / 2 : pen.floorY;
         }
-
         const isFlyer = movement === 'fly' || movement === 'glide';
+        const spawnPerchY =
+          isFlyer && item.room && !item.unhomed && !item.roaming && c.status !== 'wary'
+            ? (() => {
+                const pen = getPenRect(item.room, this.groundY, primaryHabitat, item.bay);
+                return pen.perches && pen.perches.length > 0 ? sy : undefined;
+              })()
+            : undefined;
+
         this.agents.set(c.id, {
           creatureId: c.id,
           defId: c.defId,
@@ -438,7 +459,8 @@ export class CreatureChoreographer {
           roamNapTimerMs: 0,
           looseNextSwitchMs: 12000 + hashSeed(c.id, 8) * 16000,
           flightMode: isFlyer ? 'perch' : undefined,
-          flightPhaseMs: 0
+          flightPhaseMs: 0,
+          perchY: spawnPerchY
         });
       } else {
         existing.status = c.status;
@@ -503,8 +525,17 @@ export class CreatureChoreographer {
             }
           } else if (item.room) {
             const pen = getPenRect(item.room, this.groundY, primaryHabitat, item.bay);
+            const isFlyer = movement === 'fly' || movement === 'glide';
             const clampX = Math.max(pen.left, Math.min(pen.right, existing.x));
-            if (Math.abs(clampX - existing.x) > 12 || Math.abs(existing.y - pen.floorY) > 64) {
+            if (isFlyer && pen.perches && pen.perches.length > 0 && c.status !== 'wary') {
+              const outOfCage = Math.abs(clampX - existing.x) > 12 || existing.y < pen.skyTopY - 6 || existing.y > pen.floorY + 12;
+              if (outOfCage) {
+                const bar = pen.perches[Math.floor(hashSeed(c.id, 13) * pen.perches.length)];
+                existing.x = existing.targetX = existing.anchorX = bar.x;
+                existing.y = existing.targetY = existing.perchY = bar.y;
+                existing.flightMode = 'perch';
+              }
+            } else if (Math.abs(clampX - existing.x) > 12 || Math.abs(existing.y - pen.floorY) > 64) {
               existing.x = existing.targetX = existing.anchorX = (pen.left + pen.right) / 2;
               existing.y = existing.targetY = pen.isWater ? (pen.topY + pen.floorY) / 2 : pen.floorY;
             }
@@ -570,7 +601,13 @@ export class CreatureChoreographer {
           const r = agent.roomId !== undefined ? rooms.find(rm => rm.id === agent.roomId) : undefined;
           if (r) {
             const pen = getPenRect(r, this.groundY, agent.habitat);
-            agent.y = pen.floorY;
+            if (pen.perches && pen.perches.length > 0) {
+              const bar = pen.perches.reduce((best, b) => (Math.abs(b.x - agent.x) < Math.abs(best.x - agent.x) ? b : best), pen.perches[0]);
+              agent.y = bar.y;
+              agent.perchY = bar.y;
+            } else {
+              agent.y = pen.floorY;
+            }
           }
           agent.flightMode = 'perch';
         }
@@ -865,8 +902,133 @@ export class CreatureChoreographer {
 
       case 'fly':
       case 'glide': {
-        // Real flight between perches across the room's full interior height (never climb, never outside ceiling/walls)
         const isGlide = agent.movement === 'glide';
+        if (pen.perches && pen.perches.length > 0) {
+          // Aviary perch-bar flight: perch on painted bars, takeoff ~60% toward skyTopY (>=8px below roof),
+          // cruise horizontally inside the cage with per-creature height variation, and land back on a bar.
+          const perches = pen.perches;
+          const homeBar = perches[Math.floor(hashSeed(agent.creatureId, 13) * perches.length)];
+          const sixtyPctY = homeBar.y - 0.6 * (homeBar.y - pen.skyTopY);
+          const isUpperBar = homeBar.y <= pen.skyTopY + 26;
+          const jitter = isUpperBar
+            ? (hashSeed(agent.creatureId, 21) - 0.15) * 6.5
+            : (hashSeed(agent.creatureId, 21) - 0.5) * 7.0;
+          const minCruiseY = pen.skyTopY + 8; // >= 8px below skyTopY (and >= 18px below roof)
+          const targetCruiseY = Math.max(minCruiseY, Math.min(pen.floorY - 12, sixtyPctY + jitter));
+
+          if (!agent.flightMode) agent.flightMode = 'perch';
+          if (agent.cruiseY === undefined || agent.cruiseY < minCruiseY || agent.cruiseY > pen.floorY - 12) {
+            agent.cruiseY = targetCruiseY;
+          }
+          const matchedPerch = perches.find(b => Math.abs(b.y - (agent.perchY ?? -1)) <= 1.5);
+          if (!matchedPerch) agent.perchY = homeBar.y;
+
+          agent.stateTimerMs -= gapMs;
+          if (agent.flightMode === 'perch') {
+            const curBar = perches.find(b => Math.abs(b.y - (agent.perchY ?? homeBar.y)) <= 1.5) ?? homeBar;
+            if (Math.abs(agent.y - curBar.y) > 2) {
+              // Returning smoothly to perch bar after leaving it (e.g. wary/tamer)
+              agent.flightMode = 'takeoff';
+              agent.flightPhaseMs = 0;
+              agent.flightStartX = agent.x;
+              agent.flightStartY = agent.y;
+              agent.cruiseY = targetCruiseY;
+              agent.targetX = curBar.x;
+              agent.perchY = curBar.y;
+              agent.facing = agent.targetX >= agent.x ? 'R' : 'L';
+            } else {
+              agent.y = curBar.y;
+              agent.anim = 'idle';
+              agent.frame = Math.floor(this.clockMs / 320) % 4;
+              if (agent.stateTimerMs <= 0) {
+                agent.flightMode = 'takeoff';
+                agent.flightPhaseMs = 0;
+                agent.flightStartX = agent.x;
+                agent.flightStartY = agent.y;
+                agent.cruiseY = targetCruiseY;
+                const pick = hashSeed(agent.creatureId, Math.floor(this.clockMs / 500) + 1);
+                agent.targetX =
+                  agent.x > cx
+                    ? pen.left + spanX * (0.12 + pick * 0.24)
+                    : pen.right - spanX * (0.12 + pick * 0.24);
+                agent.facing = agent.targetX >= agent.x ? 'R' : 'L';
+              }
+            }
+          } else if (agent.flightMode === 'takeoff') {
+            agent.flightPhaseMs = (agent.flightPhaseMs ?? 0) + gapMs;
+            const u = Math.min(1, agent.flightPhaseMs / 400);
+            const startY = agent.flightStartY ?? homeBar.y;
+            agent.y = Math.max(pen.skyTopY, Math.min(pen.floorY, startY + (agent.cruiseY - startY) * u));
+            const dx = agent.targetX - agent.x;
+            if (Math.abs(dx) > 0.2) agent.facing = dx > 0 ? 'R' : 'L';
+            agent.x = Math.max(
+              pen.left,
+              Math.min(pen.right, agent.x + Math.sign(dx) * Math.min((isGlide ? 16 : 22) * dt, Math.abs(dx)))
+            );
+            agent.anim = 'move';
+            agent.frame = Math.floor(this.clockMs / (isGlide ? 185 : 100)) % 6;
+            if (u >= 1) {
+              agent.y = agent.cruiseY;
+              agent.flightMode = 'cruise';
+              agent.stateTimerMs = isGlide ? 2200 : 1800;
+              agent.targetX = agent.x > cx ? pen.left + 3 : pen.right - 3;
+            }
+          } else if (agent.flightMode === 'cruise') {
+            const speed = isGlide ? 16 : 26;
+            if (Math.abs(agent.targetX - agent.x) <= 2) {
+              agent.targetX = agent.x > cx ? pen.left + 3 : pen.right - 3;
+            }
+            const dirX = agent.targetX - agent.x;
+            if (Math.abs(dirX) > 0.2) agent.facing = dirX > 0 ? 'R' : 'L';
+            agent.x = Math.max(
+              pen.left,
+              Math.min(pen.right, agent.x + Math.sign(dirX) * Math.min(speed * dt, Math.abs(dirX)))
+            );
+            const rippleAmp = isGlide ? 0.45 : 0.75;
+            const rippleSpeed = isGlide ? 340 : 180;
+            agent.y = Math.max(
+              minCruiseY,
+              Math.min(pen.floorY - 8, agent.cruiseY + Math.sin(this.clockMs / rippleSpeed + agent.phase) * rippleAmp)
+            );
+            agent.anim = 'move';
+            agent.frame = Math.floor(this.clockMs / (isGlide ? 220 : 105)) % 6;
+            if (agent.stateTimerMs <= 0) {
+              const otherBars = perches.filter(b => Math.abs(b.y - (agent.perchY ?? -1)) > 2);
+              const pickRoll = hashSeed(agent.creatureId, Math.floor(this.clockMs / 400) + 19);
+              const pool = otherBars.length > 0 && pickRoll < 0.78 ? otherBars : perches;
+              const destBar = pool[Math.floor(hashSeed(agent.creatureId, Math.floor(this.clockMs / 400) + 23) * pool.length)];
+              agent.flightMode = 'land';
+              agent.flightPhaseMs = 0;
+              agent.flightStartX = agent.x;
+              agent.flightStartY = agent.y;
+              agent.targetX = destBar.x;
+              agent.perchY = destBar.y;
+              agent.facing = destBar.x >= agent.x ? 'R' : 'L';
+            }
+          } else {
+            // Land smoothly onto chosen perch bar (both x and y converge onto the bar)
+            agent.flightPhaseMs = (agent.flightPhaseMs ?? 0) + gapMs;
+            const u = Math.min(1, agent.flightPhaseMs / 440);
+            const startX = agent.flightStartX ?? agent.x;
+            const startY = agent.flightStartY ?? agent.cruiseY;
+            const destY = agent.perchY ?? homeBar.y;
+            agent.x = Math.max(pen.left, Math.min(pen.right, startX + (agent.targetX - startX) * u));
+            agent.y = Math.max(pen.skyTopY, Math.min(pen.floorY, startY + (destY - startY) * u));
+            agent.anim = 'move';
+            agent.frame = Math.floor(this.clockMs / 165) % 6;
+            if (u >= 1) {
+              agent.x = agent.targetX;
+              agent.y = destY;
+              agent.flightMode = 'perch';
+              agent.anim = 'idle';
+              agent.stateTimerMs =
+                (isGlide ? 2200 : 1600) + hashSeed(agent.creatureId, Math.floor(this.clockMs / 400)) * 1600;
+            }
+          }
+          break;
+        }
+
+        // Non-aviary fly/glide pens (e.g. Menagerie sky bay)
         const availSky = Math.max(18, pen.floorY - pen.skyTopY);
         const heightFrac = 0.42 + 0.42 * hashSeed(agent.creatureId, 21);
         const targetCruiseY = Math.max(

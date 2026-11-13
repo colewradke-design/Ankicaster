@@ -400,6 +400,7 @@ export interface CreatureDrawOpts {
   bondLevel?: 0 | 1 | 2 | 3;
   unhomed?: boolean;
   auraPhase?: number;
+  flightMode?: 'perch' | 'takeoff' | 'cruise' | 'land';
 }
 
 /**
@@ -425,8 +426,13 @@ export function drawCreature(g: Painter, defId: string, opts: CreatureDrawOpts):
   const eating = opts.anim === 'eat';
   const moving = opts.anim === 'move';
   const trouble = opts.anim === 'trouble';
+  const isAirborne =
+    moving &&
+    (opts.flightMode === 'takeoff' || opts.flightMode === 'cruise' || opts.flightMode === 'land');
 
-  const bobY = sleeping
+  const bobY = isAirborne
+    ? 0
+    : sleeping
     ? 1.2 * scale
     : moving
     ? -Math.abs(Math.sin((f / 3) * Math.PI)) * 1.4 * scale
@@ -444,8 +450,10 @@ export function drawCreature(g: Painter, defId: string, opts: CreatureDrawOpts):
     g.circle(cx - dir * w * 0.25, baseY - h * 0.72, 1.5 * scale).fill({ color: 0xffffff, alpha: 0.7 });
   }
 
-  // Contact shadow
-  g.ellipse(cx, opts.y - 0.5, w * 0.32, Math.max(1.2, 1.6 * scale)).fill({ color: 0x1b1822, alpha: 0.35 });
+  // Contact shadow (omitted while airborne so birds in flight do not cast a mid-air ground oval)
+  if (!isAirborne) {
+    g.ellipse(cx, opts.y - 0.5, w * 0.32, Math.max(1.2, 1.6 * scale)).fill({ color: 0x1b1822, alpha: 0.35 });
+  }
 
   // Unhomed bundle beside Entrance Hall doors
   if (opts.unhomed) {
@@ -643,14 +651,51 @@ export function drawCreature(g: Painter, defId: string, opts: CreatureDrawOpts):
     case 'finch':
     case 'raven': {
       const tall = spec.archetype === 'heron' ? 2.5 : 0;
-      g.rect(px(-0.8 - stride * 0.4), py(-3.0 - tall), sr(0.9), sr(3.0 + tall)).fill({ color: aCol });
-      g.rect(px(0.8 + stride * 0.4), py(-3.0 - tall), sr(0.9), sr(3.0 + tall)).fill({ color: aCol });
-      g.ellipse(px(0), py(-5.6 - tall), sr(3.0), sr(3.2)).fill({ color: pCol });
-      g.ellipse(px(-0.6), py(-5.4 - tall), sr(2.2), sr(2.2)).fill({ color: sCol });
-      g.circle(px(1.2), py(-8.6 - tall + headNod), sr(2.0)).fill({ color: pCol });
       const beakLen = spec.archetype === 'heron' ? 4.4 : 2.2;
-      g.poly([px(2.6), py(-8.8 - tall + headNod), px(2.6 + beakLen), py(-8.2 - tall + headNod), px(2.6), py(-7.6 - tall + headNod)]).fill({ color: aCol });
-      if (!sleeping) g.circle(px(2.0), py(-8.9 - tall + headNod), sr(0.55)).fill({ color: spec.eye });
+      if (isAirborne) {
+        const wingLift = Math.sin((f / 3) * Math.PI) * 3.8;
+        const wingSpan = spec.archetype === 'heron' ? 7.6 : spec.archetype === 'owl' ? 6.8 : 6.0;
+        // Far wing behind body
+        g.poly([
+          px(-0.2), py(-6.4 - tall),
+          px(-wingSpan * 0.7), py(-8.2 - tall - wingLift * 0.85),
+          px(-wingSpan * 0.25), py(-5.2 - tall - wingLift * 0.35)
+        ]).fill({ color: darkP });
+        // Tail feathers
+        g.poly([px(-2.6), py(-5.6 - tall), px(-5.2), py(-6.3 - tall), px(-4.8), py(-4.4 - tall)]).fill({ color: darkP });
+        // Tucked or trailing legs in flight
+        if (spec.archetype === 'heron') {
+          line(g, px(-1.4), py(-3.8 - tall), px(-6.0), py(-2.8 - tall), aCol, Math.max(0.8, 0.8 * scale));
+        } else {
+          g.rect(px(-2.4), py(-3.4 - tall), sr(1.6), sr(0.9)).fill({ color: aCol });
+        }
+        // Body, head, beak, eye
+        g.ellipse(px(0), py(-5.6 - tall), sr(3.2), sr(2.7)).fill({ color: pCol });
+        g.circle(px(2.0), py(-7.8 - tall), sr(1.9)).fill({ color: pCol });
+        g.poly([px(3.3), py(-8.1 - tall), px(3.3 + beakLen), py(-7.5 - tall), px(3.3), py(-6.9 - tall)]).fill({ color: aCol });
+        if (!sleeping) g.circle(px(2.7), py(-8.1 - tall), sr(0.55)).fill({ color: spec.eye });
+        // Near flapping wing
+        const tipY = -6.6 - tall - wingLift;
+        g.poly([
+          px(0.4), py(-6.0 - tall),
+          px(-wingSpan), py(tipY),
+          px(-wingSpan * 0.5), py(-4.0 - tall - wingLift * 0.4),
+          px(-1.4), py(-4.4 - tall)
+        ]).fill({ color: sCol });
+        line(g, px(-0.3), py(-5.8 - tall), px(-wingSpan * 0.9), py(tipY + 0.4), darkP, Math.max(0.7, 0.65 * scale));
+      } else {
+        // Perched / ground stance: legs gripping perch at baseline, wings folded cleanly
+        g.rect(px(-0.8 - stride * 0.4), py(-3.0 - tall), sr(0.9), sr(3.0 + tall)).fill({ color: aCol });
+        g.rect(px(0.8 + stride * 0.4), py(-3.0 - tall), sr(0.9), sr(3.0 + tall)).fill({ color: aCol });
+        g.poly([px(-2.4), py(-5.0 - tall), px(-4.2), py(-3.6 - tall), px(-2.0), py(-3.8 - tall)]).fill({ color: darkP });
+        g.ellipse(px(0), py(-5.6 - tall), sr(3.0), sr(3.2)).fill({ color: pCol });
+        // Folded wing resting neatly along flank
+        g.ellipse(px(-0.7), py(-5.3 - tall), sr(2.2), sr(1.6)).fill({ color: sCol });
+        g.poly([px(-2.0), py(-5.7 - tall), px(-3.5), py(-3.9 - tall), px(-0.8), py(-4.2 - tall)]).fill({ color: darkP });
+        g.circle(px(1.2), py(-8.6 - tall + headNod), sr(2.0)).fill({ color: pCol });
+        g.poly([px(2.6), py(-8.8 - tall + headNod), px(2.6 + beakLen), py(-8.2 - tall + headNod), px(2.6), py(-7.6 - tall + headNod)]).fill({ color: aCol });
+        if (!sleeping) g.circle(px(2.0), py(-8.9 - tall + headNod), sr(0.55)).fill({ color: spec.eye });
+      }
       break;
     }
     case 'pangolin': {

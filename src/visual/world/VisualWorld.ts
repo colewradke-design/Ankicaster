@@ -931,7 +931,8 @@ export class VisualWorld {
               status: cAgent.status,
               bondLevel: cAgent.bondLevel,
               unhomed: cAgent.unhomed,
-              auraPhase: reduceMotion ? 0 : this.clockMs / 350
+              auraPhase: reduceMotion ? 0 : this.clockMs / 350,
+              flightMode: cAgent.flightMode
             });
           }
         }
