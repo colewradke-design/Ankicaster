@@ -11,7 +11,11 @@
 
 import { PlacedRoom } from '../../types/ankicaster';
 import { computeReachability } from '../../utils/reachability';
-import { roomToWorldBox, getFloorLineY, groundsPlotToWorldX, castleCellToWorldX, CELL_W } from '../layout/gridToWorld';
+import { roomToWorldBox, getFloorLineY, castleCellToWorldX } from '../layout/gridToWorld';
+
+function isSpiralStairLink(defId: string): boolean {
+  return defId === 'spiral_stair';
+}
 
 export interface NavNode {
   id: string; // e.g. "room-1-f0", "stair-3", "plot-8", "path"
@@ -111,8 +115,28 @@ export class NavGraph {
           });
           this.adj.set(nodeId, []);
 
-          // Internal vertical link in multi-floor rooms (like Wizard's Study or Spiral Stair stack)
-          if (f > r.y) {
+          if (r.defId === 'wizard_study') {
+            // Wizard's Study internal spiral stair is drawn on the left (x = L + 3 .. L + 16 -> center L + 9.5)
+            const stairX = box.left + 9.5;
+            const stairNodeId = `study-stair-${r.id}-f${f}`;
+            this.nodes.set(stairNodeId, {
+              id: stairNodeId,
+              roomId: r.id,
+              x: stairX,
+              y: nodeY,
+              floor: f,
+              kind: 'stair'
+            });
+            this.adj.set(stairNodeId, []);
+            // Walk horizontally between the Study floor node and its left staircase column
+            this.addEdge(nodeId, stairNodeId, Math.max(1, Math.abs(nodeX - stairX)));
+            if (f > r.y) {
+              const lowerStairId = `study-stair-${r.id}-f${f - 1}`;
+              this.addEdge(stairNodeId, lowerStairId, 48 * 1.5);
+            }
+          } else if (isSpiralStairLink(r.defId) && f > r.y) {
+            // Only Spiral Stairs (and Wizard's Study above) have internal vertical links;
+            // tall rooms like Aviary or Menagerie NEVER act as staircases.
             const lowerNodeId = `room-${r.id}-f${f - 1}`;
             this.addEdge(nodeId, lowerNodeId, 48 * 1.5);
           }
@@ -150,8 +174,15 @@ export class NavGraph {
           if (aRight === b.x || bRight === a.x) {
             // Share boundary on each overlapping floor
             for (let f = floorOverlapStart; f < floorOverlapEnd; f++) {
-              const aNodeId = `room-${a.id}-f${f}`;
-              const bNodeId = `room-${b.id}-f${f}`;
+              // Left neighbours of Wizard's Study enter right beside its left-side staircase
+              const aNodeId =
+                a.defId === 'wizard_study' && bRight === a.x
+                  ? `study-stair-${a.id}-f${f}`
+                  : `room-${a.id}-f${f}`;
+              const bNodeId =
+                b.defId === 'wizard_study' && aRight === b.x
+                  ? `study-stair-${b.id}-f${f}`
+                  : `room-${b.id}-f${f}`;
               if (this.nodes.has(aNodeId) && this.nodes.has(bNodeId)) {
                 const nodeA = this.nodes.get(aNodeId)!;
                 const nodeB = this.nodes.get(bNodeId)!;

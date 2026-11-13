@@ -17,9 +17,9 @@
  * - reduceMotion places agents once per phase change only
  */
 
-import { FullGameState, Character } from '../../types/ankicaster';
+import { FullGameState, Character, PlacedRoom } from '../../types/ankicaster';
 import { NavGraph, NavNode } from '../layout/navGraph';
-import { roomToWorldBox } from '../layout/gridToWorld';
+import { roomToWorldBox, getFloorLineY } from '../layout/gridToWorld';
 import { ReachabilityInfo } from '../../utils/reachability';
 import { normalizeAppearance } from '../../utils/appearance';
 import { MOVE_SPEED, healingPlaceFor, DollAnim, dollFrame } from './doll';
@@ -424,6 +424,7 @@ export class Choreographer {
             agent.x = finalNode.x;
             agent.y = finalNode.y;
             agent.currentFloor = finalNode.floor;
+            agent.currentRoomId = finalNode.roomId ?? agent.targetRoomId;
             agent.path = [];
             agent.pathIndex = 0;
           }
@@ -473,10 +474,14 @@ export class Choreographer {
         agent.x = targetNode.x;
         agent.y = targetNode.y;
         agent.currentFloor = targetNode.floor;
+        agent.currentRoomId = targetNode.roomId;
         agent.pathIndex++;
         if (agent.pathIndex >= agent.path.length) {
           agent.path = [];
           agent.pathIndex = 0;
+          if (agent.targetRoomId !== undefined) {
+            agent.currentRoomId = agent.targetRoomId;
+          }
           this.setArrivedAnim(agent);
           agent.arrivedAt = Date.now();
         }
@@ -485,16 +490,26 @@ export class Choreographer {
         const inj = agent.character?.injury?.type;
         const limp = inj === 'sprained' || inj === 'broken_bone';
         const currentRoom = state.rooms.find(r => r.id === agent.currentRoomId);
-        const climbing = Math.abs(dy) > 2 && (
-          (currentRoom && (currentRoom.defId === 'spiral_stair' || currentRoom.defId === 'wizard_study')) ||
-          targetNode.kind === 'stair'
-        );
-        const pathStep = !climbing && Math.abs(dy) > 2 && Math.abs(dy) <= 10 && (
-          targetNode.kind === 'path' ||
-          targetNode.kind === 'plot' ||
-          currentRoom?.defId === 'entrance_hall' ||
-          currentRoom?.area === 'grounds'
-        );
+        const prevNode = agent.pathIndex > 0 ? agent.path[agent.pathIndex - 1] : undefined;
+        const targetRoom = targetNode.roomId !== undefined ? state.rooms.find(r => r.id === targetNode.roomId) : undefined;
+        const prevRoom = prevNode?.roomId !== undefined ? state.rooms.find(r => r.id === prevNode.roomId) : currentRoom;
+        const isStairLink = (r?: PlacedRoom) => r?.defId === 'spiral_stair' || r?.defId === 'wizard_study';
+        // Vertical climbing happens ONLY along spiral_stair or wizard_study stair links
+        const climbing =
+          Math.abs(dy) > 2 &&
+          targetNode.kind === 'stair' &&
+          isStairLink(targetRoom) &&
+          (prevNode ? prevNode.kind === 'stair' && isStairLink(prevRoom) : isStairLink(currentRoom));
+        const pathStep =
+          !climbing &&
+          Math.abs(dy) > 2 &&
+          Math.abs(dy) <= 10 &&
+          (targetNode.kind === 'path' ||
+            targetNode.kind === 'plot' ||
+            prevNode?.kind === 'path' ||
+            prevNode?.kind === 'plot' ||
+            currentRoom?.defId === 'entrance_hall' ||
+            currentRoom?.area === 'grounds');
         const px = climbing ? MOVE_SPEED.climb : limp ? MOVE_SPEED.limp : agent.anim === 'carry_walk' ? MOVE_SPEED.carry : MOVE_SPEED.walk;
         const speed = px * (deltaMs / 1000);
         if (Math.abs(dx) > 1) {
@@ -508,10 +523,17 @@ export class Choreographer {
           } else if (pathStep) {
             agent.anim = limp ? 'limp_walk' : 'walk';
             agent.y += (dy / dist) * Math.min(speed, Math.abs(dy));
-          } else {
-            // Never move vertically outside of a stair, Wizard's Study column, or 6px front path step
+          } else if (targetNode.floor === agent.currentFloor) {
+            // Same-floor alignment only (never snap across floors outside a stair)
             agent.y = targetNode.y;
-            agent.currentFloor = targetNode.floor;
+            agent.anim = limp ? 'limp_walk' : 'walk';
+          } else {
+            // Invalid cross-floor transition without a stair: drop path & replan cleanly
+            agent.path = [];
+            agent.pathIndex = 0;
+            agent.anim = 'idle';
+            this.applyFrame(agent);
+            return;
           }
         } else {
           agent.y = targetNode.y;
@@ -629,52 +651,69 @@ export class Choreographer {
       return;
     }
 
-    // Find destination node in NavGraph
-    let destNodeId: string | undefined;
-    for (const [nodeId, node] of this.navGraph.nodes.entries()) {
-      if (node.roomId === targetRoomId) {
-        destNodeId = nodeId;
-        break;
-      }
-    }
+    // Find destination node(s) in NavGraph (prefer floor/plot nodes over stair nodes)
+    const destCandidates = Array.from(this.navGraph.nodes.values())
+      .filter(n => n.roomId === targetRoomId)
+      .sort((a, b) => (a.kind === 'stair' ? 1 : 0) - (b.kind === 'stair' ? 1 : 0) || a.floor - b.floor);
 
-    if (!destNodeId) return;
+    if (destCandidates.length === 0) return;
 
     // Find closest node to agent's current position on the same floor if possible
     let startNodeId: string | undefined;
     let minD = Infinity;
     for (const [nodeId, node] of this.navGraph.nodes.entries()) {
-      // Prioritize same-floor node
       const floorDiff = Math.abs(node.floor - agent.currentFloor);
-      const d = Math.abs(node.x - agent.x) + Math.abs(node.y - agent.y) + floorDiff * 1000;
+      const roomBonus = agent.currentRoomId !== undefined && node.roomId === agent.currentRoomId ? -8 : 0;
+      const d = Math.abs(node.x - agent.x) + Math.abs(node.y - agent.y) + floorDiff * 1000 + roomBonus;
       if (d < minD) {
         minD = d;
         startNodeId = nodeId;
       }
     }
 
-    if (startNodeId && destNodeId) {
-      const path = this.navGraph.findPath(startNodeId, destNodeId);
-      if (path.length > 0) {
-        // Calculate stable slot offset in destination room so agents don't stack
+    if (startNodeId) {
+      let bestPath: NavNode[] = [];
+      for (const destNode of destCandidates) {
+        const candidatePath = this.navGraph.findPath(startNodeId, destNode.id);
+        if (candidatePath.length > 0 && (bestPath.length === 0 || candidatePath.length < bestPath.length)) {
+          bestPath = candidatePath;
+        }
+      }
+
+      if (bestPath.length === 0) {
+        const ehRoom = state.rooms.find(r => r.state === 'built' && r.defId === 'entrance_hall' && r.y === 0);
+        const ehNode = ehRoom ? this.navGraph.nodes.get(`room-${ehRoom.id}-f0`) : undefined;
+        if (ehRoom && ehNode && targetRoomId !== ehRoom.id) {
+          const ehPath = this.navGraph.findPath(startNodeId, ehNode.id);
+          if (ehPath.length > 0) {
+            bestPath = ehPath;
+            targetRoomId = ehRoom.id;
+            agent.targetRoomId = ehRoom.id;
+          }
+        }
+      }
+
+      if (bestPath.length > 0) {
         const targetRoom = state.rooms.find(r => r.id === targetRoomId);
+        const lastNode = bestPath[bestPath.length - 1];
         if (targetRoom) {
           const box = roomToWorldBox(targetRoom, this.groundY);
           const slotX = this.getRoomSlotX(targetRoomId, agent.id, state);
-          // Append slot waypoint at the floor line
-          path.push({
+          const destFloor = targetRoom.area === 'castle' ? lastNode.floor : 0;
+          const destY = targetRoom.area === 'castle' ? getFloorLineY(destFloor, this.groundY) : box.floorLineY;
+          // Append slot waypoint at the connected floor line
+          bestPath.push({
             id: `slot-${agent.id}`,
             roomId: targetRoomId,
-            floor: targetRoom.area === 'castle' ? targetRoom.y : 0,
+            floor: destFloor,
             x: slotX,
-            y: box.floorLineY,
+            y: destY,
             kind: targetRoom.area === 'grounds' ? 'plot' : 'room_floor'
           });
         }
 
-        agent.path = path;
+        agent.path = bestPath;
         agent.pathIndex = 0;
-        agent.currentRoomId = targetRoomId;
       }
     }
   }

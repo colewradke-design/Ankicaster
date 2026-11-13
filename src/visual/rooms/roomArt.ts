@@ -27,6 +27,17 @@ import { drawRiftGateArch, RiftGateVisualState } from './riftGateArt';
 export type Tier = 'bare' | 'plain' | 'cozy' | 'fine' | 'splendid';
 export const TIERS: Tier[] = ['bare', 'plain', 'cozy', 'fine', 'splendid'];
 
+/** All 7 creature pens: never draw wall torches, sconces, or open flames inside them (except Ember Pit's fire bed). */
+export const CREATURE_PEN_IDS = new Set([
+  'meadow_paddock',
+  'tide_tank',
+  'menagerie',
+  'aviary',
+  'gloom_hutch',
+  'ember_pit',
+  'crystal_vivarium'
+]);
+
 /** Crate-pile step for a Storage Vault: total common materials / (8 × storage cap). */
 export function vaultFillStep(total: number, cap: number): 0 | 1 | 2 | 3 | 4 {
   const denom = 8 * (cap > 0 ? cap : 200);
@@ -118,7 +129,8 @@ export function drawRoomInterior(g: Painter, room: PlacedRoom, box: Box, opts: R
     res.bespoke = drawGroundsPlot(g, room, box, res.emitters, opts.cropStage ?? 3, opts);
     res.trimTags = drawRoomUpgradeTrim(g, room, box, tint, gk);
   } else {
-    drawTierSkin(g, box, tier, tint, gk, room.id, res.emitters);
+    const isPen = CREATURE_PEN_IDS.has(room.defId);
+    drawTierSkin(g, box, tier, tint, gk, room.id, res.emitters, isPen);
     res.bespoke = drawDressing(g, room, box, tint, gk, res.emitters, opts.cropStage ?? 3, opts.vaultFill);
     drawShell(g, room, box, tier, !!opts.hasLeftDoor, !!opts.hasRightDoor);
     res.trimTags = drawRoomUpgradeTrim(g, room, box, tint, gk);
@@ -172,7 +184,16 @@ function placeFurniture(g: Painter, room: PlacedRoom, box: Box, tint: number, gk
 // 1. Tier wall skins (Addendum 5.1)
 // ---------------------------------------------------------------------------------------------
 
-export function drawTierSkin(g: Painter, box: Box, tier: Tier, tint: number, gk: string, seed: number, em: Emitter[]) {
+export function drawTierSkin(
+  g: Painter,
+  box: Box,
+  tier: Tier,
+  tint: number,
+  gk: string,
+  seed: number,
+  em: Emitter[],
+  noOpenFlames = false
+) {
   const L = box.left, T = box.top + 3, W = box.width, B = box.floorLineY;
   const H = B - T;
   switch (tier) {
@@ -197,8 +218,13 @@ export function drawTierSkin(g: Painter, box: Box, tier: Tier, tint: number, gk:
       line(g, L + 2, T, L + 2, T + 8, 0xd8d8d8, 0.5);
       line(g, L + 2, T + 6, L + 7, T, 0xd8d8d8, 0.5);
       line(g, L + 2, T + 3, L + 4, T, 0xd8d8d8, 0.4);
-      // single torch
-      torch(g, L + W - 12, B - 24, em);
+      if (noOpenFlames) {
+        // Slit skylight window instead of open-flame torch in creature pens
+        g.rect(L + W - 14, T + 5, 5, 8).fill({ color: 0x252429 });
+        g.rect(L + W - 13, T + 6, 3, 6).fill({ color: GLASS, alpha: 0.45 });
+      } else {
+        torch(g, L + W - 12, B - 24, em);
+      }
       floorSlab(g, box, 0x36353b, 'flag', seed);
       break;
     }
@@ -213,8 +239,14 @@ export function drawTierSkin(g: Painter, box: Box, tier: Tier, tint: number, gk:
         g.rect(x + 0.5, B - 8, Math.min(11, L + W - x - 0.5), 7.5).fill({ color: noise(seed, 40 + i) > 0.5 ? STONE[2] : mix(STONE[2], STONE[1], 0.3) });
       }
       g.rect(L, B - 9, W, 1).fill({ color: STONE[1] });
-      torch(g, L + 10, B - 24, em);
-      torch(g, L + W - 10, B - 24, em);
+      if (noOpenFlames) {
+        // Clerestory glass vents instead of wall torches in creature pens
+        win(g, L + 9, T + 7, 5, 8, STONE[1], 0x9cd4ff);
+        win(g, L + W - 14, T + 7, 5, 8, STONE[1], 0x9cd4ff);
+      } else {
+        torch(g, L + 10, B - 24, em);
+        torch(g, L + W - 10, B - 24, em);
+      }
       floorSlab(g, box, STONE[1], 'flag', seed);
       break;
     }
@@ -228,7 +260,7 @@ export function drawTierSkin(g: Painter, box: Box, tier: Tier, tint: number, gk:
       const px = L + 8 + noise(seed, 3) * (W - 24);
       g.rect(px - 2, B - 19, 4, 4).fill({ color: 0xb5651d });
       g.ellipse(px, B - 20.5, 3, 2.2).fill({ color: 0x6ba34f });
-      // lamp glow
+      // lamp glow (enclosed glass globe, no open flame)
       const lx = L + W - 14;
       g.rect(lx - 0.75, B - 30, 1.5, 6).fill({ color: GOLDS[1] });
       g.rect(lx - 2.5, B - 33, 5, 3).fill({ color: GOLDS[3] });
@@ -246,9 +278,14 @@ export function drawTierSkin(g: Painter, box: Box, tier: Tier, tint: number, gk:
         g.rect(x + 1, railY + 4, 10, B - railY - 9).fill({ color: mix(WOOD[2], WOOD[1], 0.4) });
       }
       g.rect(L, railY, W, 2).fill({ color: WOOD[0] }); // picture rail
-      // wall sconces
-      sconce(g, L + 24, railY + 6, em);
-      sconce(g, L + W - 12, railY + 6, em);
+      if (noOpenFlames) {
+        // Framed round glass windows instead of wall sconces in creature pens
+        roundWin(g, L + 25, railY + 8, 3.5, WOOD[0]);
+        roundWin(g, L + W - 12, railY + 8, 3.5, WOOD[0]);
+      } else {
+        sconce(g, L + 24, railY + 6, em);
+        sconce(g, L + W - 12, railY + 6, em);
+      }
       // category banner with glyph (left of the room label)
       const bx = L + 10;
       g.rect(bx - 6, T + 1, 12, 1.5).fill({ color: WOOD[0] });
@@ -276,8 +313,15 @@ export function drawTierSkin(g: Painter, box: Box, tier: Tier, tint: number, gk:
       g.rect(L, B - 10, W, 1.5).fill({ color: GOLDS[2] });
       g.rect(L, B - 9, W, 9).fill({ color: WOOD[1] });
       for (let x = L + 4; x < L + W - 2; x += 10) g.rect(x, B - 7, 6, 5).stroke({ color: GOLDS[1], width: 0.5 });
-      // floating candles (bob in the ambient layer)
-      for (let i = 0; i < Math.min(3, n + 1); i++) em.push({ kind: 'candle', x: L + ((i + 0.5) * W) / (Math.min(3, n + 1)) + 8, y: T + 10 + (i % 2) * 3, seed: i });
+      if (noOpenFlames) {
+        // Soft sunlit/crystal motes instead of open-flame candles in creature pens
+        for (let i = 0; i < Math.min(3, n + 1); i++) {
+          em.push({ kind: 'glow', x: L + ((i + 0.5) * W) / Math.min(3, n + 1) + 8, y: T + 12 + (i % 2) * 3, size: 6, color: mix(tint, 0xffffff, 0.35), seed: i });
+        }
+      } else {
+        // floating candles (bob in the ambient layer)
+        for (let i = 0; i < Math.min(3, n + 1); i++) em.push({ kind: 'candle', x: L + ((i + 0.5) * W) / (Math.min(3, n + 1)) + 8, y: T + 10 + (i % 2) * 3, seed: i });
+      }
       floorSlab(g, box, GOLDS[0], 'parquet', seed);
       // inlaid crest in the floor runner
       g.rect(L + 4, B - 1, W - 8, 1.5).fill({ color: tint });
@@ -664,7 +708,7 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
       g.rect(R - 19, B - 6, 2, 6).fill({ color: WOOD[1] });
       em.push({ kind: 'leaf', x: L + 30, y: B - 14, color: 0x6ba34f });
       em.push({ kind: 'bubble', x: L + 96, y: B - 6, color: 0xffffff });
-      em.push({ kind: 'ember', x: L + 160, y: B - 6, color: 0xe8752a });
+      em.push({ kind: 'twinkle', x: L + 160, y: B - 12, color: 0x9c86e0 });
       break;
     }
     case 'infirmary':
@@ -864,13 +908,23 @@ export function drawGroundsPlot(g: Painter, room: PlacedRoom, box: Box, em: Emit
       g.poly([cx - 14, B - 24, cx + 14, B - 24, cx, B - 32]).fill({ color: 0x3e4a5c });
       em.push({ kind: 'glow', x: cx, y: B - 10, size: 10, color: 0xd8d8f0 });
       break;
-    case 'meadow_paddock':
+    case 'meadow_paddock': {
       for (let x = L + 4; x < R - 4; x += 5) line(g, x, B, x + 1, B - 4 - noise(s, x) * 3, 0x6ba34f, 0.75);
-      g.rect(R - 30, B - 18, 22, 18).fill({ color: WOOD[1], alpha: 0.9 }); // shelter
-      g.poly([R - 33, B - 18, R - 5, B - 18, R - 19, B - 26]).fill({ color: 0xb8402a });
-      fence(L + 2, R - 2);
+      // L1 progressive fencing: rope & stakes (L2 upgrades to wooden rail, L3 adds hedge & shelter hut)
+      const stakes: number[] = [];
+      for (let x = L + 4; x <= R - 4; x += 14) {
+        stakes.push(x);
+        g.rect(x, B - 8, 1.5, 8).fill({ color: WOOD[1] });
+      }
+      for (let i = 0; i < stakes.length - 1; i++) {
+        const x0 = stakes[i] + 1, x1 = stakes[i + 1];
+        const xm = (x0 + x1) / 2;
+        line(g, x0, B - 6, xm, B - 4.5, 0xc9b88a, 1);
+        line(g, xm, B - 4.5, x1, B - 6, 0xc9b88a, 1);
+      }
       em.push({ kind: 'sway', x: L + 30, y: B - 4, size: 2, color: 0x6ba34f });
       break;
+    }
     case 'rift_gate': {
       const rState: RiftGateVisualState = opts.riftState ?? 'dormant';
       drawRiftGateArch(g, box, rState, {
