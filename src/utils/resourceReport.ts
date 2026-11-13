@@ -239,8 +239,9 @@ export function glassworksConversion(stone: number, harvestMult: number, glass: 
   return { stoneUsed, glassGain };
 }
 
-export function weavingOutput(harvestMult: number, moonsheep: boolean): number {
-  return 0.5 * harvestMult * (moonsheep ? 2 : 1);
+export function weavingOutput(harvestMult: number, moonsheep: boolean, buffScale = 1): number {
+  const mult = moonsheep ? 1 + buffScale : 1;
+  return 0.5 * harvestMult * mult;
 }
 
 const COST_LABELS: Record<string, string> = {

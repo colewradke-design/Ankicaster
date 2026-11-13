@@ -248,7 +248,9 @@ export function calculateDailyVeilCost(
   wardersCount: number,
   veilTheoryRanks: number = 0,
   hasBatSwarm: boolean = false,
-  hasUmbralWyrm: boolean = false
+  hasUmbralWyrm: boolean = false,
+  batScale = 1,
+  wyrmScale = 1
 ): { cost: number; sizePoints: number; reductions: Array<{ label: string; pct: number }> } {
   let sizePoints = 0;
   for (const r of rooms) {
@@ -278,8 +280,8 @@ export function calculateDailyVeilCost(
     reductions.push({ label: `Veil Theory Ranks (${veilTheoryRanks})`, pct: 0.03 * veilTheoryRanks });
   }
 
-  if (hasBatSwarm) reductions.push({ label: 'Velvet Bat Swarm', pct: 0.02 });
-  if (hasUmbralWyrm) reductions.push({ label: 'Umbral Wyrmling', pct: 0.05 });
+  if (hasBatSwarm) reductions.push({ label: 'Velvet Bat Swarm', pct: 0.02 * batScale });
+  if (hasUmbralWyrm) reductions.push({ label: 'Umbral Wyrmling', pct: 0.05 * wyrmScale });
 
   const totalReductionPct = Math.min(0.5, reductions.reduce((sum, item) => sum + item.pct, 0));
   const rawCost = (40 + 3 * sizePoints) * (1 - totalReductionPct);
@@ -363,7 +365,6 @@ export type FurnitureEffectKind =
   | 'insight_per_bell'
   | 'nectar_per_bell'
   | 'creature_bond_pct'
-  | 'creature_diet_pct'
   | 'taming_pct'
   | 'brew_speed_pct'
   | 'rift_fortune'
@@ -379,7 +380,7 @@ export interface FurnitureEffectDef {
 }
 
 /**
- * Structured effects for all 53 furniture items that declare a specialEffect.
+ * Structured effects for furniture that declares a specialEffect.
  * Same-item effects in one room stack at most twice; damaged items count half.
  */
 export const FURNITURE_EFFECTS: Record<string, FurnitureEffectDef> = {
@@ -409,7 +410,6 @@ export const FURNITURE_EFFECTS: Record<string, FurnitureEffectDef> = {
   compost_bin: { kind: 'output_pct', value: 5, scope: 'room' },
   glowcap_lamp: { kind: 'output_pct', value: 10, scope: 'room' },
   creature_toybox: { kind: 'creature_bond_pct', value: 10, scope: 'room' },
-  treat_dispenser: { kind: 'creature_diet_pct', value: -10, scope: 'room' },
   warm_rock: { kind: 'taming_pct', value: 10, scope: 'room' },
   infirmary_cot: { kind: 'heal_pct', value: 5, scope: 'room' },
   remedy_cabinet: { kind: 'heal_pct', value: 10, scope: 'room' },
@@ -517,7 +517,6 @@ const EFFECT_LABELS: Record<FurnitureEffectKind, (v: number) => string> = {
   insight_per_bell: v => `Insight +${v.toFixed(1)}/bell`,
   nectar_per_bell: v => `Nectar +${v.toFixed(1)}/bell`,
   creature_bond_pct: v => `Creature bond +${v}%`,
-  creature_diet_pct: v => `Creature food ${v}%`,
   taming_pct: v => `Taming speed +${v}%`,
   brew_speed_pct: v => `Brewing +${v}%`,
   rift_fortune: v => `Rift Fortune +${v}`,

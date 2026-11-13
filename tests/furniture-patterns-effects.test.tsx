@@ -101,7 +101,7 @@ function student(id: number, seatRoomId?: number, bedRoomId?: number): Character
 test('Content integrity: every furniture item has valid deck & existing room ids, and every specialEffect has a FURNITURE_EFFECTS entry', () => {
   const roomIds = new Set(Object.keys(ROOM_DEFINITIONS));
   const list = Object.values(FURNITURE_DEFINITIONS);
-  assert.equal(list.length, 91);
+  assert.equal(list.length, 90);
 
   for (const f of list) {
     assert.ok(['foundation', 'grounds', 'magic'].includes(f.deck), `${f.id} must have a valid deck`);

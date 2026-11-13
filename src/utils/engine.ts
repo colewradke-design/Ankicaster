@@ -73,6 +73,16 @@ import {
   resourceSnapshot, storageCap as storageCapOf, weavingOutput
 } from './resourceReport';
 import { syncDiscoveredCreatures } from './creatures';
+import {
+  bestBuffScale,
+  billCreatureMeals,
+  buffScale,
+  outputMalusFactor,
+  processEscapes,
+  recaptureCreature,
+  tickCaptures,
+  MANUAL_FEED_BOND
+} from './creatureCare';
 
 export { isRoomUnlocked, planHint as blueprintLockHint, isStructure };
 
@@ -303,7 +313,8 @@ export class AnkicasterEngine {
       }
     }
 
-    // 5. Advance Active Creature Taming & Hatching
+    // 5. Advance Active Creature Taming, and count down loose-creature captures
+    tickCaptures(next, notifications);
     for (const c of next.creatures) {
       const cRoom = c.roomId != null ? next.rooms.find(r => r.id === c.roomId) : undefined;
       if (c.status === 'wary' && c.tamerId !== undefined && c.tamerId !== null) {
@@ -355,14 +366,18 @@ export class AnkicasterEngine {
     }
     const activeHealerChars = next.characters.filter(c => c.career === 'healer' && c.careerState === 'active');
     const activeHealers = activeHealerChars.length;
-    const hasHealingCreature = next.creatures.some(c => c.status === 'tamed' && (c.defId === 'halo_lamb' || c.defId === 'fen_sprite' || c.defId === 'ember_phoenix'));
+    const hasHealingCreature = Math.max(
+      bestBuffScale(next.creatures, 'halo_lamb'),
+      bestBuffScale(next.creatures, 'fen_sprite'),
+      bestBuffScale(next.creatures, 'ember_phoenix')
+    );
 
     for (const char of next.characters) {
       if (char.injury) {
         let healRate = 1.0;
         if (infirmaryBonus > 0) healRate += infirmaryBonus;
         healRate += activeHealers * 1.5;
-        if (hasHealingCreature) healRate += 1.5;
+        if (hasHealingCreature > 0) healRate += 1.5 * hasHealingCreature;
         const bedRoom = char.bedRoomId != null ? next.rooms.find(r => r.id === char.bedRoomId) : undefined;
         const healPct =
           academyFurnitureEffect(next.rooms, 'heal_pct', bedRoom) +
@@ -643,12 +658,13 @@ export class AnkicasterEngine {
    * Who eats on a meal bell. cap is two sittings (floor(seats × 2 × efficiency)) across finished Refectories.
    * No Refectory means cap 0: everyone with food stands. Food, not seats, is what leaves someone unfed.
    */
-  static mealPlan(state: FullGameState, reach?: Map<number, ReachabilityInfo>): { cap: number; seated: number; standing: number; unfed: number } {
+  static mealPlan(state: FullGameState, reach?: Map<number, ReachabilityInfo>, capFactor = 1): { cap: number; seated: number; standing: number; unfed: number } {
     const diners = state.characters.length;
     const food = Math.max(0, Math.floor(state.resources.provisions));
     const refectories = state.rooms.filter(r => r.defId === 'refectory' && r.state === 'built' && !isRoomUnfinished(r));
     const seats = ROOM_DEFINITIONS.refectory?.capacity?.seats ?? 12;
-    const cap = refectories.reduce((sum, r) => sum + Math.floor(seats * 2 * AnkicasterEngine.roomEfficiency(state, r, reach)), 0);
+    let cap = refectories.reduce((sum, r) => sum + Math.floor(seats * 2 * AnkicasterEngine.roomEfficiency(state, r, reach)), 0);
+    if (capFactor < 1) cap = Math.floor(cap * capFactor);
     const served = Math.min(diners, food);
     const seated = Math.min(served, cap);
     return { cap, seated, standing: served - seated, unfed: diners - served };
@@ -684,8 +700,10 @@ export class AnkicasterEngine {
           const eff = AnkicasterEngine.roomEfficiency(state, room, reach);
           if (eff <= 0) continue;
 
-          let yieldMult = eff;
-          if (room.hazard?.type === 'spill_of_night') yieldMult = eff * 0.5; // efficiency halved
+          const classMalus = outputMalusFactor(room, state.reviewIndex);
+          if (classMalus <= 0) continue;
+          let yieldMult = eff * classMalus;
+          if (room.hazard?.type === 'spill_of_night') yieldMult *= 0.5; // efficiency halved
           const outPct = academyFurnitureEffect(state.rooms, 'output_pct', room);
           if (outPct !== 0) yieldMult *= 1 + outPct / 100;
 
@@ -706,8 +724,8 @@ export class AnkicasterEngine {
     }
 
     // 2. Grounds & Resource Plots Output (influenced by hazards & creature buffs)
-    const hasTortoise = state.creatures.some(c => c.status === 'tamed' && c.defId === 'mossback_tortoise');
-    const greenhouseMult = hasTortoise ? 1.05 : 1.0;
+    const tortoiseScale = bestBuffScale(state.creatures, 'mossback_tortoise');
+    const greenhouseMult = 1 + 0.05 * tortoiseScale;
     const cap = AnkicasterEngine.storageCap(state);
     const store = (before: number, add: number) => (add > 0 && before >= cap ? before : add > 0 ? Math.min(cap, before + add) : before + add);
     const PLANT_ROOMS = new Set(['vegetable_patch', 'herb_garden', 'woodlot', 'greenhouse', 'orchard']);
@@ -720,9 +738,11 @@ export class AnkicasterEngine {
       const eff = AnkicasterEngine.roomEfficiency(state, room, reach);
       if (eff <= 0) continue;
 
-      let harvestMult = eff;
+      const harvestMalus = outputMalusFactor(room, state.reviewIndex);
+      if (harvestMalus <= 0) continue;
+      let harvestMult = eff * harvestMalus;
       if (room.hazard?.type === 'spill_of_night') {
-        harvestMult = eff * 0.5;
+        harvestMult *= 0.5;
         room.cleanliness = 0; // soot residue
       }
       const outPct = academyFurnitureEffect(state.rooms, 'output_pct', room);
@@ -820,23 +840,24 @@ export class AnkicasterEngine {
           note('glass', beforeG, 'Glassworks');
         }
       } else if (room.defId === 'weaving_room') {
-        const moonsheep = state.creatures.some(c => c.status === 'tamed' && c.defId === 'moonsheep');
-        const gain = weavingOutput(harvestMult, moonsheep);
+        const sheepScale = bestBuffScale(state.creatures, 'moonsheep');
+        const gain = weavingOutput(harvestMult, sheepScale > 0, sheepScale || 1);
         const before = bag.cloth || 0;
         bag.cloth = store(before, gain);
-        note('cloth', before, moonsheep ? 'Weaving Room (Moonsheep)' : 'Weaving Room');
+        note('cloth', before, sheepScale > 0 ? 'Weaving Room (Moonsheep)' : 'Weaving Room');
       }
     }
 
     // 3. Creature Active Buffs per Bell
-    const hasGlimmerhornStag = state.creatures.some(c => c.status === 'tamed' && c.defId === 'glimmerhorn_stag');
-    let lanternMoth = false;
+    const stagScale = bestBuffScale(state.creatures, 'glimmerhorn_stag');
+    let lanternScale = 0;
 
     for (const c of state.creatures) {
       if (c.status !== 'tamed') continue;
+      const scale = buffScale(!!c.hungry);
       const bump = (resource: string, amount: number) => {
         const before = bag[resource] || 0;
-        bag[resource] = before + amount;
+        bag[resource] = before + amount * scale;
         note(resource, before, CREATURE_DEFINITIONS[c.defId]?.name || c.defId);
       };
       if (c.defId === 'thistle_hare') bump('herbs', 0.1);
@@ -844,22 +865,29 @@ export class AnkicasterEngine {
       else if (c.defId === 'night_lynx') bump('umbra', 0.1);
       else if (c.defId === 'ember_phoenix') bump('radiance', 0.2);
       else if (c.defId === 'alembic_salamander') bump('reagents', 0.1);
-      else if (c.defId === 'lantern_moth') lanternMoth = true;
+      else if (c.defId === 'lantern_moth' && lanternScale === 0) lanternScale = scale;
     }
 
-    // 4. Meal targets are stored on the meal bell, then hunger drifts toward them every bell (GDD 14.4).
-    if (state.bellIndex % 5 === 0 && state.characters.length > 0) {
-      const plan = AnkicasterEngine.mealPlan(state, reach);
-      const served = plan.seated + plan.standing;
-      const before = bag.provisions || 0;
-      bag.provisions = before - served;
-      note('provisions', before, `Meals (${served} people)`);
-      state.characters.forEach((char, i) => {
-        char.mealTarget = i < plan.seated ? 100 : i < served ? 50 : 25;
-      });
-      if (plan.unfed > 0) {
-        notifications.push(`⚠️ Food shortage! ${plan.unfed} students went hungry.`);
+    // 4. Meals. Characters eat first. Wary and tamed creatures then pay their whole diet or go hungry.
+    if (state.bellIndex % 5 === 0) {
+      if (state.characters.length > 0) {
+        const capFactor = state.pendingMealCapFactor ?? 1;
+        const plan = AnkicasterEngine.mealPlan(state, reach, capFactor);
+        state.pendingMealCapFactor = undefined;
+        const served = plan.seated + plan.standing;
+        const before = bag.provisions || 0;
+        bag.provisions = before - served;
+        note('provisions', before, `Meals (${served} people)`);
+        state.characters.forEach((char, i) => {
+          char.mealTarget = i < plan.seated ? 100 : i < served ? 50 : 25;
+        });
+        if (plan.unfed > 0) {
+          notifications.push(`⚠️ Food shortage! ${plan.unfed} students went hungry.`);
+        }
+      } else if (state.pendingMealCapFactor != null) {
+        state.pendingMealCapFactor = undefined;
       }
+      billCreatureMeals(state, note);
     }
 
     // 5. Needs. Hunger uses the stored meal target (50 until the first meal).
@@ -874,9 +902,9 @@ export class AnkicasterEngine {
     }
 
     // Creature and hazard tweaks apply after the need update.
-    if (lanternMoth) {
+    if (lanternScale > 0) {
       for (const char of state.characters) {
-        char.needs.composure = Math.min(100, char.needs.composure + 1);
+        char.needs.composure = Math.min(100, char.needs.composure + lanternScale);
       }
     }
 
@@ -891,8 +919,8 @@ export class AnkicasterEngine {
 
       char.morale = calculateMorale(char.needs);
       // Glimmerhorn Stag applies +3 morale to all residents (applied after base morale recalculation so it is not overwritten)
-      if (hasGlimmerhornStag) {
-        char.morale = Math.min(100, char.morale + 3);
+      if (stagScale > 0) {
+        char.morale = Math.min(100, char.morale + 3 * stagScale);
       }
       const moraleFurn = academyFurnitureEffect(state.rooms, 'morale_bonus');
       if (moraleFurn !== 0) {
@@ -927,13 +955,14 @@ export class AnkicasterEngine {
     // 6. Cleanliness & Mopslime
     let cleanBonus = 0;
     for (const c of state.creatures) {
-      if (c.status === 'tamed' && c.defId === 'mopslime') cleanBonus += 3;
+      if (c.status === 'tamed' && c.defId === 'mopslime') cleanBonus += 3 * buffScale(!!c.hungry);
     }
     for (const r of state.rooms) {
       const roomClean = academyFurnitureEffect(state.rooms, 'cleanliness_per_bell', r);
       r.cleanliness = Math.min(100, r.cleanliness - 0.5 + cleanBonus + roomClean);
     }
     commitBell(state, bellNotes);
+    processEscapes(state, notifications, note);
   }
 
   /**
@@ -974,16 +1003,18 @@ export class AnkicasterEngine {
 
     for (let d = 0; d < processedDays; d++) {
       const warders = next.characters.filter(c => c.career === 'warder' && c.careerState === 'active').length;
-      const batSwarm = next.creatures.some(c => c.status === 'tamed' && c.defId === 'velvet_bat_swarm');
-      const umbralWyrm = next.creatures.some(c => c.status === 'tamed' && c.defId === 'umbral_wyrmling');
+      const batScale = bestBuffScale(next.creatures, 'velvet_bat_swarm');
+      const wyrmScale = bestBuffScale(next.creatures, 'umbral_wyrmling');
 
       const veilInfo = calculateDailyVeilCost(
         next.rooms,
         next.wizard.levels.shadow,
         warders,
         0,
-        batSwarm,
-        umbralWyrm
+        batScale > 0,
+        wyrmScale > 0,
+        batScale || 1,
+        wyrmScale || 1
       );
 
       next.veil.costToday = veilInfo.cost;
@@ -1111,16 +1142,18 @@ export class AnkicasterEngine {
 
     // 1. Veil Upkeep Calculation (F23) with 10% Floor (BR-25)
     const warders = next.characters.filter(c => c.career === 'warder' && c.careerState === 'active').length;
-    const batSwarm = next.creatures.some(c => c.status === 'tamed' && c.defId === 'velvet_bat_swarm');
-    const umbralWyrm = next.creatures.some(c => c.status === 'tamed' && c.defId === 'umbral_wyrmling');
+    const batScale = bestBuffScale(next.creatures, 'velvet_bat_swarm');
+    const wyrmScale = bestBuffScale(next.creatures, 'umbral_wyrmling');
 
     const veilInfo = calculateDailyVeilCost(
       next.rooms,
       next.wizard.levels.shadow,
       warders,
       0,
-      batSwarm,
-      umbralWyrm
+      batScale > 0,
+      wyrmScale > 0,
+      batScale || 1,
+      wyrmScale || 1
     );
 
     next.veil.costToday = veilInfo.cost;
@@ -2776,16 +2809,21 @@ export class AnkicasterEngine {
     const next = structuredClone(state);
     const creature = next.creatures.find(c => c.id === creatureId);
     if (!creature) return { state, success: false, error: 'Creature not found.' };
+    if (creature.status !== 'wary' && creature.status !== 'tamed') {
+      return { state, success: false, error: 'Only wary and tamed creatures can be hand-fed.' };
+    }
 
     const def = CREATURE_DEFINITIONS[creature.defId];
     if (!def) return { state, success: false, error: 'Creature species unknown.' };
 
-    // Check diet
-    let canFeed = true;
+    if (creature.lastManualFeedBell === next.bellIndex) {
+      return { state, success: false, error: `${creature.nickname} was already hand-fed this bell.` };
+    }
+
+    // Check diet. A partial bag pays nothing.
     for (const [food, amount] of Object.entries(def.diet)) {
       const current = (next.resources as any)[food] || 0;
       if (current < amount) {
-        canFeed = false;
         return { state, success: false, error: `Need ${amount} ${food} to feed ${creature.nickname}.` };
       }
     }
@@ -2798,15 +2836,18 @@ export class AnkicasterEngine {
     logResourceDiff(next, beforeRes, `Fed ${creature.nickname}`);
 
     creature.hungry = false;
-    creature.bondProgress += 10;
-    if (creature.bondLevel === 1 && creature.bondProgress >= 150) creature.bondLevel = 2;
-    else if (creature.bondLevel === 2 && creature.bondProgress >= 400) creature.bondLevel = 3;
+    creature.lastManualFeedBell = next.bellIndex;
+    creature.bondProgress += MANUAL_FEED_BOND;
+    if (creature.status === 'tamed') {
+      if (creature.bondLevel === 1 && creature.bondProgress >= 150) creature.bondLevel = 2;
+      else if (creature.bondLevel === 2 && creature.bondProgress >= 400) creature.bondLevel = 3;
+    }
 
     next.notices.push({
-      id: `feed-${creature.id}`,
+      id: `feed-${creature.id}-${next.bellIndex}`,
       time: Date.now(),
       type: 'creature',
-      text: `🍎 Fed ${creature.nickname} (${def.name})! Bond deepened.`
+      text: `🍎 Fed ${creature.nickname} (${def.name}). Bond +${MANUAL_FEED_BOND}.`
     });
 
     return { state: next, success: true };
@@ -2963,7 +3004,7 @@ export class AnkicasterEngine {
         break;
       case 'beckon':
         const loose = next.creatures.find(c => c.status === 'loose');
-        if (loose) loose.status = 'tamed';
+        if (loose) recaptureCreature(next, loose, [], 'Beckon brought');
         notice = 'Beckon cast! Escaped creature has returned home safely.';
         break;
       case 'rain_dance':

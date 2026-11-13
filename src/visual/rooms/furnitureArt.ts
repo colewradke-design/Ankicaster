@@ -115,7 +115,6 @@ const TABLE: Record<string, Row> = {
   geode_bed: ['orb', 32, 16, 'floor', SD, VIOLET, 'geode'],
   habitat_module: ['vessel', 32, 16, 'floor', W, LEAF, 'habitat', 1],
   creature_toybox: ['box', 16, 16, 'floor', 0xd97a9a, SUN, 'chest'],
-  treat_dispenser: ['box', 16, 16, 'floor', BRASS, RED, 'dispenser', 1],
   warm_rock: ['statue', 16, 16, 'floor', 0x9c7a58, 0xdb8c46, 'rock'],
   infirmary_cot: ['bed', 32, 16, 'floor', SL, 0xffffff, 'cot'],
   remedy_cabinet: ['box', 16, 24, 'floor', 0xf6f1e8, RED, 'cabinet'],

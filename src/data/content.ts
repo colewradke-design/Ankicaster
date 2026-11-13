@@ -1605,18 +1605,6 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
     rooms: ['meadow_paddock', 'tide_tank', 'aviary', 'gloom_hutch', 'ember_pit', 'crystal_vivarium', 'menagerie'],
     unlock: { type: 'draft', school: 'nature', rarity: 'common' }
   },
-  treat_dispenser: {
-    id: 'treat_dispenser',
-    name: 'Automatic Treat Dispenser',
-    deck: 'grounds',
-    role: 'optional',
-    slots: 1,
-    cost: { mana: 120, stone: 5, reagents: 2 },
-    stats: { order: 1 },
-    specialEffect: 'Creatures here consume 10% less food',
-    rooms: ['meadow_paddock', 'tide_tank', 'aviary', 'gloom_hutch', 'ember_pit', 'crystal_vivarium', 'menagerie'],
-    unlock: { type: 'draft', school: 'alchemy', rarity: 'uncommon' }
-  },
   warm_rock: {
     id: 'warm_rock',
     name: 'Sunning Rock',

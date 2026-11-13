@@ -1134,15 +1134,24 @@ export const BestiaryPanel: React.FC<{
 
                       <div className="text-xs text-slate-400">
                         Diet: {Object.entries(def.diet).map(([k, v]) => `${v} ${k}`).join(', ')}
+                        {c.status === 'tamed' && c.hungry ? ' · buff halved while hungry' : ''}
                       </div>
+                      {c.status === 'loose' && (
+                        <div className="text-xs text-rose-300" data-testid={`capture-${c.id}`}>
+                          {c.captureReviewsLeft != null
+                            ? `${c.captureTamerId === 0 ? state.wizard.name : (characters.find(ch => ch.id === c.captureTamerId)?.name || 'A tamer')} is catching them · ${c.captureReviewsLeft} reviews`
+                            : 'Loose, and nobody is chasing them yet.'}
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2 pt-2 border-t border-slate-800">
                       <button
                         onClick={() => onFeedCreature(c.id)}
-                        className="flex-1 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-200 border border-emerald-500/40 rounded-xl text-xs font-bold transition"
+                        disabled={c.lastManualFeedBell === state.bellIndex || c.status === 'egg' || c.status === 'loose' || c.status === 'away'}
+                        className="flex-1 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/40 disabled:opacity-40 text-emerald-200 border border-emerald-500/40 rounded-xl text-xs font-bold transition"
                       >
-                        Feed Diet
+                        {c.lastManualFeedBell === state.bellIndex ? 'Fed this bell' : 'Feed (+2 bond)'}
                       </button>
                       {c.status === 'wary' && (
                         <select

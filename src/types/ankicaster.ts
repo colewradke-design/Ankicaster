@@ -203,6 +203,8 @@ export interface PlacedRoom {
   cleanliness: number; // 0-100
   lockedUntilReviewIndex?: number;
   lockReason?: string;
+  /** Temporary output multiplier from a creature's escape trouble. */
+  troubleMalus?: { untilReview: number; outputFactor: number; reason: string };
   settings: {
     crop?: string;
     modules?: string[];
@@ -347,6 +349,16 @@ export interface CreatureInstance {
   bondLevel: 0 | 1 | 2 | 3;
   bondProgress: number;
   arrivedDay: number;
+  /** Bell index of the last hand-feeding. One manual feed per bell. */
+  lastManualFeedBell?: number;
+  /** Reviews left until the catcher brings this loose creature home. */
+  captureReviewsLeft?: number;
+  /** 0 is the headmaster. Faculty ids are everyone else. */
+  captureTamerId?: number;
+  /** Status restored when the creature is recaptured. */
+  returnStatus?: 'wary' | 'tamed';
+  /** Resources hidden by escape trouble. Returned on recapture. */
+  stashed?: Record<string, number>;
 }
 
 export interface PotionRecipe {
@@ -570,6 +582,8 @@ export interface FullGameState {
   creatures: CreatureInstance[];
   /** Species IDs discovered by the player (persists even after release or new term). */
   discoveredCreatures?: string[];
+  /** Next meal's refectory cap is multiplied by this, then the field clears. Duskmouse trouble. */
+  pendingMealCapFactor?: number;
   expeditions: ActiveExpedition[];
   potions: PotionRecipe[];
   hand: DraftCard[];

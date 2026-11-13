@@ -415,7 +415,8 @@ test('Automated check: every creature id referenced in engine.ts exists in conte
   const m1 = [...engineSource.matchAll(/c\.defId === '([a-z_]+)'/g)].map(m => m[1]);
   const m2 = [...engineSource.matchAll(/creatures\.some\([^)]*defId === '([a-z_]+)'/g)].map(m => m[1]);
   const m3 = [...engineSource.matchAll(/creatures\.push\(\{[^}]*defId:\s*'([a-z_]+)'/gs)].map(m => m[1]);
-  const checkedIds = new Set([...m1, ...m2, ...m3]);
+  const m4 = [...engineSource.matchAll(/bestBuffScale\([^)]*'([a-z_]+)'\)/g)].map(m => m[1]);
+  const checkedIds = new Set([...m1, ...m2, ...m3, ...m4]);
 
   assert.ok(checkedIds.size > 5, 'Should find multiple creature references in engine.ts');
 
