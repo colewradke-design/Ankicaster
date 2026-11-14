@@ -1308,7 +1308,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
     slots: 1,
     cost: { mana: 140, timber: 10, insight: 2 },
     stats: { charm: 2, focus: 1 },
-    specialEffect: '+2 Leisure capacity',
+    specialEffect: 'Leisure +2',
     rooms: ['common_room', 'faculty_lounge'],
     unlock: { type: 'draft', school: 'arcane', rarity: 'common' }
   },
@@ -1922,7 +1922,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
     slots: 1,
     cost: { mana: 100, stone: 12 },
     stats: { charm: 2 },
-    specialEffect: '+2 Academy Charm for renown ceremonies',
+    specialEffect: 'Morale +2',
     rooms: ['vegetable_patch', 'woodlot', 'herb_garden', 'courtyard_garden', 'standing_stones'],
     unlock: { type: 'std' }
   },

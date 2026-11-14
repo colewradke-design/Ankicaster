@@ -52,7 +52,7 @@ import {
   isMasteryReady,
   calculateTeacherDelay,
   calculateRiftChance,
-  calculateFacultyLimit,
+  getFacultySummary,
   careerAffinityMultiplier,
   classroomSchool,
   describeCareerAffinity,
@@ -309,11 +309,7 @@ export const RosterPanel: React.FC<{
   const canRetire = selectedChar && selectedChar.masteredSchools.length > 0 && ivls.length > 0 && ivls.every(ivl => ivl >= retirementThreshold);
 
   // Faculty limit calculation (Formula F12)
-  const totalWiz = Object.values(state.wizard.levels).reduce((a, b) => a + b, 0);
-  const facBeds = state.rooms.reduce((acc, r) => acc + (r.defId === 'faculty_quarters' ? 2 : 0), 0);
-  const classCount = state.rooms.filter(r => r.defId.startsWith('class_') || r.defId.startsWith('hall_')).length;
-  const studentCount = state.characters.filter(c => c.status === 'student').length;
-  const { limit: facultyLimit, breakdown } = calculateFacultyLimit(totalWiz, facBeds, classCount, studentCount);
+  const { activeFaculty, maxAllowed: facultyLimit, breakdown } = getFacultySummary(state);
 
   return (
     <div className="space-y-4">
@@ -385,7 +381,7 @@ export const RosterPanel: React.FC<{
             <div className="flex items-center justify-between text-xs font-bold text-slate-300 pb-2 border-b border-slate-800">
               <span>Academy Roster ({characters.length})</span>
               <span className="text-amber-400 text-xs">
-                Faculty: {state.characters.filter(c => c.career).length}/{facultyLimit}
+                Faculty: {activeFaculty}/{facultyLimit}
               </span>
             </div>
 
@@ -1411,6 +1407,7 @@ export const RiftPanel: React.FC<{
   const { characters, expeditions, cardSets, allCards, alumniGallery, creatures } = state;
   const [selectedDestId, setSelectedDestId] = useState<string>('mossy_hollow');
   const [selectedHeroIds, setSelectedHeroIds] = useState<number[]>([]);
+  const [selectedSupplies, setSelectedSupplies] = useState<string[]>([]);
   const [selectedCompanionId, setSelectedCompanionId] = useState<number | undefined>(undefined);
 
   // 3-Master Seal check (Rule BR-27)
@@ -1421,6 +1418,10 @@ export const RiftPanel: React.FC<{
   const activeExpedition = expeditions.find(e => e.state === 'active');
   const adventurers = characters.filter(c => c.career === 'adventurer');
   const tamedCreatures = creatures.filter(c => c.status === 'tamed');
+  const maxSupplies = 1 + academyFurnitureEffect(state.rooms, 'rift_supply_slots');
+  const availablePotions = Object.entries(state.resources.potions || {}).filter(([, count]) => count > 0);
+  const provisionsNeeded = dest ? dest.supplies * selectedHeroIds.length : 0;
+  const hasElixir = (state.activeBuffs?.riftElixirCharges || 0) > 0 || selectedSupplies.includes('rift_elixir');
 
   // Calculate party skill (mean honest interval of linked adventurer career cards)
   let totalIvl = 0;
@@ -1442,15 +1443,25 @@ export const RiftPanel: React.FC<{
     dest,
     partySkillDays,
     selectedHeroIds.length,
-    false,
+    hasElixir,
     state.veil.strength < 50
   );
 
   const toggleHero = (id: number) => {
+    const hero = adventurers.find(a => a.id === id);
+    if (!hero || hero.status === 'away' || hero.injury) return;
     if (selectedHeroIds.includes(id)) {
       setSelectedHeroIds(selectedHeroIds.filter(h => h !== id));
     } else if (selectedHeroIds.length < 3) {
       setSelectedHeroIds([...selectedHeroIds, id]);
+    }
+  };
+
+  const toggleSupply = (potionId: string) => {
+    if (selectedSupplies.includes(potionId)) {
+      setSelectedSupplies(selectedSupplies.filter(s => s !== potionId));
+    } else if (selectedSupplies.length < maxSupplies) {
+      setSelectedSupplies([...selectedSupplies, potionId]);
     }
   };
 
@@ -1517,7 +1528,7 @@ export const RiftPanel: React.FC<{
                 >
                   <div className="flex items-center justify-between text-xs font-bold text-slate-100">
                     <span>{d.name} ({d.tier.toUpperCase()})</span>
-                    <span className="text-amber-400">{d.cost} Mana</span>
+                    <span className="text-amber-400">{d.cost} Mana · {d.supplies} Prov/hero</span>
                   </div>
                   <div className="text-xs text-slate-300 mt-1 leading-relaxed">{d.description}</div>
                   <div className="text-xs text-emerald-400 font-medium mt-1">
@@ -1531,7 +1542,7 @@ export const RiftPanel: React.FC<{
             })}
           </div>
 
-          {/* Team Selection, Companion, & Chance Meter */}
+          {/* Team Selection, Companion, Supplies, & Chance Meter */}
           <div className="space-y-4">
             <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
               2. Assemble Party (1–3 Adventurers)
@@ -1544,12 +1555,17 @@ export const RiftPanel: React.FC<{
               ) : (
                 adventurers.map(adv => {
                   const isSelected = selectedHeroIds.includes(adv.id);
+                  const unavailable = adv.status === 'away' || !!adv.injury;
                   return (
                     <div
                       key={adv.id}
                       onClick={() => toggleHero(adv.id)}
-                      className={`p-3 rounded-xl border text-xs cursor-pointer flex items-center justify-between transition shadow ${
-                        isSelected ? 'bg-purple-950/50 border-purple-500 text-purple-200 font-bold' : 'bg-slate-900 border-slate-800 text-slate-300'
+                      className={`p-3 rounded-xl border text-xs flex items-center justify-between transition shadow ${
+                        unavailable
+                          ? 'bg-slate-950 border-slate-800/60 text-slate-500 opacity-60 cursor-not-allowed'
+                          : isSelected
+                          ? 'bg-purple-950/50 border-purple-500 text-purple-200 font-bold cursor-pointer'
+                          : 'bg-slate-900 border-slate-800 text-slate-300 cursor-pointer'
                       }`}
                     >
                       <span className="flex items-center gap-2"><CharacterPortrait character={adv} size={36} />{adv.name}</span>
@@ -1579,6 +1595,35 @@ export const RiftPanel: React.FC<{
               </div>
             )}
 
+            {/* Expedition Supplies (Potions) */}
+            {availablePotions.length > 0 && (
+              <div>
+                <h4 className="text-xs font-bold text-slate-300 uppercase mb-1">
+                  Expedition Supplies ({selectedSupplies.length}/{maxSupplies} slots):
+                </h4>
+                <div className="flex flex-wrap gap-1.5">
+                  {availablePotions.map(([pid, count]) => {
+                    const active = selectedSupplies.includes(pid);
+                    const label = POTION_RECIPES.find(p => p.id === pid)?.name || pid;
+                    return (
+                      <button
+                        key={pid}
+                        type="button"
+                        onClick={() => toggleSupply(pid)}
+                        className={`px-2.5 py-1 rounded-lg border text-xs transition ${
+                          active
+                            ? 'bg-amber-500/20 border-amber-400 text-amber-200 font-bold'
+                            : 'bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-500'
+                        }`}
+                      >
+                        {label} (×{count})
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* Semicircular Chance Meter Display */}
             <div className="bg-slate-950 border border-slate-800 p-5 rounded-2xl text-center space-y-2 shadow-inner">
               <div className="text-xs uppercase tracking-wider text-slate-400 font-bold">
@@ -1600,11 +1645,11 @@ export const RiftPanel: React.FC<{
             </div>
 
             <button
-              onClick={() => onLaunchExpedition(dest.id, selectedHeroIds, [], selectedCompanionId)}
-              disabled={selectedHeroIds.length === 0 || state.mana < dest.cost}
+              onClick={() => onLaunchExpedition(dest.id, selectedHeroIds, selectedSupplies, selectedCompanionId)}
+              disabled={selectedHeroIds.length === 0 || state.mana < dest.cost || state.resources.provisions < provisionsNeeded}
               className="w-full py-3 bg-gradient-to-r from-amber-600 to-purple-600 hover:from-amber-500 hover:to-purple-500 text-slate-950 font-bold rounded-xl text-xs shadow-xl transition disabled:opacity-40"
             >
-              Step Through the Rift ({dest.cost} Mana)
+              Step Through the Rift ({dest.cost} Mana · {provisionsNeeded} Provisions)
             </button>
           </div>
         </div>

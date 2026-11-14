@@ -60,6 +60,13 @@ export function drawLockHazard(g: Painter, room: PlacedRoom, box: Box) {
     for (let x = L + 4; x < L + W; x += 8) line(g, x, T + 3, x + 2, T + 7, 0xffffff, 0.75, 0.8);
   } else if (kind.includes('breach')) {
     g.ellipse(L + W / 2, T + box.height / 2, 7, 12).fill({ color: 0x7d5ba6, alpha: 0.7 });
+  } else if (kind.includes('echo')) {
+    g.rect(L, T, W, box.height).fill({ color: 0x1e254d, alpha: 0.28 });
+    const cx = L + W / 2;
+    const cy = T + box.height / 2;
+    g.circle(cx, cy, 5).stroke({ color: 0xa78bfa, width: 1.2, alpha: 0.7 });
+    g.circle(cx, cy, 10).stroke({ color: 0x7dd3fc, width: 1, alpha: 0.55 });
+    g.circle(cx, cy, 15).stroke({ color: 0xc084fc, width: 0.9, alpha: 0.35 });
   } else {
     g.rect(L, T, W, box.height).fill({ color: 0x2f3a73, alpha: 0.25 });
   }

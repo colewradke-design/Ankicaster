@@ -48,7 +48,9 @@ import {
 } from './requiredFurniture';
 import {
   academyFurnitureEffect,
+  FACULTY_CAREERS,
   FURNITURE_EFFECTS,
+  getFacultySummary,
   calculateReviewMana,
   calculateDailyVeilCost,
   calculateFacultyLimit,
@@ -2875,21 +2877,8 @@ export class AnkicasterEngine {
     }
 
     // Check faculty limits (F12, BR-14, BR-22) - no hard cap of 12
-    const facultyCareers: CareerType[] = ['teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist', 'builder'];
-    if (facultyCareers.includes(career)) {
-      const activeFaculty = next.characters.filter(c => c.career && facultyCareers.includes(c.career) && c.careerState === 'active' && c.id !== char.id).length;
-      
-      const dorms = next.rooms.filter(r => r.state === 'built' && (r.defId === 'dormitory' || r.defId === 'grand_dormitory' || r.defId === 'faculty_quarters'));
-      let facultyBeds = 0;
-      for (const d of dorms) {
-        facultyBeds += d.furniture.filter(f => f.slotKind.includes('faculty_bed') || f.slotKind.includes('bed')).length;
-      }
-
-      const totalWiz = Object.values(next.wizard.levels).reduce((a, b) => a + b, 0);
-      const classroomsCount = next.rooms.filter(r => r.state === 'built' && (r.defId.startsWith('class_') || r.defId.startsWith('hall_'))).length;
-      const studentsCount = next.characters.filter(c => c.status === 'student').length;
-
-      const maxAllowed = calculateFacultyLimit(totalWiz, facultyBeds, classroomsCount, studentsCount).limit;
+    if (FACULTY_CAREERS.includes(career)) {
+      const { activeFaculty, maxAllowed } = getFacultySummary(next, char.id);
 
       if (activeFaculty >= maxAllowed) {
         return {
@@ -3851,6 +3840,23 @@ export class AnkicasterEngine {
     next.draftsCompleted = (next.draftsCompleted || 0) + 1;
 
     return { state: next, cards, cost, tutorial };
+  }
+
+  /**
+   * Spend 1 draftRerollToken (from Starlight Ink) to re-deal 3 cards for the current draft deck.
+   */
+  static rerollDraftCards(
+    state: FullGameState,
+    deck: DraftDeckId,
+    rng: () => number = Math.random
+  ): { state: FullGameState; cards: DraftCard[]; success: boolean; error?: string } {
+    if ((state.draftRerollTokens || 0) <= 0) {
+      return { state, cards: [], success: false, error: 'No draft reroll tokens available.' };
+    }
+    const next = structuredClone(state);
+    next.draftRerollTokens = (next.draftRerollTokens || 0) - 1;
+    const cards = dealDraft(next, deck, rng);
+    return { state: next, cards, success: true };
   }
 
   /**

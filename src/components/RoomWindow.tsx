@@ -27,7 +27,7 @@ import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS, SPELL_DEFINITIONS, CREATURE_DE
 import {
   calculateRoomQuality, calculateFacultyLimit, wizardOrbQuote,
   FURNITURE_EFFECTS, formatFurnitureEffect, FurnitureEffectKind, roomFurnitureEffects,
-  careerAffinityMultiplier, classroomSchool
+  careerAffinityMultiplier, classroomSchool, getFacultySummary
 } from '../utils/formulas';
 import { isPatternKnown } from '../utils/decks';
 import { HAZARD_DISPEL_MANA_COST } from '../utils/engine';
@@ -81,11 +81,7 @@ function furnitureBuyTitle(room: PlacedRoom, stats: { comfort?: number; focus?: 
 }
 
 export function facultyLimitFor(state: FullGameState) {
-  const totalWiz = Object.values(state.wizard.levels).reduce((a, b) => a + b, 0);
-  const facBeds = state.rooms.reduce((acc, r) => acc + (r.defId === 'faculty_quarters' ? 2 : 0), 0);
-  const classCount = state.rooms.filter(r => r.defId.startsWith('class_') || r.defId.startsWith('hall_')).length;
-  const studentCount = state.characters.filter(c => c.status === 'student').length;
-  return calculateFacultyLimit(totalWiz, facBeds, classCount, studentCount).limit;
+  return getFacultySummary(state).maxAllowed;
 }
 
 /** Small room-specific summary line (status only, no actions). */
@@ -141,8 +137,8 @@ const RoomSummary: React.FC<{ state: FullGameState; room: PlacedRoom; onChangeLo
   }
   const chips: React.ReactNode[] = [];
   if (id === 'faculty_quarters' || id === 'faculty_lounge') {
-    const fac = state.characters.filter(c => c.career).length;
-    chips.push(<Chip key="f" icon={<Briefcase className="w-3.5 h-3.5 text-amber-300" />} label="Faculty" value={`${fac}/${facultyLimitFor(state)}`} title="Faculty / limit (F12)" />);
+    const { activeFaculty, maxAllowed } = getFacultySummary(state);
+    chips.push(<Chip key="f" icon={<Briefcase className="w-3.5 h-3.5 text-amber-300" />} label="Faculty" value={`${activeFaculty}/${maxAllowed}`} title="Faculty / limit (F12)" />);
   }
   if (getRoomScreens(id).includes('students')) {
     const st = state.characters.filter(c => !c.career).length;
@@ -650,7 +646,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                 </div>
               )}
 
-              {room.level < 3 && (
+              {!isSite && room.level < 3 && (
                 <div className="flex items-center justify-between gap-2" data-tour="room-renovate">
                   <span className="text-slate-300" title="+2 optional furniture slots, better efficiency; Level 3 unlocks the room perk">
                     Renovate → Lv {room.level + 1}
@@ -741,7 +737,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                         className="shrink-0 px-2 py-1 min-h-[28px] bg-amber-500/15 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-md text-[12px] font-bold"
                         title={`${buyTitle} · Install ${fDef.name}`}
                       >
-                        {(stored[fDef.id] || 0) > 0 ? `Stored ×${stored[fDef.id]}` : <>{fDef.cost.mana}m{fDef.cost.timber ? ` · ${fDef.cost.timber}T` : ''}</>}
+                        {(stored[fDef.id] || 0) > 0 ? `Stored ×${stored[fDef.id]}` : costText(fDef.cost)}
                       </button>
                     </div>
                     );

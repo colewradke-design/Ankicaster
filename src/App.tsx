@@ -76,6 +76,7 @@ export default function App() {
   // Modals & Active Inspector State
   const [selectedRoom, setSelectedRoom] = useState<PlacedRoom | null>(null);
   const [isDraftModalOpen, setIsDraftModalOpen] = useState(false);
+  const [draftDeck, setDraftDeck] = useState<'foundation' | 'grounds' | 'magic'>('foundation');
   const [draftChoices, setDraftChoices] = useState<DraftCard[]>([]);
   const [draftTutorial, setDraftTutorial] = useState<string | undefined>();
   const [isDaySummaryOpen, setIsDaySummaryOpen] = useState(false);
@@ -522,7 +523,10 @@ export default function App() {
       if (freeStart) res.state.tutorial = applyTutorialAction(res.state.tutorial, 'start-ponder');
       setState(res.state);
       setOpenScreen(current => (current === 'ponder' ? null : current));
-      addToast(`Orb session queued for ${school.toUpperCase()}!`, 'success');
+      addToast(
+        isGrimoire ? `Grimoire study queued for ${school.toUpperCase()}!` : `Orb session queued for ${school.toUpperCase()}!`,
+        'success'
+      );
       playChime('review');
     }
   };
@@ -666,9 +670,22 @@ export default function App() {
       addToast(res.error, 'warning');
     } else {
       setState(res.state);
+      setDraftDeck(deck);
       setDraftChoices(res.cards);
       setDraftTutorial(res.tutorial);
       setIsDraftModalOpen(true);
+      playChime('review');
+    }
+  };
+
+  // Handler: Reroll Draft Cards using Starlight Ink token
+  const handleRerollDraft = () => {
+    const res = AnkicasterEngine.rerollDraftCards(state, draftDeck);
+    if (res.error) {
+      addToast(res.error, 'warning');
+    } else {
+      setState(res.state);
+      setDraftChoices(res.cards);
       playChime('review');
     }
   };
@@ -733,7 +750,9 @@ export default function App() {
   // Handler: Assign Tamer
   const handleAssignTamer = (creatureId: number, tamerId: number) => {
     const res = AnkicasterEngine.assignTamerToCreature(state, creatureId, tamerId);
-    if (res.success) {
+    if (!res.success) {
+      addToast('Cannot assign tamer.', 'warning');
+    } else {
       setState(res.state);
       addToast('Tamer assigned to familiar!', 'success');
     }
@@ -1023,7 +1042,8 @@ export default function App() {
           onChangeLook={() => { setSelectedRoom(null); setLookOnly(true); setIsCreationModalOpen(true); }}
           onRemoveFurniture={(roomId, fId) => {
             const res = AnkicasterEngine.removeFurniture(state, roomId, fId);
-            if (res.success) setState(res.state);
+            if (!res.success) addToast(res.error || 'Cannot remove furniture.', 'warning');
+            else setState(res.state);
           }}
           detailsOpen={!!tutorial && tutorial.phase === 'tour' && studyOpen && tourOpensDetails(tutorial)}
         />
@@ -1087,6 +1107,17 @@ export default function App() {
                   </div>
                 );
               })}
+            </div>
+            <div className="flex items-center justify-between gap-2 pt-1">
+              {(state.draftRerollTokens || 0) > 0 ? (
+                <button
+                  onClick={handleRerollDraft}
+                  className="px-4 py-2 rounded-xl border border-amber-400/50 bg-amber-950/40 hover:bg-amber-900/50 text-amber-200 text-xs font-bold transition"
+                >
+                  ✨ Reroll Cards ({state.draftRerollTokens} Starlight Ink)
+                </button>
+              ) : <span />}
+              <span className="text-[11px] text-slate-400">Deck: <strong className="capitalize text-slate-200">{draftDeck}</strong></span>
             </div>
           </div>
         </div>

@@ -635,4 +635,29 @@ export function describeCareerAffinity(masteredSchools: SchoolType[], career: Ca
   return `+${def.focusedPct}% ${schoolList} ${def.focusedNoun} only`;
 }
 
+export const FACULTY_CAREERS: CareerType[] = [
+  'teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist', 'builder'
+];
+
+export function getFacultySummary(state: FullGameState, excludeCharId?: number) {
+  const activeFaculty = state.characters.filter(
+    c => c.career && FACULTY_CAREERS.includes(c.career) && c.careerState === 'active' && c.id !== excludeCharId
+  ).length;
+  const dorms = state.rooms.filter(
+    r => r.state === 'built' && (r.defId === 'dormitory' || r.defId === 'grand_dormitory' || r.defId === 'faculty_quarters')
+  );
+  let facultyBeds = 0;
+  for (const d of dorms) {
+    facultyBeds += d.furniture.filter(f => f.slotKind.includes('faculty_bed') || f.slotKind.includes('bed')).length;
+  }
+  const totalWiz = Object.values(state.wizard.levels).reduce((a, b) => a + b, 0);
+  const classroomsCount = state.rooms.filter(
+    r => r.state === 'built' && (r.defId.startsWith('class_') || r.defId.startsWith('hall_'))
+  ).length;
+  const studentsCount = state.characters.filter(c => c.status === 'student').length;
+  const { limit, breakdown } = calculateFacultyLimit(totalWiz, facultyBeds, classroomsCount, studentsCount);
+  return { activeFaculty, maxAllowed: limit, breakdown };
+}
+
+
 
