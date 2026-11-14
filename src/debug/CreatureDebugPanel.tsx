@@ -93,6 +93,7 @@ export function CreatureDebugPanel({
   const [hazardRoomId, setHazardRoomId] = useState<number | ''>('');
   const [hazardType, setHazardType] = useState<NonNullable<PlacedRoom['hazard']>['type']>('spill_of_night');
   const [expeditionOutcome, setExpeditionOutcome] = useState<'safe' | 'minor_injury' | 'serious_injury' | 'curse' | 'retreat'>('safe');
+  const [selectedHeroIds, setSelectedHeroIds] = useState<number[]>([]);
   const [previewEventType, setPreviewEventType] = useState<VisualEventType>('mastery_granted');
   const [previewRoomId, setPreviewRoomId] = useState<number | ''>('');
 
@@ -109,6 +110,7 @@ export function CreatureDebugPanel({
 
   const selectedChar = state.characters.find(c => c.id === selectedCharId) || state.characters[0];
   const builtRooms = state.rooms.filter(r => r.state === 'built');
+  const builtClassrooms = builtRooms.filter(r => r.defId.startsWith('class_'));
   const targetHazardRoomId = hazardRoomId !== '' ? Number(hazardRoomId) : (builtRooms[0]?.id ?? 1);
   const targetPreviewRoomId = previewRoomId !== '' ? Number(previewRoomId) : (builtRooms[0]?.id ?? 1);
 
@@ -116,7 +118,9 @@ export function CreatureDebugPanel({
     if (result.creatureId !== undefined) setSelectedId(result.creatureId);
     if (result.characterId !== undefined) setSelectedCharId(result.characterId);
     setNote(result.message);
-    onChange(result.state);
+    if (result.state !== state) {
+      onChange(result.state);
+    }
   };
 
   const tamingPct = (() => {
@@ -518,7 +522,7 @@ export function CreatureDebugPanel({
                       </select>
                     </label>
                     <label className="block space-y-1">
-                      <span className="text-slate-300">Workplace / Classroom</span>
+                      <span className="text-slate-300">Workplace Room</span>
                       <select
                         value={selectedChar.workplaceRoomId ?? ''}
                         onChange={e => apply(debugUpdateCharacter(state, selectedChar.id, { workplaceRoomId: e.target.value === '' ? null : Number(e.target.value) }))}
@@ -533,6 +537,32 @@ export function CreatureDebugPanel({
                       </select>
                     </label>
                   </div>
+
+                  {builtClassrooms.length > 0 && (
+                    <label className="block space-y-1">
+                      <span className="text-slate-300">Assign Teacher to Classroom</span>
+                      <select
+                        value={selectedChar.career === 'teacher' && selectedChar.workplaceRoomId ? selectedChar.workplaceRoomId : ''}
+                        onChange={e => {
+                          const cid = e.target.value === '' ? null : Number(e.target.value);
+                          apply(
+                            debugUpdateCharacter(state, selectedChar.id, {
+                              career: cid === null ? 'none' : 'teacher',
+                              workplaceRoomId: cid
+                            })
+                          );
+                        }}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1"
+                      >
+                        <option value="">Not teaching a classroom…</option>
+                        {builtClassrooms.map(r => (
+                          <option key={r.id} value={r.id}>
+                            #{r.id} {ROOM_DEFINITIONS[r.defId]?.name || r.defId}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
 
                   <div className="space-y-1">
                     <div className="flex items-center justify-between">
@@ -625,6 +655,27 @@ export function CreatureDebugPanel({
                       onChange={e => apply(debugUpdateCharacter(state, selectedChar.id, { morale: Number(e.target.value) }))}
                       className="w-full"
                     />
+                    {(['hunger', 'rest', 'leisure', 'composure', 'health'] as const).map(needKey => (
+                      <label key={needKey} className="flex items-center gap-2 text-[11px]">
+                        <span className="w-20 capitalize text-slate-400">
+                          {needKey} ({Math.round(selectedChar.needs[needKey])})
+                        </span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          value={Math.round(selectedChar.needs[needKey])}
+                          onChange={e =>
+                            apply(
+                              debugUpdateCharacter(state, selectedChar.id, {
+                                needs: { [needKey]: Number(e.target.value) }
+                              })
+                            )
+                          }
+                          className="flex-1"
+                        />
+                      </label>
+                    ))}
                   </div>
 
                   <div className="grid grid-cols-2 gap-1.5">
@@ -727,6 +778,31 @@ export function CreatureDebugPanel({
               {/* Expedition Outcomes */}
               <div className="space-y-1.5 border-t border-slate-800 pt-2">
                 <span className="font-bold text-amber-200 block">Trigger Expedition Outcome</span>
+                {state.characters.length > 0 && (
+                  <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto bg-slate-900/60 p-1 rounded border border-slate-800">
+                    {state.characters.map(c => {
+                      const picked = selectedHeroIds.includes(c.id);
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() =>
+                            setSelectedHeroIds(prev =>
+                              prev.includes(c.id) ? prev.filter(id => id !== c.id) : [...prev, c.id]
+                            )
+                          }
+                          className={`px-1.5 py-0.5 rounded text-[10px] border ${
+                            picked
+                              ? 'bg-indigo-800 border-indigo-400 text-white font-bold'
+                              : 'bg-slate-900 border-slate-700 text-slate-400'
+                          }`}
+                        >
+                          {c.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-1.5">
                   <select
                     value={expeditionOutcome}
@@ -739,7 +815,15 @@ export function CreatureDebugPanel({
                   </select>
                   <button
                     type="button"
-                    onClick={() => apply(debugTriggerExpeditionOutcome(state, expeditionOutcome))}
+                    onClick={() =>
+                      apply(
+                        debugTriggerExpeditionOutcome(
+                          state,
+                          expeditionOutcome,
+                          selectedHeroIds.length > 0 ? selectedHeroIds : undefined
+                        )
+                      )
+                    }
                     className="py-1.5 rounded-lg bg-indigo-900 hover:bg-indigo-800 border border-indigo-700 font-bold"
                   >
                     Force Outcome

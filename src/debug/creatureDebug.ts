@@ -29,7 +29,7 @@ import { findAutoPlacement, getGridSize, validatePlacement } from '../utils/plac
 import { allFurnitureIds, fillRequiredFixtures } from '../utils/requiredFurniture';
 import { ONE_BY_ONE_PEN_CAP, penCreatureCapacity, syncDiscoveredCreatures } from '../utils/creatures';
 import { SKIN_TONES, HAIR_COLOURS, HAIR_STYLES } from '../utils/appearance';
-import { VisualEventType, VISUAL_EVENT_CATALOGUE } from '../visual/events/visualEvents';
+import { VisualEventType, VISUAL_EVENT_CATALOGUE, emitVisualPreview } from '../visual/events/visualEvents';
 import type { VisualWorld } from '../visual/world/VisualWorld';
 
 export const SCHOOL_HEX: Record<SchoolType, string> = {
@@ -949,19 +949,28 @@ export function debugClearAllHazards(state: FullGameState): DebugResult {
 export function debugTriggerExpeditionOutcome(
   state: FullGameState,
   outcome: 'safe' | 'minor_injury' | 'serious_injury' | 'curse' | 'retreat',
-  expeditionId?: number
+  expeditionIdOrHeroIds?: number | number[]
 ): DebugResult {
   const next = touch(state);
+  const expeditionId = typeof expeditionIdOrHeroIds === 'number' ? expeditionIdOrHeroIds : undefined;
+  const heroIds = Array.isArray(expeditionIdOrHeroIds) ? expeditionIdOrHeroIds : undefined;
+
   let exp = expeditionId
     ? next.expeditions.find(e => e.id === expeditionId)
     : next.expeditions.find(e => e.state === 'active');
 
+  const chosenTeamIds =
+    heroIds && heroIds.length > 0
+      ? heroIds
+      : exp?.teamIds?.length
+      ? exp.teamIds
+      : next.characters.slice(0, 2).map(c => c.id);
+
   if (!exp) {
-    const teamIds = next.characters.slice(0, 2).map(c => c.id);
     exp = {
       id: allocId(next),
       destinationId: 'crystal_caverns',
-      teamIds,
+      teamIds: chosenTeamIds,
       suppliesTaken: [],
       partySkillDays: 10,
       chance: 80,
@@ -973,6 +982,8 @@ export function debugTriggerExpeditionOutcome(
       state: 'active'
     };
     next.expeditions.push(exp);
+  } else if (heroIds && heroIds.length > 0) {
+    exp.teamIds = chosenTeamIds;
   }
 
   exp.state = 'returned';
@@ -999,7 +1010,9 @@ export function debugTriggerExpeditionOutcome(
       ? 'expedition_retreat'
       : outcome === 'curse'
       ? 'expedition_return_curse'
-      : 'expedition_return_injury';
+      : outcome === 'minor_injury'
+      ? 'expedition_minor_injury'
+      : 'expedition_serious_injury';
 
   next.notices.push({
     id: `debug-exp-${exp.id}-${Date.now()}`,
@@ -1017,6 +1030,14 @@ export function debugTriggerExpeditionOutcome(
   return { state: next, message: `Triggered expedition outcome: ${outcome}.` };
 }
 
+type PreviewVignetteListener = (type: VisualEventType, roomId?: number) => void;
+const previewListeners = new Set<PreviewVignetteListener>();
+
+export function onDebugPreviewVignette(cb: PreviewVignetteListener): () => void {
+  previewListeners.add(cb);
+  return () => previewListeners.delete(cb);
+}
+
 /**
  * Pure visual preview helper: queues/plays a vignette in VisualWorld for any VisualEventType
  * WITHOUT mutating FullGameState at all (satisfies VR-01 and Test #6).
@@ -1029,6 +1050,12 @@ export function previewVisualEventInWorld(
 ) {
   const fallbackId = roomId ?? state.rooms.find(r => r.defId === 'entrance_hall')?.id ?? 1;
   world.eventDispatcher.triggerPreview(type, fallbackId, world.clockMs);
+  if (type === 'day_tick_paid') {
+    world.veilRippleUntilMs = world.clockMs + 1500;
+  } else if (type === 'day_tick_unpaid') {
+    world.veilDimUntilMs = world.clockMs + 1000;
+  }
+  world.renderAtmosphereAndLighting();
   world.renderEventVignettes();
 }
 
@@ -1040,15 +1067,11 @@ export function debugFirePreviewVignette(
   if (!VISUAL_EVENT_CATALOGUE[type]) {
     return { state, message: `Unknown visual event type: ${type}` };
   }
-  const next: FullGameState = {
-    ...state,
-    debugPreviewEvent: {
-      type,
-      nonce: Date.now() + Math.random(),
-      roomId
-    }
-  };
-  return { state: next, message: `Fired visual vignette preview: ${type}.` };
+  emitVisualPreview(type, roomId);
+  if (previewListeners.size > 0) {
+    for (const cb of previewListeners) cb(type, roomId);
+  }
+  return { state, message: `Fired visual vignette preview: ${type} (no state change).` };
 }
 
 // ============================================================================

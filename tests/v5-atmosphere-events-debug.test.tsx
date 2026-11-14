@@ -70,10 +70,11 @@ function deepFreeze<T>(obj: T): T {
 }
 
 test('Part A: Time-of-day phases, visualTime override, Veil bands, clouds, parallax hills, sun/moon, and night lights', () => {
-  // 1. Time phase info for Dawn (06:00), Day (12:00), Dusk (18:30), Night (00:00)
-  assert.equal(getTimePhaseInfo(6.0).phase, 'dawn');
-  assert.equal(getTimePhaseInfo(12.0).phase, 'day');
+  // 1. Time phase info for Dawn (06:30), Day (13:00), Dusk (18:30), Night (23:00 & 00:00)
+  assert.equal(getTimePhaseInfo(6.5).phase, 'dawn');
+  assert.equal(getTimePhaseInfo(13.0).phase, 'day');
   assert.equal(getTimePhaseInfo(18.5).phase, 'dusk');
+  assert.equal(getTimePhaseInfo(23.0).phase, 'night');
   assert.equal(getTimePhaseInfo(0.0).phase, 'night');
 
   // Linear blend progress in Dawn (05:30 -> 07:30) and Dusk (17:30 -> 19:30)
@@ -102,11 +103,19 @@ test('Part A: Time-of-day phases, visualTime override, Veil bands, clouds, paral
   assert.equal(resolveEffectiveHours(debugOverride, midnightDate), 6.25);
   assert.equal(computeAtmosphere(debugOverride, { now: midnightDate }).phase, 'dawn');
 
-  // 3. getVeilBand(strength) returns strong / thinning / thin / torn for 90 / 60 / 35 / 10
+  // 3. getVeilBand(strength) returns strong / thinning / thin / torn for 90 / 60 / 35 / 10 and exact boundaries
+  assert.equal(getVeilBand(100), 'strong');
   assert.equal(getVeilBand(90), 'strong');
+  assert.equal(getVeilBand(80), 'strong');
+  assert.equal(getVeilBand(79), 'thinning');
   assert.equal(getVeilBand(60), 'thinning');
+  assert.equal(getVeilBand(50), 'thinning');
+  assert.equal(getVeilBand(49), 'thin');
   assert.equal(getVeilBand(35), 'thin');
+  assert.equal(getVeilBand(20), 'thin');
+  assert.equal(getVeilBand(19), 'torn');
   assert.equal(getVeilBand(10), 'torn');
+  assert.equal(getVeilBand(0), 'torn');
 
   // 4. reduceMotion freezes cloud drift
   const c0 = computeClouds(1600, 400, 0, false);
@@ -279,22 +288,45 @@ test('Part B: VisualEventDispatcher rate-limiting, no away-time replay, 0 per-re
   assert.equal(activeBigInHall.length, 1, 'At most 1 big effect active in the same room immediately');
   assert.ok(dispatcher.getQueuedEffects().length > 0, 'Remaining big effects are queued');
 
-  // Missing roomId falls back to Entrance Hall and never throws
+  // Missing or invalid roomId falls back to Entrance Hall and never throws;
+  // a notice WITHOUT data.roomId gets the generic_sparkle version on Entrance Hall
   const fallbackState = structuredClone(burstState);
-  fallbackState.notices.push({
-    id: 'missing-room-notice',
-    time: Date.now() + 50,
-    type: 'spell',
-    text: 'Mystery spell',
-    data: { roomId: 999999, visualEventType: 'spell_cast' }
-  });
+  fallbackState.notices.push(
+    {
+      id: 'missing-room-notice',
+      time: Date.now() + 50,
+      type: 'spell',
+      text: 'Mystery spell',
+      data: { roomId: 999999, visualEventType: 'spell_cast' }
+    },
+    {
+      id: 'no-room-id-notice',
+      time: Date.now() + 60,
+      type: 'spell',
+      text: 'Roomless spell',
+      data: { visualEventType: 'spell_cast' }
+    }
+  );
   assert.doesNotThrow(() => {
     dispatcher.ingestSnapshot(fallbackState, 8000);
   });
   const fallbackFx = [...dispatcher.getActiveEffects(), ...dispatcher.getQueuedEffects()].find(
     e => e.type === 'spell_cast'
   );
-  assert.equal(fallbackFx?.roomId, hallId, 'Missing roomId falls back to Entrance Hall');
+  assert.equal(fallbackFx?.roomId, hallId, 'Invalid roomId falls back to Entrance Hall');
+  const genericSparkleFx = [...dispatcher.getActiveEffects(), ...dispatcher.getQueuedEffects()].find(
+    e => e.type === 'generic_sparkle'
+  );
+  assert.ok(genericSparkleFx, 'Notice without data.roomId gets generic_sparkle');
+  assert.equal(genericSparkleFx?.roomId, hallId, 'generic_sparkle targets Entrance Hall');
+
+  // Meal window is debounced to at most 1 per 5 minutes (300,000 ms)
+  const mealDisp = new VisualEventDispatcher();
+  mealDisp.ingestSnapshot(base, 0);
+  assert.equal(mealDisp.notifyMealWindow(base, 1000), true, 'First meal window fires');
+  assert.equal(mealDisp.notifyMealWindow(base, 60_000), false, 'Second meal window within 5 min is debounced');
+  assert.equal(mealDisp.notifyMealWindow(base, 299_999), false, 'Still debounced just under 5 min');
+  assert.equal(mealDisp.notifyMealWindow(base, 301_001), true, 'Meal window fires again after 5 minutes');
 
   // celebrationSize: 'small' downgrades 'big' to 'small'; 'off' suppresses non-essential effects
   const smallDisp = new VisualEventDispatcher();
@@ -392,7 +424,7 @@ test('VR-01: Deep-frozen FullGameState passed through VisualWorld with atmospher
 });
 
 test('Part C: Debug Tools actions (People, Events & Hazards, Atmosphere, Academy, and non-mutating Visual Event Preview)', () => {
-  // 1. Force-enrolling a student works on a fresh academy with 0 free cards and 0 beds
+  // 1. Force-enrolling a student works on a fresh academy with 0 free cards and 0 beds (no NaN fields)
   let state = createNewAcademy();
   state.allCards = {};
   state.mana = 0;
@@ -401,6 +433,10 @@ test('Part C: Debug Tools actions (People, Events & Hazards, Atmosphere, Academy
   assert.equal(state.characters.length, 1);
   assert.equal(state.characters[0].name, 'Astra Starweaver');
   assert.equal(state.characters[0].currentSchool, 'nature');
+  assert.equal(Number.isNaN(state.characters[0].morale), false);
+  for (const val of Object.values(state.characters[0].needs)) {
+    assert.equal(Number.isNaN(val), false);
+  }
 
   // +5 students
   state = debugForceEnrollFiveStudents(state, 'light').state;
@@ -448,9 +484,11 @@ test('Part C: Debug Tools actions (People, Events & Hazards, Atmosphere, Academy
   state = debugClearAllHazards(state).state;
   assert.equal(state.rooms.find(r => r.id === hallId)?.hazard, undefined);
 
-  // Expedition outcome debug
-  state = debugTriggerExpeditionOutcome(state, 'curse').state;
-  assert.ok(state.expeditions.some(e => e.outcome === 'curse'));
+  // Expedition outcome debug on chosen heroes
+  const heroId = state.characters[0].id;
+  state = debugTriggerExpeditionOutcome(state, 'curse', [heroId]).state;
+  assert.ok(state.expeditions.some(e => e.outcome === 'curse' && e.teamIds.includes(heroId)));
+  assert.equal(state.characters.find(c => c.id === heroId)?.injury?.type, 'hexed');
 
   // Atmosphere & Academy debug actions
   state = debugSetTimeOverride(state, 18.5).state;

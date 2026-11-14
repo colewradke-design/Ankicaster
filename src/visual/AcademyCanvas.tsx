@@ -23,6 +23,7 @@ import { reviewsToGoText } from '../utils/construction';
 import { formatMaterialCost } from '../utils/resourceReport';
 import { tamingRequirement } from './creatures/creatureArt';
 import { arrivalStage, arrivalStageLabel, originLabel } from '../utils/creatures';
+import { registerVisualPreviewListener } from './events/visualEvents';
 
 TextureStyle.defaultOptions.scaleMode = 'nearest';
 
@@ -162,6 +163,17 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
 
     const world = new VisualWorld();
     worldRef.current = world;
+    const unsubPreview = registerVisualPreviewListener((type, roomId) => {
+      const targetId = roomId ?? latestRef.current.state.rooms.find(r => r.defId === 'entrance_hall')?.id ?? 1;
+      world.eventDispatcher.triggerPreview(type, targetId, world.clockMs);
+      if (type === 'day_tick_paid') {
+        world.veilRippleUntilMs = world.clockMs + 1500;
+      } else if (type === 'day_tick_unpaid') {
+        world.veilDimUntilMs = world.clockMs + 1000;
+      }
+      world.renderAtmosphereAndLighting();
+      world.renderEventVignettes();
+    });
 
     const app = new Application();
     appRef.current = app;
@@ -259,6 +271,7 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
 
     return () => {
       isMounted = false;
+      unsubPreview();
       if (tick) {
         try { app.ticker.remove(tick); } catch { /* app already destroyed */ }
         tick = null;

@@ -872,10 +872,25 @@ export function computeMessengerOwlState(
   };
 }
 
+export type VisualPreviewHandler = (type: VisualEventType, roomId?: number) => void;
+const visualPreviewListeners = new Set<VisualPreviewHandler>();
+
+export function registerVisualPreviewListener(cb: VisualPreviewHandler): () => void {
+  visualPreviewListeners.add(cb);
+  return () => visualPreviewListeners.delete(cb);
+}
+
+export function emitVisualPreview(type: VisualEventType, roomId?: number): boolean {
+  if (visualPreviewListeners.size === 0) return false;
+  for (const cb of visualPreviewListeners) cb(type, roomId);
+  return true;
+}
+
 export class VisualEventDispatcher {
   private prev: SnapshotSummary | null = null;
   public active: ActiveVisualEvent[] = [];
   public queued: ActiveVisualEvent[] = [];
+  public activeIncidents: Array<ActiveHazardVignette & { startMs: number; durationMs: number }> = [];
   private lastBigByRoom = new Map<number, number>();
   private lastMealWindowMs = -Infinity;
   private seq = 1;
@@ -890,6 +905,10 @@ export class VisualEventDispatcher {
     return this.queued;
   }
 
+  public getActiveIncidentVignettes(): ActiveHazardVignette[] {
+    return this.activeIncidents;
+  }
+
   /**
    * Explicitly seed snapshot from state without emitting any events (used on initial open or away sync).
    */
@@ -901,6 +920,7 @@ export class VisualEventDispatcher {
     this.prev = null;
     this.active = [];
     this.queued = [];
+    this.activeIncidents = [];
     this.lastBigByRoom.clear();
     this.lastMealWindowMs = -Infinity;
     this.rippleStartMs = null;
@@ -1025,6 +1045,20 @@ export class VisualEventDispatcher {
       if (prev.noticeIds.has(notice.id)) continue;
 
       const d = notice.data;
+      if (d?.incidentId && HAZARD_VIGNETTE_REGISTRY[d.incidentId]) {
+        const incSpec = HAZARD_VIGNETTE_REGISTRY[d.incidentId];
+        const incRoom = resolveTargetRoom(state.rooms, d.roomId);
+        this.activeIncidents.push({
+          roomId: incRoom.roomId,
+          hazardId: incSpec.id,
+          key: incSpec.id,
+          spec: incSpec,
+          def: incSpec,
+          startMs: nowMs,
+          durationMs: state.settings.reduceMotion ? 600 : 1800
+        });
+      }
+
       const mappedType = this.mapNoticeToVisualEventType(notice.type, notice.text, d);
       if (!mappedType) continue;
 
@@ -1473,6 +1507,7 @@ export class VisualEventDispatcher {
 
   public tick(nowMs: number): void {
     this.active = this.active.filter(e => nowMs - e.startTimeMs < e.durationMs);
+    this.activeIncidents = this.activeIncidents.filter(inc => nowMs - inc.startMs < inc.durationMs);
     if (this.rippleStartMs !== null && nowMs - this.rippleStartMs >= 1800) {
       this.rippleStartMs = null;
     }

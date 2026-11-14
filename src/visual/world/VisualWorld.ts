@@ -740,8 +740,8 @@ export class VisualWorld {
     if (!this.state) return;
     const reduceMotion = !!this.state.settings.reduceMotion;
 
-    // 1. Active room hazard vignettes
-    const hazards = getActiveHazardVignettes(this.state);
+    // 1. Active room hazard vignettes + transient incident vignettes
+    const hazards = [...getActiveHazardVignettes(this.state), ...this.eventDispatcher.getActiveIncidentVignettes()];
     for (const h of hazards) {
       const room = this.state.rooms.find(r => r.id === h.roomId);
       if (!room) continue;
