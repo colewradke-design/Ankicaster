@@ -14,6 +14,22 @@ import { PlacedRoom } from '../../types/ankicaster';
 import { PALETTE } from '../sprites/forge/palettes';
 import { Painter, hex, line, mix, darken, glyph } from './painter';
 import { drawSignatureProp } from './level3Props';
+import {
+  Pane,
+  GENERIC_LANCET_ROOMS,
+  lancetPane,
+  studyWindowPane,
+  stairSlitPane,
+  stairCressetPoint,
+  quartersCasementPane,
+  bathOculusPane,
+  observatorySlitPane,
+  scriptoriumPane,
+  infirmaryPane,
+  entranceOculusPane,
+  glassFanlightPane,
+  alchemyPane
+} from './roomLights';
 
 export interface TrimBox {
   left: number;
@@ -126,7 +142,7 @@ export const ROOM_TRIM_SPECS: Record<string, RoomTrimSpec> = {
   common_room: {
     area: 'castle',
     l2Tags: ['trim:club_mantel_clock', 'wall_banner:academy_tassels'],
-    l3Tags: ['wall_panelling:hearthside_oaks', 'stained_window:hearth_amber_pane'],
+    l3Tags: ['wall_panelling:hearthside_oaks', 'trim:hearthside_mantel'],
     accent: 0xd97a9a
   },
   bathhouse: {
@@ -174,7 +190,7 @@ export const ROOM_TRIM_SPECS: Record<string, RoomTrimSpec> = {
   observatory: {
     area: 'castle',
     l2Tags: ['trim:brass_azimuth_ring', 'trim:star_sector_ticks'],
-    l3Tags: ['stained_window:zodiac_oculus', 'trim:gilded_orrery_ribs'],
+    l3Tags: ['trim:zodiac_slit_ring', 'trim:gilded_orrery_ribs'],
     accent: 0x9bd4ff
   },
   scriptorium: {
@@ -276,14 +292,14 @@ export const ROOM_TRIM_SPECS: Record<string, RoomTrimSpec> = {
   trophy_hall: {
     area: 'castle',
     l2Tags: ['trim:laurel_garland_frieze', 'trim:velvet_rope_stanchions'],
-    l3Tags: ['wall_panelling:museum_gilt_pilasters', 'stained_window:victor_crest_glass'],
+    l3Tags: ['wall_panelling:museum_gilt_pilasters', 'trim:victor_laurel_alcove'],
     accent: 0xe8c547
   },
 
   // === GROUNDS / OUTDOOR ROOMS (13) — strictly outdoor tags only ===
   meadow_paddock: {
     area: 'grounds',
-    l2Tags: ['outdoor:wooden_rail_fence', 'outdoor:hay_rack', 'outdoor:water_trough'],
+    l2Tags: ['outdoor:wooden_rail_fence', 'outdoor:hay_rack', 'outdoor:salt_lick_block'],
     l3Tags: ['outdoor:hedgerow_border', 'outdoor:paddock_shelter_hut', 'outdoor:outside_post_lantern'],
     accent: 0x6ba34f
   },
@@ -320,7 +336,7 @@ export const ROOM_TRIM_SPECS: Record<string, RoomTrimSpec> = {
   quarry: {
     area: 'grounds',
     l2Tags: ['outdoor:cut_granite_kerb', 'outdoor:iron_winch_chock'],
-    l3Tags: ['outdoor:dressed_stone_retaining_curb', 'outdoor:surveyor_cairn_lantern'],
+    l3Tags: ['outdoor:dressed_stone_retaining_curb', 'outdoor:braced_quarry_crane'],
     accent: 0xb9b8c2
   },
   pond: {
@@ -350,13 +366,13 @@ export const ROOM_TRIM_SPECS: Record<string, RoomTrimSpec> = {
   standing_stones: {
     area: 'grounds',
     l2Tags: ['outdoor:moss_ring_pebbles', 'outdoor:ground_chalk_circle'],
-    l3Tags: ['outdoor:glowing_monolith_inlay', 'outdoor:hearth_brazier_stones'],
+    l3Tags: ['outdoor:glowing_monolith_inlay', 'outdoor:carved_monolith_bases'],
     accent: 0x9bd4ff
   },
   moonwell: {
     area: 'grounds',
     l2Tags: ['outdoor:silver_pebble_apron', 'outdoor:low_stone_well_curb'],
-    l3Tags: ['outdoor:moonstone_corner_cairns', 'outdoor:lantern_well_post'],
+    l3Tags: ['outdoor:moonstone_corner_cairns', 'outdoor:star_charm_arch'],
     accent: 0xd8d8f0
   }
 };
@@ -425,11 +441,8 @@ function drawOutdoorUpgradeTrim(
       g.rect(sx, B - 13, 0.8, 7).fill({ color: WOOD[2] });
     }
 
-    // L2+: wooden water trough
-    g.rect(L + 31, B - 7, 14, 7).fill({ color: WOOD[1] });
-    g.rect(L + 32.5, B - 6, 11, 2).fill({ color: 0x5a9ad6 });
-    g.rect(L + 33, B - 2, 2, 2).fill({ color: WOOD[0] });
-    g.rect(L + 41, B - 2, 2, 2).fill({ color: WOOD[0] });
+    // L2+: salt lick block on pasture edge (trough is placed furniture, not painted twice)
+    g.rect(L + 24, B - 4, 5, 4).fill({ color: 0xe3dbce });
 
     // L3: adds green hedgerow border, little shelter hut, outside post lantern, and plinth prop
     if (level >= 3) {
@@ -476,7 +489,7 @@ function drawOutdoorUpgradeTrim(
     }
   }
 
-  // Room-specific L2/L3 outdoor flourishes at ground level
+  // Room-specific L2/L3 outdoor flourishes at ground level (only plots that draw a post get a lantern)
   switch (room.defId) {
     case 'rift_gate':
       if (level >= 3) {
@@ -493,9 +506,21 @@ function drawOutdoorUpgradeTrim(
       break;
     case 'vegetable_patch':
     case 'herb_garden':
-      // Wooden signpost stake on left edge
+      // Wooden signpost stake on left edge (no post lantern in garden beds)
       g.rect(L + 8, B - 10, 1.5, 10).fill({ color: WOOD[1] });
       g.rect(L + 6, B - 11, 6, 3).fill({ color: level >= 3 ? GOLDS[2] : 0xe3dbce });
+      break;
+    case 'woodlot':
+      g.rect(L + 8, B - 6, 6, 4).fill({ color: WOOD[1] });
+      if (level >= 3) postLantern(g, L + 5, B, 0xf6e08c);
+      break;
+    case 'quarry':
+      // Cut-stone curb blocks + braced crane base at L3 (no lantern)
+      g.rect(L + 10, B - 3, 6, 3).fill({ color: STONE[3] });
+      if (level >= 3) {
+        line(g, R - 14, B, R - 8, B - 16, WOOD[1], 1.5);
+        g.rect(R - 11, B - 3, 6, 3).fill({ color: STONE[3] });
+      }
       break;
     case 'pond':
       for (let x = L + 8; x < R - 8; x += 10) g.circle(x, B - 1, 1.3).fill({ color: STONE[2] });
@@ -506,13 +531,33 @@ function drawOutdoorUpgradeTrim(
       if (level >= 3) postLantern(g, L + 4, B, 0xf5ce7a);
       break;
     case 'apiary':
-      g.rect(cx - 5, B - 9, 10, 1.5).fill({ color: 0xf5ce7a });
+      // Wildflower strip at L2 + wooden shelter eaves over the hive stand at L3 (no street lamp)
+      for (let fx = L + 12; fx <= R - 12; fx += 8) g.circle(fx, B - 2, 1.3).fill({ color: 0xf5ce7a });
+      if (level >= 3) {
+        g.rect(L + 7, B - 16, W - 14, 2).fill({ color: WOOD[1] });
+        for (const sx of [L + 9, R - 10.5]) g.rect(sx, B - 14, 1.5, 10).fill({ color: WOOD[0] });
+      }
       break;
     case 'courtyard_garden':
       if (level >= 3) postLantern(g, L + 6, B, 0xfff6dc);
       break;
-    default:
-      if (level >= 3) postLantern(g, L + 5, B, accent);
+    case 'standing_stones':
+      // Pebble ring at L2 + brighter rune inlay on the four stones at L3 (tallest monolith keeps the only glow)
+      for (let px = L + 8; px <= R - 8; px += 8) g.circle(px, B - 1, 1.1).fill({ color: STONE[3] });
+      if (level >= 3) {
+        for (const [sx, iy] of [[L + 10, B - 14], [L + 24, B - 22], [L + 40, B - 18], [R - 10, B - 12]] as Array<[number, number]>) {
+          g.rect(sx - 1, iy, 2, 5).fill({ color: 0x9bd4ff });
+        }
+      }
+      break;
+    case 'moonwell':
+      // Silver pebble apron at L2 + brighter well pool & star charm at L3 (water is the light, no post lantern)
+      for (let px = L + 10; px <= R - 10; px += 7) g.circle(px, B - 1, 1).fill({ color: 0xd8d8f0, alpha: 0.7 });
+      if (level >= 3) {
+        g.ellipse(cx, B - 10, 10, 2).fill({ color: 0xf2f4ff });
+        line(g, cx, B - 24, cx, B - 20, GOLDS[2], 0.8);
+        glyph(g, 'star8', cx, B - 19, 1.8, GOLDS[3]);
+      }
       break;
   }
 
@@ -532,6 +577,53 @@ function postLantern(g: Painter, x: number, groundFloorY: number, glowColor: num
   g.rect(x - 0.75, groundFloorY - 15, 1.5, 15).fill({ color: 0x3b3a40 });
   g.rect(x - 2, groundFloorY - 18, 4, 3.5).fill({ color: GOLDS[1] });
   g.rect(x - 1, groundFloorY - 17, 2, 2).fill({ color: glowColor });
+}
+
+function drawFramedPane(g: Painter, p: Pane, glassColor: number, frameColor = GOLDS[1], mullionColor = GOLDS[2]) {
+  if (p.shape === 'round') {
+    const r = p.w / 2;
+    const cx = p.x + r;
+    const cy = p.y + p.h / 2;
+    g.circle(cx, cy, r + 1.5).fill({ color: frameColor });
+    g.circle(cx, cy, r).fill({ color: glassColor });
+    g.circle(cx - r * 0.25, cy - r * 0.25, Math.max(1.2, r * 0.25)).fill({ color: 0xffffff, alpha: 0.4 });
+    line(g, cx - r, cy, cx + r, cy, mullionColor, 0.75);
+    line(g, cx, cy - r, cx, cy + r, mullionColor, 0.75);
+  } else if (p.shape === 'arch') {
+    const r = p.w / 2;
+    const cx = p.x + r;
+    g.rect(p.x - 1, p.y + r - 1, p.w + 2, p.h - r + 2).fill({ color: frameColor });
+    g.ellipse(cx, p.y + r, r + 1, r + 1).fill({ color: frameColor });
+    g.rect(p.x, p.y + r, p.w, p.h - r).fill({ color: glassColor });
+    g.ellipse(cx, p.y + r, r, r).fill({ color: glassColor });
+    g.rect(p.x + 1.5, p.y + r * 0.6, Math.max(1.5, p.w * 0.22), Math.max(2, p.h * 0.2)).fill({ color: 0xffffff, alpha: 0.4 });
+    line(g, cx, p.y + 1, cx, p.y + p.h, mullionColor, 0.65);
+    line(g, p.x, p.y + p.h * 0.58, p.x + p.w, p.y + p.h * 0.58, mullionColor, 0.65);
+  } else if (p.shape === 'fan') {
+    const cx = p.x + p.w / 2;
+    const sillY = p.y + p.h;
+    const rx = p.w / 2;
+    const ry = p.h;
+    const outer: number[] = [];
+    const inner: number[] = [];
+    for (let i = 0; i <= 8; i++) {
+      const a = Math.PI + (i / 8) * Math.PI;
+      outer.push(cx + Math.cos(a) * (rx + 1), sillY + Math.sin(a) * (ry + 1));
+      inner.push(cx + Math.cos(a) * rx, sillY + Math.sin(a) * ry);
+    }
+    outer.push(cx + rx + 1, sillY + 1, cx - rx - 1, sillY + 1);
+    g.poly(outer).fill({ color: frameColor });
+    g.poly(inner).fill({ color: glassColor });
+    line(g, cx, sillY, cx, p.y, mullionColor, 0.7);
+    line(g, cx, sillY, cx - rx * 0.7, sillY - ry * 0.65, mullionColor, 0.6);
+    line(g, cx, sillY, cx + rx * 0.7, sillY - ry * 0.65, mullionColor, 0.6);
+  } else {
+    g.rect(p.x - 1, p.y - 1, p.w + 2, p.h + 2).fill({ color: frameColor });
+    g.rect(p.x, p.y, p.w, p.h).fill({ color: glassColor });
+    g.rect(p.x + 1, p.y + 1, Math.max(1.2, p.w * 0.28), Math.max(1.5, p.h * 0.22)).fill({ color: 0xffffff, alpha: 0.45 });
+    if (p.w >= 6) line(g, p.x + p.w / 2, p.y, p.x + p.w / 2, p.y + p.h, mullionColor, 0.6);
+    if (p.h >= 8) line(g, p.x, p.y + p.h / 2, p.x + p.w, p.y + p.h / 2, mullionColor, 0.6);
+  }
 }
 
 function drawIndoorUpgradeTrim(
@@ -611,6 +703,12 @@ function drawIndoorUpgradeTrim(
       for (let x = L + 8; x < R - 6; x += 12) {
         g.rect(x, T + 2, 1.5, 1.5).fill({ color: level >= 3 ? 0xc9ced6 : accent });
       }
+      if (room.defId === 'warding_chamber') {
+        for (const px of [L + 6, R - 6]) {
+          g.rect(px - 1, B - 16, 2, 16).fill({ color: 0x3b3a40 });
+          g.circle(px, B - 17, 2).fill({ color: 0x5fc2c2 });
+        }
+      }
       break;
     }
     case 'support_pillar':
@@ -621,6 +719,11 @@ function drawIndoorUpgradeTrim(
       g.rect(L + 2, T, W - 4, 2).fill({ color: level >= 3 ? GOLDS[2] : STONE[3] });
       for (const kx of [L + 4, R - 7]) {
         g.poly([kx, T + 2, kx + 3, T + 2, kx + 1.5, T + 6]).fill({ color: STONE[2] });
+      }
+      if (room.defId === 'spiral_stair') {
+        const cp = stairCressetPoint(box);
+        g.rect(L + 2, cp.y + 1, 7, 1.5).fill({ color: 0x3b3a40 });
+        g.rect(cp.x - 2, cp.y - 1, 4, 2.5).fill({ color: 0x3b3a40 });
       }
       break;
     }
@@ -634,17 +737,19 @@ function drawIndoorUpgradeTrim(
     }
   }
 
-  // Room-specific L2 corner crest / plaque (top-right clear of centered room title)
-  const badgeX = R - 9;
-  const badgeY = T + 7;
-  g.poly([
-    badgeX - 3.5, badgeY - 3.5,
-    badgeX + 3.5, badgeY - 3.5,
-    badgeX + 3.5, badgeY + 1,
-    badgeX, badgeY + 4.5,
-    badgeX - 3.5, badgeY + 1
-  ]).fill({ color: level >= 3 ? GOLDS[1] : STONE[2] });
-  glyph(g, gk, badgeX, badgeY, 2, level >= 3 ? GOLDS[3] : accent);
+  // Room-specific L2 corner crest / plaque (skipped on entrance_hall so it never grows a duplicate crest)
+  if (room.defId !== 'entrance_hall') {
+    const badgeX = R - 9;
+    const badgeY = T + 7;
+    g.poly([
+      badgeX - 3.5, badgeY - 3.5,
+      badgeX + 3.5, badgeY - 3.5,
+      badgeX + 3.5, badgeY + 1,
+      badgeX, badgeY + 4.5,
+      badgeX - 3.5, badgeY + 1
+    ]).fill({ color: level >= 3 ? GOLDS[1] : STONE[2] });
+    glyph(g, gk, badgeX, badgeY, 2, level >= 3 ? GOLDS[3] : accent);
+  }
 
   // L3 bespoke architectural centerpiece + pilasters + signature prop
   if (level >= 3) {
@@ -654,39 +759,88 @@ function drawIndoorUpgradeTrim(
       g.rect(fx - 0.75, T + 3, 1.5, B - T - 3).fill({ color: primary, alpha: 0.55 });
     }
 
-    // Room-tailored L3 window / frieze / rack detail
+    // Room-tailored L3 window / architectural detail (every stained_window tag draws real glass; no 10x10 fallback plaque)
     const wx = L + 11;
     const wy = T + 5;
-    if (
-      room.defId === 'entrance_hall' ||
-      room.defId.startsWith('class_') ||
-      room.defId === 'library' ||
-      room.defId === 'observatory' ||
-      room.defId === 'sunlit_sanctum' ||
-      room.defId === 'trophy_hall' ||
-      room.defId === 'refectory'
-    ) {
-      // Stained-glass lancet / rosette in room accent
-      g.rect(wx - 1, wy - 1, 10, 13).fill({ color: GOLDS[1] });
-      g.rect(wx, wy, 8, 11).fill({ color: accent });
-      g.rect(wx + 1, wy + 1, 2.5, 2.5).fill({ color: 0xffffff, alpha: 0.45 });
-      line(g, wx + 4, wy, wx + 4, wy + 11, GOLDS[2], 0.6);
-      line(g, wx, wy + 5.5, wx + 8, wy + 5.5, GOLDS[2], 0.6);
-    } else if (room.defId === 'kitchen' || room.defId === 'alchemy_lab' || room.defId === 'workshop') {
-      // Brass/copper hanging tool & vessel bar
-      g.rect(wx, wy + 1, 16, 1.5).fill({ color: GOLDS[2] });
-      for (let i = 0; i < 3; i++) {
-        g.circle(wx + 3 + i * 5, wy + 5, 1.6).fill({ color: accent });
-      }
+    if (GENERIC_LANCET_ROOMS.has(room.defId)) {
+      drawFramedPane(g, lancetPane(box), accent);
     } else {
-      // Gilded framed emblem plaque
-      g.rect(wx, wy, 10, 10).fill({ color: GOLDS[1] });
-      g.rect(wx + 1, wy + 1, 8, 8).fill({ color: darken(tint, 0.7) });
-      glyph(g, gk, wx + 5, wy + 5, 2.5, GOLDS[3]);
+      switch (room.defId) {
+        case 'entrance_hall':
+          drawFramedPane(g, entranceOculusPane(box), accent);
+          break;
+        case 'wizard_study':
+          drawFramedPane(g, studyWindowPane(box, 3), accent);
+          for (const sx of [L + 7, R - 7]) glyph(g, 'star8', sx, T + 5, 2, GOLDS[3]);
+          break;
+        case 'spiral_stair':
+          drawFramedPane(g, stairSlitPane(box), 0xffd27a, GOLDS[2], GOLDS[3]);
+          g.circle(cx, T + 21, 2.2).stroke({ color: GOLDS[3], width: 1 });
+          break;
+        case 'faculty_quarters':
+          drawFramedPane(g, quartersCasementPane(box), 0xffe2a0, WOOD[0], GOLDS[2]);
+          break;
+        case 'bathhouse':
+          drawFramedPane(g, bathOculusPane(box), 0x9ce8e0);
+          break;
+        case 'observatory': {
+          const slit = observatorySlitPane(box);
+          g.ellipse(cx, T + 10, W / 2 - 3, 12).stroke({ color: GOLDS[2], width: 1 });
+          g.rect(slit.x - 1, slit.y, slit.w + 2, slit.h + 1).stroke({ color: GOLDS[2], width: 1 });
+          break;
+        }
+        case 'scriptorium':
+          drawFramedPane(g, scriptoriumPane(box), 0xf2e2b0);
+          break;
+        case 'greenhouse':
+          // Finer cast-iron mullion crossbars + roof ridge vent (no stone plaque on glass walls)
+          g.rect(cx - 10, T, 20, 3).fill({ color: GOLDS[2] });
+          g.rect(cx - 8, T + 0.5, 16, 2).fill({ color: 0xd8eef7 });
+          line(g, L + 2, T + 22, R - 2, T + 22, 0xd8eef7, 0.65);
+          break;
+        case 'infirmary':
+          drawFramedPane(g, infirmaryPane(box), 0xfff6dc);
+          break;
+        case 'detention_hall':
+          // Dimmer heavy iron bars over the existing barred slits
+          for (const sx of [L + 8, R - 16]) {
+            line(g, sx + 2.5, T + 6, sx + 2.5, T + 12, 0x252429, 0.9);
+            line(g, sx + 5.5, T + 6, sx + 5.5, T + 12, 0x252429, 0.9);
+          }
+          break;
+        case 'alchemy_lab':
+          g.rect(wx, wy + 1, 16, 1.5).fill({ color: GOLDS[2] });
+          for (let i = 0; i < 3; i++) g.circle(wx + 3 + i * 5, wy + 5, 1.6).fill({ color: accent });
+          drawFramedPane(g, alchemyPane(box), 0x9cd4ff);
+          break;
+        case 'kitchen':
+        case 'workshop':
+          g.rect(wx, wy + 1, 16, 1.5).fill({ color: GOLDS[2] });
+          for (let i = 0; i < 3; i++) g.circle(wx + 3 + i * 5, wy + 5, 1.6).fill({ color: accent });
+          break;
+        case 'glassworks':
+          drawFramedPane(g, glassFanlightPane(box), 0xf7c08a);
+          break;
+        case 'weaving_room':
+          // Second beam of finished woven cloth across middle wall
+          line(g, L + 6, T + 18, R - 20, T + 18, WOOD[1], 1.2);
+          for (let i = 0; i < 2; i++) g.rect(L + 9 + i * 13, T + 18, 9, 6).fill({ color: i ? 0x9c86e0 : 0xd97a9a, alpha: 0.9 });
+          break;
+        case 'trophy_hall':
+          // Laurel alcove arch across top of the hall (occupied plinths supply the light)
+          g.ellipse(cx, T + 4, W * 0.34, 8).stroke({ color: GOLDS[2], width: 1 });
+          break;
+      }
     }
 
-    // Signature prop on a wall bracket / pedestal
-    const propX = Math.max(L + 16, Math.min(R - 14, cx + W * 0.25));
+    // Signature prop on a wall bracket / pedestal (kept clear of L3 windows)
+    let propX = Math.max(L + 16, Math.min(R - 14, cx + W * 0.25));
+    if (room.defId === 'entrance_hall') propX = cx;
+    else if (room.defId === 'faculty_quarters') propX = L + 24;
+    else if (room.defId === 'scriptorium') propX = R - 20;
+    else if (room.defId === 'infirmary') propX = cx + 20;
+    else if (room.defId === 'alchemy_lab') propX = L + 40;
+    else if (room.defId === 'glassworks') propX = L + 33;
     drawSignatureProp(g, room.defId, propX, T + 17, tint);
   }
 }

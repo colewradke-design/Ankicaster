@@ -8,7 +8,8 @@
 
 import type { FullGameState, PlacedRoom } from '../../types/ankicaster';
 import { getVeilBand, type VeilBand } from '../../utils/formulas';
-import { CREATURE_PEN_IDS } from '../rooms/roomArt';
+import { roomLights as roomFixtureLights, type Pane, type RoomLight } from '../rooms/roomLights';
+import { getRiftGateVisualState, type RiftGateVisualState } from '../rooms/riftGateArt';
 import { roomToWorldBox, type RoomWorldBox } from '../layout/gridToWorld';
 
 export type WorldBox = RoomWorldBox;
@@ -77,6 +78,8 @@ export interface RoomLightEmitter {
   radius: number;
   color: number;
   alpha: number;
+  /** Drawn glass pane shape/bounds when kind === 'window'. */
+  pane?: Pane;
 }
 
 export interface VeilTearSpec {
@@ -154,34 +157,6 @@ const NIGHT_TINT = 0x1a2652;
 
 const SYNODIC_MONTH_MS = 29.53058867 * 86_400_000;
 const KNOWN_NEW_MOON_MS = Date.UTC(2000, 0, 6, 18, 14, 0);
-
-const LIGHT_SOURCE_ROOMS = new Set<string>([
-  'entrance_hall',
-  'wizard_study',
-  'refectory',
-  'great_hall',
-  'kitchen',
-  'library',
-  'scriptorium',
-  'alchemy_lab',
-  'potion_cellar',
-  'artificer_forge',
-  'infirmary',
-  'dormitory',
-  'grand_dormitory',
-  'faculty_quarters',
-  'common_room',
-  'astronomy_tower',
-  'hall_of_prophecy'
-]);
-
-const LIGHT_SCHOOL_ROOMS = new Set<string>([
-  'class_light',
-  'hall_light',
-  'prism_sanctum',
-  'sunlit_cloister',
-  'beacon_tower'
-]);
 
 export function lerpNumber(a: number, b: number, t: number): number {
   const clamped = Math.max(0, Math.min(1, t));
@@ -511,123 +486,55 @@ export function computeClouds(
   });
 }
 
+function mapNightKind(light: RoomLight, room: PlacedRoom): RoomLightEmitter['kind'] {
+  if (light.kind === 'window') return 'window';
+  if (light.kind === 'fire') return room.defId === 'ember_pit' ? 'ember_bed' : 'hearth';
+  if (light.kind === 'lamp') return room.area === 'grounds' ? 'lantern' : 'sconce';
+  return room.defId === 'class_light' ? 'light_school' : 'nightglass';
+}
+
 /**
- * Compute night light emitters for all built rooms:
- * - Every indoor room (area === 'castle', non-pen) gets at least one warm window glow at night.
- * - Creature pens stay torch-free (only ember_pit fire bed glows).
- * - Outdoor rooms use lanterns or path lights, never windows.
- * - Rooms with sconces/hearths/Nightglass/Light-school get warm additive glow emitters.
+ * Compute night light emitters for all built rooms (5.5 Room visual audit):
+ * every night light is anchored directly on a drawn fixture returned by roomLights().
  */
 export function computeRoomNightLights(
   roomsOrState: PlacedRoom[] | FullGameState,
   groundY: number = 400,
-  nightWeight: number = 1.0
+  nightWeight: number = 1.0,
+  riftState?: RiftGateVisualState
 ): RoomLightEmitter[] {
   if (nightWeight <= 0.01) return [];
   const rooms: PlacedRoom[] = Array.isArray(roomsOrState) ? roomsOrState : roomsOrState.rooms;
+  const resolvedRiftState: RiftGateVisualState =
+    riftState ?? (Array.isArray(roomsOrState) ? 'dormant' : getRiftGateVisualState(roomsOrState, false));
   const emitters: RoomLightEmitter[] = [];
 
   for (const room of rooms) {
     if (room.state !== 'built') continue;
     const box: WorldBox = roomToWorldBox(room, groundY);
-    const isPen = CREATURE_PEN_IDS.has(room.defId);
-
-    if (isPen) {
-      // Creature pens stay torch-free; only the ember_pit fire bed glows.
-      if (room.defId === 'ember_pit') {
-        emitters.push({
-          roomId: room.id,
-          defId: room.defId,
-          area: room.area,
-          kind: 'ember_bed',
-          x: box.left + box.width * 0.5,
-          y: box.floorLineY - 5,
-          radius: 22,
-          color: 0xff6e2e,
-          alpha: 0.42 * nightWeight
-        });
-      }
-      continue;
-    }
-
-    if (room.area === 'castle') {
-      // Every indoor castle room gets at least one warm window glow at night
-      const winCount = Math.max(1, room.w);
-      for (let i = 0; i < winCount; i++) {
-        const wx = box.left + ((i + 0.5) / winCount) * box.width;
-        const wy = box.top + Math.min(20, box.height * 0.42);
-        emitters.push({
-          roomId: room.id,
-          defId: room.defId,
-          area: 'castle',
-          kind: 'window',
-          x: wx,
-          y: wy,
-          radius: 16,
-          color: 0xffd27a,
-          alpha: 0.36 * nightWeight
-        });
-      }
-
-      // Additional warm additive glow for rooms with hearths, sconces, Nightglass, or Light school
-      const hasNightglass = room.furniture.some(
-        f => !f.damaged && (f.defId.includes('nightglass') || f.defId.includes('lantern') || f.defId.includes('chandelier') || f.defId.includes('brazier'))
-      );
-      if (LIGHT_SCHOOL_ROOMS.has(room.defId)) {
-        emitters.push({
-          roomId: room.id,
-          defId: room.defId,
-          area: 'castle',
-          kind: 'light_school',
-          x: box.left + box.width * 0.5,
-          y: box.top + box.height * 0.5,
-          radius: 30,
-          color: 0xf6e08c,
-          alpha: 0.34 * nightWeight
-        });
-      } else if (hasNightglass) {
-        emitters.push({
-          roomId: room.id,
-          defId: room.defId,
-          area: 'castle',
-          kind: 'nightglass',
-          x: box.left + box.width * 0.5,
-          y: box.top + 14,
-          radius: 26,
-          color: 0xffe49e,
-          alpha: 0.32 * nightWeight
-        });
-      } else if (LIGHT_SOURCE_ROOMS.has(room.defId)) {
-        const isHearth =
-          room.defId === 'refectory' ||
-          room.defId === 'great_hall' ||
-          room.defId === 'kitchen' ||
-          room.defId === 'common_room' ||
-          room.defId === 'artificer_forge';
-        emitters.push({
-          roomId: room.id,
-          defId: room.defId,
-          area: 'castle',
-          kind: isHearth ? 'hearth' : 'sconce',
-          x: box.left + box.width * 0.5,
-          y: box.floorLineY - 12,
-          radius: isHearth ? 28 : 22,
-          color: isHearth ? 0xffae52 : 0xffcf70,
-          alpha: 0.28 * nightWeight
-        });
-      }
-    } else {
-      // Outdoor grounds rooms: use lanterns or path lights, never windows
+    for (const light of roomFixtureLights(room, box, { riftState: resolvedRiftState })) {
+      const kind = mapNightKind(light, room);
+      const isDimSlit = room.defId === 'spiral_stair' && light.kind === 'window' && (room.level || 1) < 3;
+      const baseAlpha =
+        kind === 'ember_bed'
+          ? 0.42
+          : kind === 'window'
+            ? isDimSlit
+              ? 0.24
+              : 0.36
+            : 0.32;
+      const halo = kind === 'window' ? Math.max(light.radius + 4, 12) : Math.max(light.radius + 6, 14);
       emitters.push({
         roomId: room.id,
         defId: room.defId,
-        area: 'grounds',
-        kind: 'lantern',
-        x: box.left + box.width * 0.5,
-        y: box.floorLineY - 10,
-        radius: 18,
-        color: 0xffca68,
-        alpha: 0.30 * nightWeight
+        area: room.area,
+        kind,
+        x: light.x,
+        y: light.y,
+        radius: halo,
+        color: light.color,
+        alpha: baseAlpha * nightWeight,
+        pane: light.pane
       });
     }
   }
@@ -813,6 +720,7 @@ export interface ComputeAtmosphereOptions {
   paidRippleProgress?: number;
   unpaidDimRemainingMs?: number;
   unpaidDimProgress?: number;
+  riftState?: RiftGateVisualState;
 }
 
 /**
@@ -847,7 +755,8 @@ export function computeAtmosphere(
       unpaidDimRemainingMs:
         envOpts?.unpaidDimProgress && envOpts.unpaidDimProgress > 0
           ? envOpts.unpaidDimProgress * 1000
-          : envOpts?.unpaidDimRemainingMs ?? 0
+          : envOpts?.unpaidDimRemainingMs ?? 0,
+      riftState: envOpts?.riftState ?? getRiftGateVisualState(st, false)
     };
   } else {
     options = stateOrOptions as ComputeAtmosphereOptions;
@@ -913,7 +822,7 @@ export function computeAtmosphere(
     Boolean(options.reduceMotion),
     nightWeight
   );
-  const roomLights = computeRoomNightLights(rooms, groundY, nightWeight);
+  const roomLights = computeRoomNightLights(rooms, groundY, nightWeight, options.riftState);
   const veil = computeVeilDomeState({
     strength: veilStrength,
     rooms,

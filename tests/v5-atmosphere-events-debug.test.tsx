@@ -144,8 +144,9 @@ test('Part A: Time-of-day phases, visualTime override, Veil bands, clouds, paral
   const phase = computeMoonPhase(midnightDate);
   assert.ok(phase >= 0 && phase < 1);
 
-  // 7. Night lights: every indoor castle room gets at least one warm window glow at night;
-  // creature pens have no torches/windows (except ember_pit fire bed); outdoor grounds rooms have no windows.
+  // 7. Night lights (5.5 Room visual audit): every night glow comes from a drawn fixture
+  // (window pane, hearth, lantern, or lit piece); windowless rooms stay dark, creature pens stay
+  // torch-free (only ember_pit with brazier_nest glows), and outdoor grounds rooms never emit windows.
   const stateWithPens = structuredClone(base);
   stateWithPens.rooms.push(
     {
@@ -153,27 +154,34 @@ test('Part A: Time-of-day phases, visualTime override, Veil bands, clouds, paral
       buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {}, furniture: []
     },
     {
-      id: 51, defId: 'ember_pit', x: 2, y: 0, w: 1, h: 1, area: 'grounds', level: 1, state: 'built',
-      buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {}, furniture: []
+      id: 51, defId: 'ember_pit', x: 2, y: 0, w: 1, h: 1, area: 'castle', level: 1, state: 'built',
+      buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {},
+      furniture: [{ id: 901, defId: 'brazier_nest', slotKind: 'required:brazier_nest', damaged: false }]
     },
     {
       id: 52, defId: 'greenhouse', x: 3, y: 0, w: 2, h: 1, area: 'grounds', level: 1, state: 'built',
       buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {}, furniture: []
+    },
+    {
+      id: 53, defId: 'support_pillar', x: 5, y: 0, w: 1, h: 1, area: 'castle', level: 3, state: 'built',
+      buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {}, furniture: []
     }
   );
   const lights = computeRoomNightLights(stateWithPens, 400, 1.0);
-  const indoorCastleRooms = stateWithPens.rooms.filter(
-    r => r.state === 'built' && r.area === 'castle' && !CREATURE_PEN_IDS.has(r.defId)
-  );
-  for (const r of indoorCastleRooms) {
-    assert.ok(
-      lights.some(l => l.roomId === r.id && l.kind === 'window'),
-      `Indoor castle room ${r.defId} must have at least one warm window glow at night`
-    );
+  const study = stateWithPens.rooms.find(r => r.defId === 'wizard_study');
+  if (study) {
+    const studyWin = lights.find(l => l.roomId === study.id && l.kind === 'window');
+    assert.ok(studyWin && studyWin.pane, 'wizard_study lights its drawn window pane at night');
+  }
+  const ehL1 = stateWithPens.rooms.find(r => r.defId === 'entrance_hall' && (r.level || 1) === 1);
+  if (ehL1) {
+    assert.equal(lights.filter(l => l.roomId === ehL1.id && l.kind === 'window').length, 0, 'windowless L1 entrance_hall emits no fake window glow');
   }
   assert.equal(lights.filter(l => l.roomId === 50).length, 0, 'meadow_paddock has no torches or windows');
+  assert.ok(lights.some(l => l.roomId === 51 && l.kind === 'ember_bed'), 'ember_pit with brazier_nest emits ember_bed glow');
   assert.ok(lights.filter(l => l.roomId === 51).every(l => l.kind === 'ember_bed'), 'ember_pit only has ember_bed glow');
   assert.ok(lights.filter(l => l.roomId === 52).every(l => l.kind !== 'window'), 'outdoor grounds rooms never get window glows');
+  assert.equal(lights.filter(l => l.roomId === 53).length, 0, 'support_pillar never emits lights even at L3');
 
   // 8. Veil dome state & ward circles lens
   const tornState = {

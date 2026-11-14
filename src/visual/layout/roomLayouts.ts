@@ -39,6 +39,28 @@ export const NO_FURNITURE_ROOMS = new Set(['spiral_stair', 'support_pillar']);
 
 const cache = new Map<string, RoomLayout>();
 
+/**
+ * Required anchor x (art px, in required-slot order) where the even spread would put a piece on top
+ * of the room's own landmark (5.5 audit). Only used at the room's default size.
+ * - Faculty Quarters: one bed per nook, the desk beside the left bed, the hearth keeps the centre gap.
+ * - Sunlit Sanctum: the Sun Window is the oculus over the centre; cushions sit outside the light cone.
+ */
+const REQUIRED_X: Record<string, number[]> = {
+  faculty_quarters: [24, 104, 47],
+  sunlit_sanctum: [64, 24, 104]
+};
+
+/** Floor spans (art px) that optional floor pieces never take: a landmark or a light already lives there. */
+const FLOOR_KEEP_CLEAR: Record<string, Array<[number, number]>> = {
+  faculty_quarters: [[56, 72]], // shared hearth
+  sunlit_sanctum: [[44, 84]], // sun cone
+  woodlot: [[24, 40]], // stump
+  pond: [[32, 58]], // jetty
+  orchard: [[108, 128]], // ladder
+  standing_stones: [[18, 30]], // tallest lit monolith
+  moonwell: [[18, 46]] // well body & water
+};
+
 export function getRoomLayout(defId: string, w?: number, h?: number): RoomLayout {
   const def = ROOM_DEFINITIONS[defId];
   const cw = w ?? def?.size[0] ?? 1;
@@ -47,20 +69,34 @@ export function getRoomLayout(defId: string, w?: number, h?: number): RoomLayout
   const hit = cache.get(key);
   if (hit) return hit;
   const W = cw * CELL_W;
+  const defaultSize = !def || (def.size[0] === cw && def.size[1] === ch);
   const required: LayoutAnchor[] = [];
   const roles: string[] = requiredSlots(defId).map(r => r.role);
   const n = roles.length;
+  const override = defaultSize ? REQUIRED_X[defId] : undefined;
   roles.forEach((role, i) => {
     const art = getFurnitureArt(role);
     // Spread across the bottom floor; wall-anchored roles sit on the wall above the same spot
-    required.push({ x: Math.round((W * (i + 1)) / (n + 1)), floor: 0, kind: art.anchor, role });
+    const x = override && override.length === n ? override[i] : Math.round((W * (i + 1)) / (n + 1));
+    required.push({ x, floor: 0, kind: art.anchor, role });
   });
+  const keepClear = defaultSize ? FLOOR_KEEP_CLEAR[defId] || [] : [];
+  // A required floor piece reserves its whole width (wide beds and tables included)
+  const blocked = (x: number) =>
+    required.some(a => a.kind === 'floor' && Math.abs(a.x - x) < Math.max(15, getFurnitureArt(a.role!).w / 2 + 6)) ||
+    keepClear.some(([x0, x1]) => x >= x0 && x <= x1);
   const floor: LayoutAnchor[] = [];
   const floors = MEZZANINE.has(defId) ? ch : 1;
   for (let f = 0; f < floors; f++) {
     for (let x = 12; x <= W - 12; x += 18) {
-      if (f === 0 && required.some(a => a.kind === 'floor' && Math.abs(a.x - x) < 15)) continue;
+      if (f === 0 && blocked(x)) continue;
       floor.push({ x, floor: f, kind: 'floor' });
+    }
+  }
+  if (floor.length === 0) {
+    // A fully reserved floor still needs somewhere for an optional floor piece: use the open grid
+    for (let x = 12; x <= W - 12; x += 18) {
+      if (!keepClear.some(([x0, x1]) => x >= x0 && x <= x1)) floor.push({ x, floor: 0, kind: 'floor' });
     }
   }
   // Interleave so the first optional items spread out instead of bunching on the left

@@ -759,7 +759,7 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     veil: 5,
     capacity: { plinths: 4 },
     requiredFurniture: [],
-    optionalSlots: 2,
+    optionalSlots: 4,
     stats: { primary: ['charm', 'aura'], secondary: 'order' },
     description: 'Displays legendary artifacts recovered from the Rift. Artifacts only activate here.'
   },

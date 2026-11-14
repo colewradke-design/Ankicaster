@@ -576,6 +576,7 @@ export class VisualWorld {
         ? Math.max(0, Math.min(1, (this.veilDimUntilMs - this.clockMs) / 1000))
         : 0;
 
+    const riftReturning = !this.state.settings.reduceMotion && this.clockMs < this.riftReturningUntilMs;
     const atm = computeAtmosphere(this.state, {
       now: this.clockDate,
       clockMs: this.clockMs,
@@ -583,7 +584,8 @@ export class VisualWorld {
       worldWidth: this.totalWorldWidth,
       groundY: this.groundY,
       paidRippleProgress,
-      unpaidDimProgress
+      unpaidDimProgress,
+      riftState: getRiftGateVisualState(this.state, riftReturning)
     });
     this.atmosphere = atm;
 
@@ -666,15 +668,38 @@ export class VisualWorld {
       });
     }
 
-    // Room night lights (window glows, sconces, lanterns, hearths)
+    // Room night lights: anchored on drawn window panes, hearths, lanterns, and lit furniture
     for (const light of atm.nightLights) {
       if (light.alpha <= 0.01) continue;
       if (light.kind === 'window') {
-        lg.roundRect(light.x - 5, light.y - 6, 10, 12, 2).fill({ color: light.color, alpha: light.alpha * 0.85 });
-        lg.circle(light.x, light.y, light.radius).fill({ color: light.color, alpha: light.alpha * 0.28 });
+        const p = light.pane;
+        if (p) {
+          if (p.shape === 'round') {
+            lg.ellipse(p.x + p.w / 2, p.y + p.h / 2, p.w / 2, p.h / 2).fill({ color: light.color, alpha: light.alpha * 0.85 });
+          } else if (p.shape === 'fan') {
+            const cx = p.x + p.w / 2;
+            const sillY = p.y + p.h;
+            const pts: number[] = [];
+            for (let i = 0; i <= 8; i++) {
+              const a = Math.PI + (i / 8) * Math.PI;
+              pts.push(cx + Math.cos(a) * (p.w / 2), sillY + Math.sin(a) * p.h);
+            }
+            lg.poly(pts).fill({ color: light.color, alpha: light.alpha * 0.85 });
+          } else if (p.shape === 'arch') {
+            const r = p.w / 2;
+            lg.ellipse(p.x + r, p.y + r, r, r).fill({ color: light.color, alpha: light.alpha * 0.85 });
+            if (p.h > r) lg.rect(p.x, p.y + r, p.w, p.h - r).fill({ color: light.color, alpha: light.alpha * 0.85 });
+          } else {
+            lg.rect(p.x, p.y, p.w, p.h).fill({ color: light.color, alpha: light.alpha * 0.85 });
+          }
+        }
+        lg.circle(light.x, light.y, light.radius).fill({ color: light.color, alpha: light.alpha * 0.25 });
       } else {
-        lg.circle(light.x, light.y, light.radius).fill({ color: light.color, alpha: light.alpha * 0.32 });
-        lg.circle(light.x, light.y, Math.max(2, light.radius * 0.35)).fill({ color: 0xfff2c2, alpha: light.alpha * 0.75 });
+        lg.circle(light.x, light.y, light.radius).fill({ color: light.color, alpha: light.alpha * 0.30 });
+        lg.circle(light.x, light.y, Math.max(2, light.radius * 0.35)).fill({
+          color: light.kind === 'nightglass' ? light.color : 0xfff2c2,
+          alpha: light.alpha * 0.68
+        });
       }
     }
 

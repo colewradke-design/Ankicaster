@@ -19,10 +19,13 @@ import { PALETTE } from '../sprites/forge/palettes';
 import { Painter, hex, line, noise, mix, darken, flame, glyph } from './painter';
 import { drawFurniture, getFurnitureArt, furnitureBox, drawGhostSlot } from './furnitureArt';
 import { layoutRoomFurniture, floorLineFor, getRoomLayout, NO_FURNITURE_ROOMS } from '../layout/roomLayouts';
-import { CELL_H } from '../layout/gridToWorld';
-import { drawSignatureProp } from './level3Props';
 import { drawRoomUpgradeTrim, getRoomTrimTags } from './roomTrims';
 import { drawRiftGateArch, RiftGateVisualState } from './riftGateArt';
+import {
+  roomLights, placedFurniturePoints, isDressingArt, DRESSING_IS_ART, fixtureState, requiredAnchorX,
+  studyWindowPane, stairSlitPane, stairCressetPoint, corridorSconcePoint, quartersHearthPoint, loungeArchPane,
+  observatorySlitPane, sanctumOculus
+} from './roomLights';
 
 export type Tier = 'bare' | 'plain' | 'cozy' | 'fine' | 'splendid';
 export const TIERS: Tier[] = ['bare', 'plain', 'cozy', 'fine', 'splendid'];
@@ -129,13 +132,16 @@ export function drawRoomInterior(g: Painter, room: PlacedRoom, box: Box, opts: R
     res.bespoke = drawGroundsPlot(g, room, box, res.emitters, opts.cropStage ?? 3, opts);
     res.trimTags = drawRoomUpgradeTrim(g, room, box, tint, gk);
   } else {
-    const isPen = CREATURE_PEN_IDS.has(room.defId);
-    drawTierSkin(g, box, tier, tint, gk, room.id, res.emitters, isPen);
+    drawTierSkin(g, box, tier, tint, gk, room.id);
     res.bespoke = drawDressing(g, room, box, tint, gk, res.emitters, opts.cropStage ?? 3, opts.vaultFill);
     drawShell(g, room, box, tier, !!opts.hasLeftDoor, !!opts.hasRightDoor);
     res.trimTags = drawRoomUpgradeTrim(g, room, box, tint, gk);
   }
-  placeFurniture(g, room, box, tint, gk, res);
+  placeFurniture(g, room, box, tint, gk, res, opts.cropStage ?? 3);
+  // 5.5 audit: every glow sits on a drawn fixture of this room (window pane, hearth, lantern, lit piece)
+  for (const l of roomLights(room, box, { riftState: opts.riftState })) {
+    res.emitters.push({ kind: 'glow', x: l.x, y: l.y, size: l.radius, color: l.color });
+  }
   if (tier === 'splendid') {
     let sparkles = 0;
     res.emitters = res.emitters.filter(e => e.kind !== 'twinkle' || ++sparkles <= 3);
@@ -143,22 +149,25 @@ export function drawRoomInterior(g: Painter, room: PlacedRoom, box: Box, opts: R
   return res;
 }
 
-function placeFurniture(g: Painter, room: PlacedRoom, box: Box, tint: number, gk: string, res: RoomArtResult) {
+function placeFurniture(g: Painter, room: PlacedRoom, box: Box, tint: number, gk: string, res: RoomArtResult, cropStage = 3) {
   if (NO_FURNITURE_ROOMS.has(room.defId)) return;
   const view = layoutRoomFurniture(room);
   const ceilingY = box.top + 3;
-  for (const it of view.items) {
-    if (room.defId === 'rift_gate' && it.furniture.defId === 'gate_arch') {
-      if (it.furniture.damaged) {
-        res.damaged.push({ x: box.left + box.width / 2 + 26, y: box.floorLineY - 24 });
+  for (const pt of placedFurniturePoints(room, box)) {
+    const it = pt.view;
+    const { art, x, y } = pt;
+    const damaged = !!it.furniture.damaged;
+    if (isDressingArt(room.defId, it.furniture)) {
+      // The dressing draws this piece (one object, never two); only the wrench badge comes from here
+      if (damaged) {
+        if (room.defId === 'rift_gate') res.damaged.push({ x: box.left + box.width / 2 + 26, y: box.floorLineY - 24 });
+        else {
+          const b = furnitureBox(art, x, y);
+          res.damaged.push({ x: b.left + b.w, y: b.top });
+        }
       }
       continue;
     }
-    const art = getFurnitureArt(it.furniture.defId);
-    const fl = floorLineFor(box.floorLineY, it.floor);
-    const x = Math.min(box.left + box.width - art.w / 2 - 2, Math.max(box.left + art.w / 2 + 2, box.left + it.x));
-    const y = it.kind === 'floor' ? fl : it.kind === 'wall' ? fl - 26 : ceilingY + (room.h - 1 - it.floor) * CELL_H;
-    const damaged = !!it.furniture.damaged;
     if (art.animated && !damaged) {
       res.animated.push({ id: it.furniture.defId, x, y, damaged, tint, glyphKind: gk });
     } else {
@@ -168,8 +177,17 @@ function placeFurniture(g: Painter, room: PlacedRoom, box: Box, tint: number, gk
       const b = furnitureBox(art, x, y);
       res.damaged.push({ x: b.left + b.w, y: b.top });
     }
+    drawPieceEffects(g, room, box, it.furniture.defId, x, y, art, damaged, res.emitters, cropStage);
   }
   for (const m of view.missing) {
+    if (DRESSING_IS_ART[room.defId]?.includes(m.role!) && m.kind === 'wall' && room.defId === 'sunlit_sanctum') {
+      // The Sun Window is the oculus in the ceiling: its ghost sits where the oculus will open
+      const o = sanctumOculus(box, room.level || 1);
+      const b = { left: o.cx - 8, top: ceilingY + 1, w: 16, h: 8 };
+      drawGhostSlot(g, b);
+      res.missing.push({ ...b, role: m.role! });
+      continue;
+    }
     const art = getFurnitureArt(m.role!);
     const fl = box.floorLineY;
     const x = box.left + m.x;
@@ -180,10 +198,64 @@ function placeFurniture(g: Painter, room: PlacedRoom, box: Box, tint: number, gk
   }
 }
 
+/**
+ * Effects that belong to a placed piece, drawn on that piece only (5.5 audit): bath steam rises from
+ * the tub, cauldron bubbles from the cauldron, a plinth is lit only when it holds an artifact, and
+ * greenhouse crops grow in the planter beds the player placed (no painted second set of beds).
+ */
+function drawPieceEffects(
+  g: Painter,
+  room: PlacedRoom,
+  box: Box,
+  defId: string,
+  x: number,
+  y: number,
+  art: ReturnType<typeof getFurnitureArt>,
+  damaged: boolean,
+  em: Emitter[],
+  cropStage: number
+) {
+  if (damaged) return;
+  const b = furnitureBox(art, x, y);
+  switch (defId) {
+    case 'soaking_tub':
+      em.push({ kind: 'steam', x: x - 6, y: b.top + 2 });
+      em.push({ kind: 'steam', x: x + 7, y: b.top + 2 });
+      break;
+    case 'brewing_cauldron':
+    case 'bench_cauldron':
+      if (room.defId === 'alchemy_lab') em.push({ kind: 'bubble', x, y: b.top + 2, color: 0x7db861 });
+      break;
+    case 'artifact_plinth':
+      if (room.defId === 'trophy_hall') {
+        g.poly([x - 2, box.top + 3, x + 2, box.top + 3, x + 7, b.top + 2, x - 7, b.top + 2]).fill({ color: 0xfff6dc, alpha: 0.18 });
+        em.push({ kind: 'twinkle', x, y: b.top + 1, color: 0xf7e39a });
+      }
+      break;
+    case 'planter_bed':
+      if (room.defId === 'greenhouse') {
+        const cs = Math.max(0, Math.min(3, cropStage));
+        if (cs >= 2) {
+          for (let i = 0; i < 4; i++) {
+            const px = b.left + 6 + i * ((b.w - 12) / 3);
+            g.circle(px, b.top + b.h - 11, 0.8 + (cs - 2) * 0.5).fill({ color: cs === 3 ? 0xd9472b : 0xf6f1e8 });
+          }
+        }
+      }
+      break;
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // 1. Tier wall skins (Addendum 5.1)
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Quality skin: wall material, colour and floor only (5.5 room visual audit). It never plants a
+ * light: no torches, sconces, lamps, candles or glow discs, in any room or pen. A Cozy or Fine room
+ * looks warmer through its walls; every glow in a room comes from a fixture in roomLights.ts.
+ * `_em` is kept so construction-site callers can share the signature; the skin never pushes to it.
+ */
 export function drawTierSkin(
   g: Painter,
   box: Box,
@@ -191,8 +263,7 @@ export function drawTierSkin(
   tint: number,
   gk: string,
   seed: number,
-  em: Emitter[],
-  noOpenFlames = false
+  _em?: Emitter[]
 ) {
   const L = box.left, T = box.top + 3, W = box.width, B = box.floorLineY;
   const H = B - T;
@@ -218,13 +289,6 @@ export function drawTierSkin(
       line(g, L + 2, T, L + 2, T + 8, 0xd8d8d8, 0.5);
       line(g, L + 2, T + 6, L + 7, T, 0xd8d8d8, 0.5);
       line(g, L + 2, T + 3, L + 4, T, 0xd8d8d8, 0.4);
-      if (noOpenFlames) {
-        // Slit skylight window instead of open-flame torch in creature pens
-        g.rect(L + W - 14, T + 5, 5, 8).fill({ color: 0x252429 });
-        g.rect(L + W - 13, T + 6, 3, 6).fill({ color: GLASS, alpha: 0.45 });
-      } else {
-        torch(g, L + W - 12, B - 24, em);
-      }
       floorSlab(g, box, 0x36353b, 'flag', seed);
       break;
     }
@@ -239,14 +303,6 @@ export function drawTierSkin(
         g.rect(x + 0.5, B - 8, Math.min(11, L + W - x - 0.5), 7.5).fill({ color: noise(seed, 40 + i) > 0.5 ? STONE[2] : mix(STONE[2], STONE[1], 0.3) });
       }
       g.rect(L, B - 9, W, 1).fill({ color: STONE[1] });
-      if (noOpenFlames) {
-        // Clerestory glass vents instead of wall torches in creature pens
-        win(g, L + 9, T + 7, 5, 8, STONE[1], 0x9cd4ff);
-        win(g, L + W - 14, T + 7, 5, 8, STONE[1], 0x9cd4ff);
-      } else {
-        torch(g, L + 10, B - 24, em);
-        torch(g, L + W - 10, B - 24, em);
-      }
       floorSlab(g, box, STONE[1], 'flag', seed);
       break;
     }
@@ -260,11 +316,6 @@ export function drawTierSkin(
       const px = L + 8 + noise(seed, 3) * (W - 24);
       g.rect(px - 2, B - 19, 4, 4).fill({ color: 0xb5651d });
       g.ellipse(px, B - 20.5, 3, 2.2).fill({ color: 0x6ba34f });
-      // lamp glow (enclosed glass globe, no open flame)
-      const lx = L + W - 14;
-      g.rect(lx - 0.75, B - 30, 1.5, 6).fill({ color: GOLDS[1] });
-      g.rect(lx - 2.5, B - 33, 5, 3).fill({ color: GOLDS[3] });
-      em.push({ kind: 'glow', x: lx, y: B - 31, size: 9, color: 0xf6e08c });
       floorSlab(g, box, WOOD[3], 'plank', seed);
       // small tinted rug
       g.rect(L + W / 2 - Math.min(20, W / 4), B - 1, Math.min(40, W / 2), 1.5).fill({ color: tint });
@@ -278,14 +329,6 @@ export function drawTierSkin(
         g.rect(x + 1, railY + 4, 10, B - railY - 9).fill({ color: mix(WOOD[2], WOOD[1], 0.4) });
       }
       g.rect(L, railY, W, 2).fill({ color: WOOD[0] }); // picture rail
-      if (noOpenFlames) {
-        // Framed round glass windows instead of wall sconces in creature pens
-        roundWin(g, L + 25, railY + 8, 3.5, WOOD[0]);
-        roundWin(g, L + W - 12, railY + 8, 3.5, WOOD[0]);
-      } else {
-        sconce(g, L + 24, railY + 6, em);
-        sconce(g, L + W - 12, railY + 6, em);
-      }
       // category banner with glyph (left of the room label)
       const bx = L + 10;
       g.rect(bx - 6, T + 1, 12, 1.5).fill({ color: WOOD[0] });
@@ -313,20 +356,10 @@ export function drawTierSkin(
       g.rect(L, B - 10, W, 1.5).fill({ color: GOLDS[2] });
       g.rect(L, B - 9, W, 9).fill({ color: WOOD[1] });
       for (let x = L + 4; x < L + W - 2; x += 10) g.rect(x, B - 7, 6, 5).stroke({ color: GOLDS[1], width: 0.5 });
-      if (noOpenFlames) {
-        // Soft sunlit/crystal motes instead of open-flame candles in creature pens
-        for (let i = 0; i < Math.min(3, n + 1); i++) {
-          em.push({ kind: 'glow', x: L + ((i + 0.5) * W) / Math.min(3, n + 1) + 8, y: T + 12 + (i % 2) * 3, size: 6, color: mix(tint, 0xffffff, 0.35), seed: i });
-        }
-      } else {
-        // floating candles (bob in the ambient layer)
-        for (let i = 0; i < Math.min(3, n + 1); i++) em.push({ kind: 'candle', x: L + ((i + 0.5) * W) / (Math.min(3, n + 1)) + 8, y: T + 10 + (i % 2) * 3, seed: i });
-      }
       floorSlab(g, box, GOLDS[0], 'parquet', seed);
       // inlaid crest in the floor runner
       g.rect(L + 4, B - 1, W - 8, 1.5).fill({ color: tint });
       glyph(g, gk, L + W / 2, B - 20, 3.5, GOLDS[3]);
-      em.push({ kind: 'twinkle', x: L + W / 2, y: B - 20, color: GOLDS[3] });
       break;
     }
   }
@@ -344,13 +377,6 @@ function floorSlab(g: Painter, box: Box, color: number, style: 'flag' | 'plank' 
     for (let x = L, i = 0; x < L + W; x += 4, i++) g.rect(x, y + (i % 2) * 2, 4, 2).fill({ color: i % 2 ? GOLDS[1] : color });
   }
   g.rect(L, y, W, 0.75).fill({ color: mix(color, 0xffffff, 0.25) });
-}
-
-function torch(g: Painter, x: number, y: number, em: Emitter[]) {
-  g.rect(x - 1, y, 2, 5).fill({ color: 0x3b3a40 });
-  g.rect(x - 2, y - 1, 4, 1.5).fill({ color: 0x5e5d66 });
-  em.push({ kind: 'flame', x, y: y - 1, size: 0.8 });
-  em.push({ kind: 'glow', x, y: y - 4, size: 7, color: 0xf0a040 });
 }
 
 function sconce(g: Painter, x: number, y: number, em: Emitter[]) {
@@ -448,11 +474,10 @@ function wallShelf(g: Painter, x: number, y: number, w: number, rows: number, se
     g.rect(x, y + r * 7 + 7, w, 1).fill({ color: WOOD[0] });
   }
 }
-function hangLantern(g: Painter, x: number, top: number, em: Emitter[], len = 6, glow = 0xf6e08c) {
+function hangLantern(g: Painter, x: number, top: number, _em: Emitter[], len = 6, glow = 0xf6e08c) {
   line(g, x, top, x, top + len, 0x3b3a40, 0.75);
   g.rect(x - 2, top + len, 4, 5).fill({ color: 0x3b3a40 });
   g.rect(x - 1.2, top + len + 1, 2.4, 3).fill({ color: glow });
-  em.push({ kind: 'glow', x, y: top + len + 2.5, size: 6, color: glow });
 }
 function drapes(g: Painter, x: number, y: number, w: number, h: number, color: number) {
   g.rect(x, y, w, 1.5).fill({ color: 0x3b3a40 });
@@ -487,10 +512,6 @@ function tiles(g: Painter, L: number, T: number, W: number, H: number, color: nu
   for (let x = L; x < L + W; x += 6) g.rect(x, T, 0.5, H).fill({ color: mix(color, 0xffffff, 0.35) });
   for (let y = T; y < T + H; y += 6) g.rect(L, y, W, 0.5).fill({ color: mix(color, 0xffffff, 0.35) });
 }
-function plinthSpot(g: Painter, x: number, top: number, B: number, em: Emitter[]) {
-  g.poly([x - 2, top, x + 2, top, x + 9, B, x - 9, B]).fill({ color: 0xfff6dc, alpha: 0.18 });
-  em.push({ kind: 'twinkle', x, y: B - 18, color: 0xf7e39a });
-}
 
 export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: number, gk: string, em: Emitter[], cropStage = 3, vaultFill?: number): boolean {
   const L = box.left, T = box.top + 3, W = box.width, B = box.floorLineY, R = L + W, cx = L + W / 2;
@@ -506,28 +527,38 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
       break;
     }
     case 'wizard_study': {
-      // internal spiral stair on the left, bookshelves, round window by the orb stand
+      // internal spiral stair on the left, bookshelves, and one high round window above the orb
+      // stand: the room's only light (L3 trim enlarges it into the astral lancet in the same place)
       for (let y = T + 4; y < B; y += 7) {
         g.rect(L + 3, y, 13, 2.5).fill({ color: STONE[3] });
         g.circle(L + 9.5, y + 1, 1.5).fill({ color: STONE[0] });
       }
       wallShelf(g, R - 22, T + 6, 18, 3, s);
-      roundWin(g, cx + 6, B - 30, 7);
+      if ((room.level || 1) < 3) {
+        const p = studyWindowPane(box, room.level || 1);
+        roundWin(g, p.x + p.w / 2, p.y + p.h / 2, p.w / 2);
+      }
       break;
     }
     case 'spiral_stair': {
-      g.rect(cx - 2, T + 6, 4, 10).fill({ color: GLASS }); // slit window
+      // the glass slit is the stair's light (no torch at L1; L2 adds one cresset, L3 glazes the slit)
+      const p = stairSlitPane(box);
+      g.rect(p.x, p.y, p.w, p.h).fill({ color: GLASS });
       for (let y = T + 18; y < B; y += 6) {
         g.rect(L + 14, y, W - 28, 2.5).fill({ color: STONE[3] });
         g.circle(cx, y + 1, 2).fill({ color: STONE[0] });
       }
       g.rect(cx - 1, T, 2, B - T).fill({ color: STONE[1], alpha: 0.6 });
-      torch(g, L + 8, B - 24, em);
+      if ((room.level || 1) >= 2) {
+        const cp = stairCressetPoint(box);
+        em.push({ kind: 'flame', x: cp.x, y: cp.y - 1, size: 0.7 });
+      }
       break;
     }
     case 'corridor': {
       g.ellipse(cx, T, W / 2 - 2, 7).stroke({ color: STONE[1], width: 1.5 });
-      sconce(g, cx, T + 16, em);
+      const sp = corridorSconcePoint(box);
+      sconce(g, sp.x, sp.y, em);
       break;
     }
     case 'support_pillar': {
@@ -540,17 +571,18 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
     }
     case 'storage_vault': {
       g.ellipse(cx, T + 2, W / 2, 10).stroke({ color: STONE[1], width: 2 });
-      // ledger desk stays; the crate pile steps with storage fill (0 / 25 / 50 / 75 / 100%)
-      g.rect(R - 18, B - 10, 14, 10).fill({ color: WOOD[1] });
-      g.rect(R - 16, B - 12, 8, 2).fill({ color: 0xf6f1e8 });
-      const step = vaultFill === undefined ? 2 : Math.max(0, Math.min(4, Math.floor(vaultFill)));
-      for (let i = 0; i < step; i++) {
-        const y = B - 6 - i * 6;
-        const x = L + 8 + (i % 2) * 5;
-        if (i % 2 === 0) g.ellipse(x + 4, y + 3, 5, 3.2).fill({ color: 0xc9b88a });
-        else {
-          g.rect(x, y, 12, 6).fill({ color: WOOD[2] });
-          line(g, x, y, x + 12, y + 6, WOOD[0], 0.6);
+      // Shelf slot owns the centre; optional crates sit on the open floor; fill steps tuck along
+      // the far-left wall when that slot is clear (no painted ledger desk over the right slot).
+      if (room.furniture.length <= 1) {
+        const step = vaultFill === undefined ? 2 : Math.max(0, Math.min(4, Math.floor(vaultFill)));
+        for (let i = 0; i < step; i++) {
+          const y = B - 5 - i * 5;
+          const x = L + 3 + (i % 2) * 2;
+          if (i % 2 === 0) g.ellipse(x + 3.5, y + 2.5, 4, 2.5).fill({ color: 0xc9b88a });
+          else {
+            g.rect(x, y, 8, 5).fill({ color: WOOD[2] });
+            line(g, x, y, x + 8, y + 5, WOOD[0], 0.6);
+          }
         }
       }
       break;
@@ -559,7 +591,6 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
       roundWin(g, L + 24, T + 10, 4.5, 0x96633b);
       roundWin(g, R - 24, T + 10, 4.5, 0x96633b);
       for (const x of [L + 4, cx - 2, R - 8]) g.rect(x, T + 18, 4, B - T - 18).fill({ color: WOOD[1], alpha: 0.5 }); // alcove posts
-      em.push({ kind: 'glow', x: cx, y: T + 22, size: 6, color: 0xf6e08c });
       break;
     }
     case 'grand_dormitory': {
@@ -569,25 +600,31 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
       g.rect(cx - 1.5, T, 3, B - T - 14).fill({ color: 0x3b3a40 });
       g.rect(cx - 3, B - 9, 6, 4).fill({ color: 0xe8752a });
       em.push({ kind: 'ember', x: cx, y: B - 7, color: 0xe8752a });
-      em.push({ kind: 'glow', x: cx, y: B - 7, size: 9, color: 0xf07a5c });
       break;
     }
     case 'faculty_quarters': {
-      // bookcase partition between two nooks, shared hearth
+      // bookcase partition between two nooks, shared hearth in the centre gap (floor clear for beds + desk)
       wallShelf(g, cx - 5, T + 4, 10, 4, s);
-      g.rect(cx - 6, B - 10, 12, 10).fill({ color: STONE[2] });
-      g.rect(cx - 3, B - 6, 6, 6).fill({ color: 0x1b1822 });
-      em.push({ kind: 'flame', x: cx, y: B, size: 0.8 });
+      const hp = quartersHearthPoint(box);
+      g.rect(hp.x - 6, hp.y - 10, 12, 10).fill({ color: STONE[2] });
+      g.rect(hp.x - 3, hp.y - 6, 6, 6).fill({ color: 0x1b1822 });
+      em.push({ kind: 'flame', x: hp.x, y: hp.y, size: 0.8 });
       break;
     }
     case 'faculty_lounge': {
-      archWin(g, R - 20, T + 4, 10, 24);
+      // the arch is already there: colour and light it at L3; steam belongs only to a placed tea service
+      const p = loungeArchPane(box);
+      const l3 = (room.level || 1) >= 3;
+      archWin(g, p.x, p.y, p.w, p.h, l3 ? 0x8be09e : GLASS);
+      if (l3) {
+        line(g, p.x + p.w / 2, p.y + 1, p.x + p.w / 2, p.y + p.h, GOLDS[2], 0.75);
+        line(g, p.x, p.y + p.h * 0.55, p.x + p.w, p.y + p.h * 0.55, GOLDS[2], 0.75);
+      }
       for (const [x, c] of [[L + 10, 0x6b4fbb], [L + 26, 0x4e8b3a]] as Array<[number, number]>) {
         g.rect(x - 4, T + 6, 9, 11).fill({ color: GOLDS[1] });
         g.rect(x - 3, T + 7, 7, 9).fill({ color: c });
         g.circle(x + 0.5, T + 10, 1.5).fill({ color: 0xedc0a0 });
       }
-      em.push({ kind: 'steam', x: cx, y: B - 10 });
       break;
     }
     case 'refectory': {
@@ -598,6 +635,7 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
       break;
     }
     case 'kitchen': {
+      // pots and herbs on the ceiling; floor stays clear for the Cooking Range (no chopping block or orphan steam)
       for (let i = 0; i < 3; i++) {
         const x = L + 18 + i * 8;
         line(g, x, T, x, T + 5, 0x3b3a40, 0.6);
@@ -607,24 +645,18 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
         line(g, R - 10 - i * 5, T, R - 10 - i * 5, T + 4, 0x6e4529, 0.6);
         g.ellipse(R - 10 - i * 5, T + 7, 1.5, 3).fill({ color: 0x6ba34f });
       }
-      g.rect(R - 16, B - 6, 8, 6).fill({ color: WOOD[2] }); // chopping block
-      em.push({ kind: 'steam', x: L + 20, y: B - 26 });
       break;
     }
     case 'common_room': {
-      g.rect(R - 26, T + 5, 16, 12).fill({ color: WOOD[2] }); // notice board
+      // notice board on the right; hearth is placed furniture when chosen, never painted over a couch
+      g.rect(R - 26, T + 5, 16, 12).fill({ color: WOOD[2] });
       for (let i = 0; i < 3; i++) g.rect(R - 24 + i * 5, T + 7 + (i % 2) * 3, 4, 4).fill({ color: [0xf6f1e8, 0xf5ce7a, 0x9cd4ff][i] });
-      g.rect(L + 6, B - 18, 14, 18).fill({ color: STONE[2] }); // fireplace
-      g.rect(L + 9, B - 11, 8, 11).fill({ color: 0x1b1822 });
-      em.push({ kind: 'flame', x: L + 13, y: B, size: 1.1 });
-      em.push({ kind: 'glow', x: L + 13, y: B - 5, size: 10, color: 0xf07a5c });
       break;
     }
     case 'bathhouse': {
+      // aqua wall tiles and towels on pegs; steam rises only from the placed Soaking Tub
       tiles(g, L + 2, B - 18, W - 4, 18, 0x3a6b2c);
       for (const x of [L + 8, R - 12]) { g.rect(x, T + 8, 6, 1).fill({ color: WOOD[1] }); g.rect(x + 1, T + 9, 4, 8).fill({ color: 0xf6f1e8 }); }
-      em.push({ kind: 'steam', x: cx - 10, y: B - 12 });
-      em.push({ kind: 'steam', x: cx + 12, y: B - 12 });
       break;
     }
     case 'class_arcane':
@@ -660,9 +692,10 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
       line(g, L + 3, T + 1, R - 3, T + 1, WOOD[0], 1); // ladder rail
       break;
     case 'observatory': {
-      // two-floor dome with an opening roof slit
+      // two-floor dome with the opening roof slit (its only light)
+      const slit = observatorySlitPane(box);
       g.ellipse(cx, T + 10, W / 2 - 3, 12).fill({ color: 0x1b1430 });
-      g.rect(cx - 3, T, 6, 14).fill({ color: 0x0f0b1f });
+      g.rect(slit.x, slit.y, slit.w, slit.h).fill({ color: 0x0f0b1f });
       for (let i = 0; i < 6; i++) g.circle(L + 10 + noise(s, i) * (W - 20), T + 4 + noise(s, i + 5) * 12, 0.7).fill({ color: 0xffffff });
       em.push({ kind: 'twinkle', x: cx + 8, y: T + 6, color: 0xffffff });
       break;
@@ -676,44 +709,37 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
       }
       break;
     case 'greenhouse': {
-      // glass roof and walls, plus the same four crop stages as the outdoor plots
+      // glass roof and mullions stay; floor stays clear for the placed Planter Beds
       g.rect(L + 2, T, W - 4, B - T - 12).fill({ color: GLASS, alpha: 0.35 });
       for (let x = L + 2; x <= R - 2; x += 16) line(g, x, T, x, B - 12, 0xd8eef7, 1);
       line(g, L + 2, T + 12, R - 2, T + 12, 0xd8eef7, 0.75);
-      const cs = Math.max(0, Math.min(3, cropStage));
-      for (const bedX of [L + 8, cx]) {
-        const bedW = Math.min(36, cx - L - 12);
-        g.rect(bedX, B - 8, bedW, 6).fill({ color: WOOD[1] });
-        g.rect(bedX + 1, B - 7, bedW - 2, 4).fill({ color: 0x5a4030 });
-        for (let i = 0; i < 4; i++) {
-          const px = bedX + 4 + i * ((bedW - 8) / 3);
-          g.circle(px, B - 8 - cs * 1.1, 0.8 + cs * 0.55).fill({ color: cs === 0 ? 0x9ccb72 : 0x3a6b2c });
-        }
-      }
-      g.rect(L + 8, B - 6, 5, 5).fill({ color: 0x5a9ad6 }); // watering can
       em.push({ kind: 'twinkle', x: cx, y: T + 10, color: 0xd8eef7 });
       break;
     }
     case 'tide_tank': {
-      g.rect(L + 6, T + 4, W - 12, B - T - 6).fill({ color: 0x5fc2c2, alpha: 0.45 });
+      // one tank, not two: frame is the enclosure, water + bubbles fill once Glass Tank is installed
+      const tank = fixtureState(room, 'glass_tank');
+      if (tank !== 'missing') {
+        g.rect(L + 6, T + 4, W - 12, B - T - 6).fill({ color: 0x5fc2c2, alpha: tank === 'ok' ? 0.45 : 0.22 });
+        if (tank === 'ok') {
+          for (let x = L + 14; x < R - 10; x += 14) em.push({ kind: 'bubble', x, y: B - 4, color: 0xffffff });
+          em.push({ kind: 'ripple', x: cx, y: T + 6, size: W / 2 - 8 });
+        }
+      }
       g.rect(L + 6, T + 4, W - 12, B - T - 6).stroke({ color: STONE[3], width: 1.5 });
-      for (let x = L + 14; x < R - 10; x += 14) em.push({ kind: 'bubble', x, y: B - 4, color: 0xffffff });
-      em.push({ kind: 'ripple', x: cx, y: T + 6, size: W / 2 - 8 });
       break;
     }
     case 'menagerie': {
-      // habitat module partitions + walkway + keeper's desk
+      // habitat module partitions (no painted keeper desk on a furniture slot)
       for (let x = L + 64; x < R; x += 64) g.rect(x - 1, T, 2, B - T).fill({ color: WOOD[1], alpha: 0.6 });
-      g.rect(R - 20, B - 8, 14, 2).fill({ color: WOOD[2] });
-      g.rect(R - 19, B - 6, 2, 6).fill({ color: WOOD[1] });
       em.push({ kind: 'leaf', x: L + 30, y: B - 14, color: 0x6ba34f });
       em.push({ kind: 'bubble', x: L + 96, y: B - 6, color: 0xffffff });
       em.push({ kind: 'twinkle', x: L + 160, y: B - 12, color: 0x9c86e0 });
       break;
     }
     case 'infirmary':
+      // curtains only; no floor glow disc (L3 frosted window is the room's light)
       for (const x of [L + 28, R - 28]) drapes(g, x, T + 4, 14, B - T - 10, 0xf6f1e8);
-      em.push({ kind: 'glow', x: cx, y: B - 12, size: 10, color: 0xfff6dc });
       break;
     case 'aviary': {
       for (let x = L + 4; x < R; x += 6) line(g, x, T, x, B, WOOD[1], 0.75);
@@ -725,15 +751,21 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
       em.push({ kind: 'sway', x: L + 10, y: T + 28, size: 2, color: 0xe8c547 });
       break;
     }
-    case 'sunlit_sanctum':
-      g.ellipse(cx, T + 1, 12, 3).fill({ color: 0xfff6dc });
-      g.poly([cx - 10, T + 2, cx + 10, T + 2, cx + 22, B, cx - 22, B]).fill({ color: 0xfff6dc, alpha: 0.22 });
-      em.push({ kind: 'glow', x: cx, y: B - 12, size: 16, color: 0xfff6dc });
+    case 'sunlit_sanctum': {
+      // the oculus is the Sun Window slot: lit and casting its cone once installed (gilded at L3)
+      const sun = fixtureState(room, 'sun_window');
+      if (sun !== 'missing') {
+        const o = sanctumOculus(box, room.level || 1);
+        if ((room.level || 1) >= 3) g.ellipse(o.cx, o.cy, o.rx + 1.5, o.ry + 1).fill({ color: GOLDS[2] });
+        g.ellipse(o.cx, o.cy, o.rx, o.ry).fill({ color: sun === 'ok' ? 0xfff6dc : STONE[2] });
+        if (sun === 'ok') {
+          g.poly([o.cx - o.rx + 2, o.cy + 1, o.cx + o.rx - 2, o.cy + 1, o.cx + 22, B, o.cx - 22, B]).fill({ color: 0xfff6dc, alpha: 0.22 });
+        }
+      }
       break;
+    }
     case 'warding_chamber':
-      g.ellipse(cx, B - 1, 24, 3).stroke({ color: 0x5fc2c2, width: 1 });
-      for (const x of [L + 6, R - 6]) { g.rect(x - 1, B - 18, 2, 18).fill({ color: 0x3b3a40 }); g.rect(x - 2, B - 21, 4, 3).fill({ color: 0x5fc2c2 }); }
-      em.push({ kind: 'twinkle', x: cx, y: B - 2, color: 0x5fc2c2 });
+      // floor stays clear for the placed Ward Circle (posts live in L2 trim; no duplicate floor ellipse)
       break;
     case 'gloom_hutch':
       g.rect(L + 2, T, W - 4, B - T).fill({ color: 0x151a38, alpha: 0.55 });
@@ -741,7 +773,6 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
         const mx = L + 8 + i * 11, my = B - 1 - (i % 2) * 2;
         line(g, mx, my, mx, my - 3, 0xe3dbce, 0.75);
         g.ellipse(mx, my - 3.5, 2.5, 1.5).fill({ color: 0x5fc2c2 });
-        em.push({ kind: 'glow', x: mx, y: my - 3.5, size: 4, color: 0x5fc2c2, seed: i });
       }
       g.ellipse(cx, T + 2, W / 2 - 3, 4).fill({ color: 0x3a6b2c, alpha: 0.6 });
       break;
@@ -753,47 +784,58 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
       em.push({ kind: 'sway', x: cx, y: T + 13, size: 3, color: GOLDS[1] });
       for (const x of [L + 8, R - 16]) { g.rect(x, T + 6, 8, 6).fill({ color: 0x3b3a40 }); line(g, x + 1, T + 8, x + 7, T + 8, 0xe3dbce, 0.5); }
       break;
-    case 'alchemy_lab':
-      for (let i = 0; i < 2; i++) {
-        const y = T + 4 + i * 8;
-        g.rect(L + 4, y + 5, 30, 1.5).fill({ color: WOOD[1] });
-        for (let j = 0; j < 6; j++) g.rect(L + 6 + j * 4.5, y + 1, 2.5, 4).fill({ color: [0xd9472b, 0x7db861, 0x6b4fbb, 0xe8c547, 0x2e8b8b, 0xdb8c46][(i + j) % 6] });
+    case 'alchemy_lab': {
+      // bottle shelves are the Ingredient Rack's art (shown over its anchor once installed)
+      if (fixtureState(room, 'ingredient_rack') !== 'missing') {
+        const rx = (requiredAnchorX(room, 'ingredient_rack') ?? 85) - 15;
+        for (let i = 0; i < 2; i++) {
+          const y = T + 6 + i * 8;
+          g.rect(L + rx, y + 5, 30, 1.5).fill({ color: WOOD[1] });
+          for (let j = 0; j < 6; j++) g.rect(L + rx + 2 + j * 4.5, y + 1, 2.5, 4).fill({ color: [0xd9472b, 0x7db861, 0x6b4fbb, 0xe8c547, 0x2e8b8b, 0xdb8c46][(i + j) % 6] });
+        }
       }
-      em.push({ kind: 'bubble', x: cx, y: B - 14, color: 0x7db861 });
       break;
-    case 'ember_pit':
-      g.ellipse(cx, B - 1, W / 2 - 6, 4).fill({ color: 0x5c1a0e });
-      for (let i = 0; i < 7; i++) g.circle(L + 12 + i * 6.5, B - 2 + (i % 2), 1.5).fill({ color: i % 2 ? 0xd9472b : 0xf07a5c });
-      em.push({ kind: 'ember', x: cx, y: B - 3, color: 0xf07a5c });
-      em.push({ kind: 'glow', x: cx, y: B - 4, size: 14, color: 0xd9472b });
+    }
+    case 'ember_pit': {
+      // hollow ash rim always; coals and embers appear once the Brazier Nest is installed
+      g.ellipse(cx, B - 1, W / 2 - 6, 4).fill({ color: 0x2a2533 });
+      const nest = fixtureState(room, 'brazier_nest');
+      if (nest !== 'missing') {
+        g.ellipse(cx, B - 1, W / 2 - 6, 4).fill({ color: 0x5c1a0e });
+        for (let i = 0; i < 7; i++) g.circle(L + 12 + i * 6.5, B - 2 + (i % 2), 1.5).fill({ color: i % 2 ? 0xd9472b : 0xf07a5c });
+        if (nest === 'ok') em.push({ kind: 'ember', x: cx, y: B - 3, color: 0xf07a5c });
+      }
       break;
+    }
     case 'workshop':
       g.rect(L + 6, B - 2, 20, 1.5).fill({ color: 0xc28e5c, alpha: 0.7 }); // sawdust
-      g.rect(R - 22, B - 9, 12, 9).stroke({ color: WOOD[2], width: 1.5 }); // half-built crate
-      line(g, R - 22, B - 9, R - 10, B, WOOD[2], 1);
+      if (room.furniture.length <= 1) {
+        g.rect(R - 22, B - 9, 12, 9).stroke({ color: WOOD[2], width: 1.5 }); // half-built crate when floor is open
+        line(g, R - 22, B - 9, R - 10, B, WOOD[2], 1);
+      }
       break;
     case 'glassworks':
+      // coloured glass blobs on rods; no orphan glow (the placed Kiln lights the corner)
       for (let i = 0; i < 3; i++) {
         line(g, L + 8 + i * 6, T + 4, L + 8 + i * 6, T + 14, 0x3b3a40, 0.75);
         g.circle(L + 8 + i * 6, T + 15, 1.8).fill({ color: [0xf07a5c, 0xe8c547, 0x9cd4ff][i] });
       }
-      em.push({ kind: 'glow', x: R - 18, y: B - 10, size: 10, color: 0xf07a5c });
       break;
     case 'weaving_room':
+      // hanging cloths on the beam; no painted floor baskets duplicating optional slots
       line(g, L + 4, T + 4, R - 4, T + 4, WOOD[1], 0.75);
       for (let i = 0; i < 3; i++) g.rect(L + 8 + i * 16, T + 4, 10, 12).fill({ color: [0xd97a9a, 0x5a9ad6, 0xe8c547][i], alpha: 0.85 });
-      for (const x of [R - 12, R - 20]) { g.ellipse(x, B - 3, 3.5, 3).fill({ color: WOOD[2] }); g.circle(x, B - 6, 2).fill({ color: 0xd97a9a }); }
       break;
     case 'crystal_vivarium':
+      // glass enclosure + sparkle; glow sits on the placed Geode Bed / L3 geode, not empty floor
       g.rect(L + 6, T + 4, W - 12, B - T - 5).fill({ color: 0x9c86e0, alpha: 0.2 });
       g.rect(L + 6, T + 4, W - 12, B - T - 5).stroke({ color: STONE[3], width: 1 });
       em.push({ kind: 'twinkle', x: cx - 8, y: B - 12, color: 0xc9b7ff });
-      em.push({ kind: 'glow', x: cx, y: B - 10, size: 14, color: 0x9c86e0 });
       break;
     case 'trophy_hall':
-      g.rect(cx - 10, B - 1, 20, 1.5).fill({ color: 0xb8402a }); // red carpet
+      // red carpet runner; plinth spots & twinkles are drawn only on placed Artifact Plinths
+      g.rect(cx - 10, B - 1, 20, 1.5).fill({ color: 0xb8402a });
       g.rect(L + 6, B - 1, W - 12, 1).fill({ color: 0xb8402a });
-      for (let x = L + 24; x < R - 10; x += 40) plinthSpot(g, x, T, B, em);
       break;
     default: {
       // GDD rooms without a bespoke dressing yet (e.g. future school halls): a category banner
@@ -881,10 +923,18 @@ export function drawGroundsPlot(g: Painter, room: PlacedRoom, box: Box, em: Emit
       line(g, R - 10, B, R - 4, B - 22, WOOD[3], 1);
       em.push({ kind: 'sway', x: L + 18, y: B - 26, size: 3, color: 0x4e8b3a });
       break;
-    case 'apiary':
-      for (let i = 0; i < 5; i++) g.circle(L + 8 + i * 12, B - 2, 2).fill({ color: [0xd97a9a, 0xe8c547, 0x9c86e0, 0xf6f1e8, 0xd97a9a][i] });
-      em.push({ kind: 'twinkle', x: cx, y: B - 26, color: 0xf5ce7a });
+    case 'apiary': {
+      // readable skep hives on a wooden stand (not 2px dots) and twinkle right above a hive
+      g.rect(L + 8, B - 5, W - 16, 1.5).fill({ color: WOOD[1] });
+      for (const x of [L + 11, R - 13]) g.rect(x, B - 4, 1.5, 4).fill({ color: WOOD[0] });
+      for (const hx of [L + 18, cx, R - 18]) {
+        g.ellipse(hx, B - 8, 4.5, 4).fill({ color: 0xe8c547 });
+        g.rect(hx - 4, B - 8, 8, 1).fill({ color: WOOD[1] });
+        g.rect(hx - 1, B - 7, 2, 2).fill({ color: 0x1b1822 });
+      }
+      em.push({ kind: 'twinkle', x: cx, y: B - 14, color: 0xf5ce7a });
       break;
+    }
     case 'courtyard_garden':
       g.rect(L + 3, B - 10, 14, 10).fill({ color: 0x3a6b2c });
       g.rect(R - 17, B - 10, 14, 10).fill({ color: 0x3a6b2c });
@@ -897,7 +947,6 @@ export function drawGroundsPlot(g: Painter, room: PlacedRoom, box: Box, em: Emit
         g.poly([x - 4, B, x + 4, B, x + 3, B - h, x - 3, B - h + 2]).fill({ color: STONE[2] });
         g.rect(x - 1, B - h + 8, 2, 4).fill({ color: 0x9bd4ff, alpha: 0.7 });
       }
-      em.push({ kind: 'glow', x: L + 24, y: B - 20, size: 6, color: 0x9bd4ff });
       break;
     case 'moonwell':
       g.rect(cx - 12, B - 10, 24, 10).fill({ color: STONE[2] });
@@ -906,7 +955,6 @@ export function drawGroundsPlot(g: Painter, room: PlacedRoom, box: Box, em: Emit
       line(g, cx - 10, B - 10, cx - 10, B - 24, WOOD[1], 1.5);
       line(g, cx + 10, B - 10, cx + 10, B - 24, WOOD[1], 1.5);
       g.poly([cx - 14, B - 24, cx + 14, B - 24, cx, B - 32]).fill({ color: 0x3e4a5c });
-      em.push({ kind: 'glow', x: cx, y: B - 10, size: 10, color: 0xd8d8f0 });
       break;
     case 'meadow_paddock': {
       for (let x = L + 4; x < R - 4; x += 5) line(g, x, B, x + 1, B - 4 - noise(s, x) * 3, 0x6ba34f, 0.75);
@@ -926,7 +974,15 @@ export function drawGroundsPlot(g: Painter, room: PlacedRoom, box: Box, em: Emit
       break;
     }
     case 'rift_gate': {
-      const rState: RiftGateVisualState = opts.riftState ?? 'dormant';
+      const arch = room.state === 'site' ? 'ok' : fixtureState(room, 'gate_arch');
+      if (arch === 'missing') {
+        // Stone dais only until the Gate Arch is installed (no portal before the arch exists)
+        g.rect(cx - 38, B - 5, 76, 5).fill({ color: STONE[0] });
+        g.rect(cx - 34, B - 8, 68, 3).fill({ color: STONE[1] });
+        g.rect(cx - 34, B - 8, 68, 0.75).fill({ color: STONE[2] });
+        break;
+      }
+      const rState: RiftGateVisualState = arch === 'ok' ? (opts.riftState ?? 'dormant') : 'dormant';
       drawRiftGateArch(g, box, rState, {
         phaseRad: opts.riftPhaseRad ?? 0,
         destinationId: opts.riftDestId,
