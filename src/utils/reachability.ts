@@ -71,19 +71,18 @@ export function computeReachability(rooms: PlacedRoom[]): Map<number, Reachabili
     }
   }
 
-  // 2. Vertical connections:
-  // Stacked Spiral Stairs in the same column
+  // 2. Vertical & Portal connections:
+  // Stacked Spiral Stairs in the same column, plus Level 3 Teleportation Portals linking directly regardless of coordinates
   const stairs = castleRooms.filter(r => r.defId === 'spiral_stair');
   for (let i = 0; i < stairs.length; i++) {
     const a = stairs[i];
     for (let j = i + 1; j < stairs.length; j++) {
       const b = stairs[j];
-      if (a.x === b.x) {
-        // Stacked vertically: a is immediately below b or vice versa
-        if (a.y + a.h === b.y || b.y + b.h === a.y) {
-          adj.get(a.id)!.push(b.id);
-          adj.get(b.id)!.push(a.id);
-        }
+      const bothPortals = (a.level || 1) >= 3 && (b.level || 1) >= 3;
+      const stacked = a.x === b.x && (a.y + a.h === b.y || b.y + b.h === a.y);
+      if (bothPortals || stacked) {
+        adj.get(a.id)!.push(b.id);
+        adj.get(b.id)!.push(a.id);
       }
     }
   }

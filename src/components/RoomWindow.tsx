@@ -23,6 +23,7 @@ import {
   costText,
   unaffordable,
   isFurnitureCompatibleWithRoom,
+  maxOptionalSlots,
   optionalSlotsUsed,
   maxSameFurnitureInRoom,
   optionalSlotsCostForNewPiece,
@@ -37,7 +38,7 @@ import { FullGameState, PlacedRoom } from '../types/ankicaster';
 import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS, SPELL_DEFINITIONS, CREATURE_DEFINITIONS } from '../data/content';
 import {
   calculateRoomQuality, calculateFacultyLimit, wizardOrbQuote,
-  FURNITURE_EFFECTS, formatFurnitureEffect, FurnitureEffectKind, roomFurnitureEffects,
+  furnitureEffectForRoom, formatFurnitureEffect, FurnitureEffectKind, roomFurnitureEffects,
   careerAffinityMultiplier, classroomSchool, getFacultySummary
 } from '../utils/formulas';
 import { isPatternKnown } from '../utils/decks';
@@ -232,7 +233,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
   const unfinished = !isSite && reqMissing > 0;
   const unplaced = room.unplacedFurniture || [];
   const queuedReq = queuedRequiredBySlot(room);
-  const maxSlots = (def?.optionalSlots || 2) + (room.level - 1) * 2;
+  const maxSlots = maxOptionalSlots(room);
   const usedSlots = optionalSlotsUsed(room);
   const tableTotal = refectoryTableTotal(room);
 
@@ -762,8 +763,21 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
 
               {!isSite && room.level < 3 && (
                 <div className="flex items-center justify-between gap-2" data-tour="room-renovate">
-                  <span className="text-slate-300" title="+2 optional furniture slots, better efficiency; Level 3 unlocks the room perk">
-                    Renovate → Lv {room.level + 1}
+                  <span
+                    className="text-slate-300"
+                    title={
+                      room.defId === 'spiral_stair'
+                        ? room.level === 1
+                          ? 'Upgrades Spiral Stairs to a fast Magical Elevator'
+                          : 'Upgrades to a Teleportation Portal (instant travel, no stacking needed)'
+                        : '+2 optional furniture slots, better efficiency; Level 3 unlocks the room perk'
+                    }
+                  >
+                    {room.defId === 'spiral_stair'
+                      ? room.level === 1
+                        ? 'Upgrade → Magical Elevator (Lv 2)'
+                        : 'Upgrade → Teleportation Portal (Lv 3)'
+                      : `Renovate → Lv ${room.level + 1}`}
                   </span>
                   <button
                     onClick={() => onUpgrade(room.id)}
@@ -784,7 +798,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                       {room.furniture.map(f => {
                         const fDef = FURNITURE_DEFINITIONS[f.defId];
                         const req = f.slotKind.startsWith('required:');
-                        const eff = FURNITURE_EFFECTS[f.defId];
+                        const eff = furnitureEffectForRoom(f.defId, room.defId);
                         const effText = eff ? formatFurnitureEffect(eff.kind, eff.value * (f.damaged ? 0.5 : 1)) : null;
                         const pieceName = fDef?.name || f.defId;
                         return (
@@ -833,10 +847,15 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                     {room.defId === 'refectory' && tableTotal > 0 ? ` · ${6 * tableTotal} table seats free` : ''}
                   </span>
                 </div>
+                {maxSlots === 0 && compatible.length === 0 ? (
+                  <div className="text-slate-500 text-[12px]" data-testid="no-furniture-room">
+                    This room holds no furniture.
+                  </div>
+                ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1">
                   {compatible.map(fDef => {
                     const known = isPatternKnown(state, fDef.id);
-                    const eff = FURNITURE_EFFECTS[fDef.id];
+                    const eff = furnitureEffectForRoom(fDef.id, room.defId);
                     const effText = eff ? formatFurnitureEffect(eff.kind, eff.value) : null;
                     if (!known) {
                       const deckLabel = fDef.deck[0].toUpperCase() + fDef.deck.slice(1);
@@ -885,6 +904,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                     );
                   })}
                 </div>
+                )}
               </div>
             </div>
           </details>

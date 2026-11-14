@@ -149,14 +149,23 @@ export function drawRoomInterior(g: Painter, room: PlacedRoom, box: Box, opts: R
   return res;
 }
 
+const BACKGROUND_FLOOR_FIXTURES = new Set([
+  'orrery_globe',
+  'potting_bench',
+  'sun_altar',
+  'veiled_mirror',
+  'bench_cauldron'
+]);
+
 function furnitureDrawLayer(pt: ReturnType<typeof placedFurniturePoints>[number]): number {
   const defId = pt.view.furniture.defId;
   if (defId === 'woven_rug') return 0; // flat floor background under standing furniture
   if (pt.view.kind === 'wall' || pt.view.kind === 'ceiling') return 1;
+  if (BACKGROUND_FLOOR_FIXTURES.has(defId)) return 2; // classroom centerpieces sit behind student desks
   if (defId === 'wooden_chair' && typeof pt.view.tableId === 'number') {
-    return (pt.view.markIndex ?? 0) < 3 ? 2 : 4; // back row before long_table (3), front row after
+    return (pt.view.markIndex ?? 0) < 3 ? 3 : 5; // back row before long_table (4), front row after
   }
-  return 3;
+  return 4;
 }
 
 function placeFurniture(g: Painter, room: PlacedRoom, box: Box, tint: number, gk: string, res: RoomArtResult, cropStage = 3) {
@@ -168,6 +177,7 @@ function placeFurniture(g: Painter, room: PlacedRoom, box: Box, tint: number, gk
     const it = pt.view;
     const { art, x, y } = pt;
     const damaged = !!it.furniture.damaged;
+    const flipX = it.furniture.defId === 'teachers_lectern' && it.x >= box.width / 2;
     if (isDressingArt(room.defId, it.furniture)) {
       // The dressing draws this piece (one object, never two); only the wrench badge comes from here
       if (damaged) {
@@ -182,7 +192,7 @@ function placeFurniture(g: Painter, room: PlacedRoom, box: Box, tint: number, gk
     if (art.animated && !damaged) {
       res.animated.push({ id: it.furniture.defId, x, y, damaged, tint, glyphKind: gk });
     } else {
-      drawFurniture(g, it.furniture.defId, x, y, { damaged, tint, glyphKind: gk });
+      drawFurniture(g, it.furniture.defId, x, y, { damaged, tint, glyphKind: gk, flipX });
     }
     if (damaged) {
       const b = furnitureBox(art, x, y);
@@ -552,15 +562,40 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
       break;
     }
     case 'spiral_stair': {
-      // the glass slit is the stair's light (no torch at L1; L2 adds one cresset, L3 glazes the slit)
+      // Lv 1: spiral stairs; Lv 2: magical elevator; Lv 3: teleportation portal
+      // Glass slit is the light (no torch at L1; L2+ adds one cresset at stairCressetPoint; L3 glazes the slit)
+      const lvl = room.level || 1;
       const p = stairSlitPane(box);
       g.rect(p.x, p.y, p.w, p.h).fill({ color: GLASS });
-      for (let y = T + 18; y < B; y += 6) {
-        g.rect(L + 14, y, W - 28, 2.5).fill({ color: STONE[3] });
-        g.circle(cx, y + 1, 2).fill({ color: STONE[0] });
+      if (lvl === 1) {
+        for (let y = T + 18; y < B; y += 6) {
+          g.rect(L + 14, y, W - 28, 2.5).fill({ color: STONE[3] });
+          g.circle(cx, y + 1, 2).fill({ color: STONE[0] });
+        }
+        g.rect(cx - 1, T, 2, B - T).fill({ color: STONE[1], alpha: 0.6 });
+      } else if (lvl === 2) {
+        // Vertical brass/arcane elevator guide rails and levitating platform
+        g.rect(L + 15, T + 2, 2, B - T - 2).fill({ color: 0xb8860b });
+        g.rect(R - 17, T + 2, 2, B - T - 2).fill({ color: 0xb8860b });
+        g.rect(cx - 0.5, T + 2, 1, B - T - 2).fill({ color: 0x5fc2c2, alpha: 0.55 });
+        const platY = B - 16;
+        g.rect(L + 16, platY, W - 32, 3).fill({ color: WOOD[2] });
+        g.rect(L + 16, platY + 3, W - 32, 1.5).fill({ color: 0x5fc2c2, alpha: 0.8 });
+        g.rect(L + 17, platY - 7, 1.5, 7).fill({ color: 0xd4af37 });
+        g.rect(R - 18.5, platY - 7, 1.5, 7).fill({ color: 0xd4af37 });
+        g.circle(cx, platY + 6, 2).fill({ color: 0x9bd4ff, alpha: 0.75 });
+      } else {
+        // Teleportation Portal arch & arcane vortex
+        const portalCy = B - 13;
+        g.rect(cx - 13, B - 3, 26, 3).fill({ color: STONE[3] });
+        g.ellipse(cx, portalCy, 11, 12).fill({ color: 0x2a1d47 });
+        g.ellipse(cx, portalCy, 11, 12).stroke({ color: 0xd4af37, width: 1.5 });
+        g.ellipse(cx, portalCy, 8.5, 9.5).fill({ color: 0x6b4fbb, alpha: 0.85 });
+        g.ellipse(cx, portalCy, 5.5, 6.5).fill({ color: 0x5fc2c2, alpha: 0.85 });
+        g.ellipse(cx, portalCy, 2.5, 3.5).fill({ color: 0xd8eef7, alpha: 0.9 });
+        em.push({ kind: 'portal', x: cx, y: portalCy, size: 7, color: 0x5fc2c2 });
       }
-      g.rect(cx - 1, T, 2, B - T).fill({ color: STONE[1], alpha: 0.6 });
-      if ((room.level || 1) >= 2) {
+      if (lvl >= 2) {
         const cp = stairCressetPoint(box);
         em.push({ kind: 'flame', x: cp.x, y: cp.y - 1, size: 0.7 });
       }

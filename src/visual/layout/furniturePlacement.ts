@@ -31,8 +31,15 @@ export const LONG_TABLE_MARK_OFFSETS = [-10, 0, 10] as const;
 /** Castle rooms that have walkable upper floors above floor 0. */
 export const MEZZANINE_ROOMS = new Set(['wizard_study', 'menagerie']);
 
-/** Floor-anchored pieces that lie flat on the floor (Background) rather than Bulk obstacles. */
-const FLAT_FLOOR_BACKGROUND_DEFS = new Set(['woven_rug']);
+/** Floor-anchored pieces that sit in the background rather than acting as Bulk obstacles. */
+const FLAT_FLOOR_BACKGROUND_DEFS = new Set([
+  'woven_rug',
+  'orrery_globe',
+  'potting_bench',
+  'sun_altar',
+  'veiled_mirror',
+  'bench_cauldron'
+]);
 
 /** Bulk pieces a person can actually sit or lie on. */
 const SEAT_DEFS = new Set([

@@ -356,6 +356,9 @@ export type FurnitureEffectKind =
   | 'leisure_bonus'
   | 'morale_bonus'
   | 'output_pct'
+  | 'ponder_pct'
+  | 'build_speed_pct'
+  | 'meal_cost_pct'
   | 'hazard_chance_pct'
   | 'cleanliness_per_bell'
   | 'heal_pct'
@@ -393,14 +396,14 @@ export const FURNITURE_EFFECTS: Record<string, FurnitureEffectDef> = {
   dreamcatcher_bed: { kind: 'composure_bonus', value: 5, scope: 'room' },
   mossbed: { kind: 'heal_pct', value: 10, scope: 'room' },
   moon_curtains: { kind: 'rest_bonus', value: 5, scope: 'room' },
-  tea_service: { kind: 'output_pct', value: 5, scope: 'room' },
+  tea_service: { kind: 'leisure_bonus', value: 2, scope: 'room' },
   wizard_chess: { kind: 'leisure_bonus', value: 2, scope: 'room' },
   music_box: { kind: 'composure_bonus', value: 3, scope: 'room' },
   hex_darts: { kind: 'hazard_chance_pct', value: -5, scope: 'academy' },
   warm_hearthstone: { kind: 'hazard_chance_pct', value: -8, scope: 'room' },
   spice_rack: { kind: 'morale_bonus', value: 2, scope: 'room' },
   frostbox: { kind: 'storage_bonus', value: 100, scope: 'academy' },
-  stewpot: { kind: 'output_pct', value: 10, scope: 'room' },
+  stewpot: { kind: 'meal_cost_pct', value: -10, scope: 'academy' },
   banquet_bell: { kind: 'morale_bonus', value: 4, scope: 'academy' },
   rolling_ladder: { kind: 'capacity_bonus', value: 1, scope: 'room' },
   globe_elsewhere: { kind: 'insight_per_bell', value: 0.2, scope: 'room' },
@@ -423,7 +426,7 @@ export const FURNITURE_EFFECTS: Record<string, FurnitureEffectDef> = {
   shadow_ledger: { kind: 'hazard_chance_pct', value: -8, scope: 'academy' },
   nightglass: { kind: 'creature_bond_pct', value: 10, scope: 'room' },
   alembic_array: { kind: 'brew_speed_pct', value: 10, scope: 'room' },
-  tool_wall: { kind: 'output_pct', value: 5, scope: 'room' },
+  tool_wall: { kind: 'build_speed_pct', value: 5, scope: 'academy' },
   supply_chest: { kind: 'rift_supply_slots', value: 1, scope: 'academy' },
   artifact_plinth: { kind: 'renown_bonus', value: 2, scope: 'room' },
   garden_gnome: { kind: 'hazard_chance_pct', value: -10, scope: 'grounds' },
@@ -438,6 +441,41 @@ export const FURNITURE_EFFECTS: Record<string, FurnitureEffectDef> = {
   heartwood_bench: { kind: 'morale_bonus', value: 5, scope: 'room' }
 };
 
+const BOOKSHELF_OUTPUT_ROOMS = new Set([
+  'library',
+  'scriptorium',
+  'alchemy_lab',
+  'class_arcane',
+  'class_nature',
+  'class_light',
+  'class_shadow',
+  'class_alchemy'
+]);
+
+/**
+ * Resolve the effective furniture bonus in a specific room (supports multi-purpose items
+ * such as Tea Service, Self-Writing Quill, and Bookshelf).
+ */
+export function furnitureEffectForRoom(defId: string, roomDefId?: string): FurnitureEffectDef | undefined {
+  if (roomDefId) {
+    if (defId === 'tea_service' && roomDefId === 'wizard_study') {
+      return { kind: 'ponder_pct', value: 5, scope: 'room' };
+    }
+    if (defId === 'silent_quill' && roomDefId === 'wizard_study') {
+      return { kind: 'ponder_pct', value: 10, scope: 'room' };
+    }
+    if (defId === 'bookshelf') {
+      if (roomDefId === 'wizard_study') {
+        return { kind: 'ponder_pct', value: 10, scope: 'room' };
+      }
+      if (!BOOKSHELF_OUTPUT_ROOMS.has(roomDefId)) {
+        return { kind: 'composure_bonus', value: 2, scope: 'room' };
+      }
+    }
+  }
+  return FURNITURE_EFFECTS[defId];
+}
+
 /**
  * Sum structured furniture effects inside a single built room.
  * Same-item effects in one room stack at most twice; undamaged items take priority; damaged = half.
@@ -448,7 +486,7 @@ export function roomFurnitureEffects(room: PlacedRoom): Partial<Record<Furniture
   const counts: Record<string, number> = {};
   const sorted = [...room.furniture].sort((a, b) => (a.damaged ? 1 : 0) - (b.damaged ? 1 : 0));
   for (const f of sorted) {
-    const eff = FURNITURE_EFFECTS[f.defId];
+    const eff = furnitureEffectForRoom(f.defId, room.defId);
     if (!eff) continue;
     const seen = counts[f.defId] || 0;
     if (seen >= 2) continue;
@@ -486,7 +524,7 @@ export function academyFurnitureEffect(
     const counts: Record<string, number> = {};
     const sorted = [...r.furniture].sort((a, b) => (a.damaged ? 1 : 0) - (b.damaged ? 1 : 0));
     for (const f of sorted) {
-      const eff = FURNITURE_EFFECTS[f.defId];
+      const eff = furnitureEffectForRoom(f.defId, r.defId);
       if (!eff || eff.kind !== kind) continue;
       if (excludeAcademy && eff.scope === 'academy') continue;
       const seen = counts[f.defId] || 0;
@@ -510,6 +548,9 @@ const EFFECT_LABELS: Record<FurnitureEffectKind, (v: number) => string> = {
   leisure_bonus: v => `Leisure +${v}`,
   morale_bonus: v => `Morale +${v}`,
   output_pct: v => `Output ${v >= 0 ? '+' : ''}${v}%`,
+  ponder_pct: v => `Pondering +${v}%`,
+  build_speed_pct: v => `Build speed +${v}%`,
+  meal_cost_pct: v => `Meal food ${v}%`,
   hazard_chance_pct: v => `Hazard chance ${v}%`,
   cleanliness_per_bell: v => `Cleanliness +${v}/bell`,
   heal_pct: v => `Healing +${v}%`,

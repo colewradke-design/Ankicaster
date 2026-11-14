@@ -976,7 +976,8 @@ export class VisualWorld {
           : fg.plane === 'wall'
           ? fl + (fg.wallY ?? DEFAULT_WALL_Y)
           : ceilingY;
-      drawFurniture(this.ghostGraphics, fg.defId, worldX, worldY, {});
+      const flipX = fg.defId === 'teachers_lectern' && fg.x >= box.width / 2;
+      drawFurniture(this.ghostGraphics, fg.defId, worldX, worldY, { flipX });
       const spriteW = fg.defId === 'wooden_chair' && fg.tableId != null ? 8 : art.w;
       const sb = furnitureBox({ w: spriteW, h: art.h, anchor: fg.plane }, worldX, worldY);
       if (fg.valid) {

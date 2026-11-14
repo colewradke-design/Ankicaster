@@ -171,8 +171,16 @@ export function fillRequiredFixtures(room: PlacedRoom, ids: Set<number>): number
   return missing.length;
 }
 
+/** Max optional furniture slots available for a room at its current level (0 if room disallows furniture). */
+export function maxOptionalSlots(room: Pick<PlacedRoom, 'defId' | 'level'>): number {
+  const base = ROOM_DEFINITIONS[room.defId]?.optionalSlots ?? 2;
+  if (base === 0) return 0;
+  return base + (Math.max(1, room.level || 1) - 1) * 2;
+}
+
 /** Whether a furniture definition can legally be placed in `roomDefId`. */
 export function isFurnitureCompatibleWithRoom(fDef: FurnitureDefinition, roomDefId: string): boolean {
+  if (ROOM_DEFINITIONS[roomDefId]?.optionalSlots === 0) return false;
   if (fDef.rooms === 'any') return true;
   if (Array.isArray(fDef.rooms) && fDef.rooms.includes(roomDefId)) return true;
   if (fDef.role === 'bed' && roomDefId.includes('dorm')) return true;

@@ -70,7 +70,8 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     requiredFurniture: [],
     optionalSlots: 0,
     stats: { primary: ['order', 'order'], secondary: 'order' },
-    description: 'The vertical circulatory spine of the castle. Stack stairs to connect floors.'
+    level3Perk: 'Becomes a Teleportation Portal connecting directly to any other Lv 3 Portal without stacking.',
+    description: 'Vertical transit between castle floors. Lv 2 upgrades into a fast Magical Elevator; Lv 3 becomes an instant Teleportation Portal.'
   },
   corridor: {
     id: 'corridor',
@@ -1052,10 +1053,8 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
       'grand_dormitory',
       'faculty_quarters',
       'common_room',
-      'library',
       'faculty_lounge',
-      'entrance_hall',
-      'wizard_study'
+      'entrance_hall'
     ],
     unlock: { type: 'std' }
   },
@@ -1199,8 +1198,29 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
     slots: 1,
     cost: { mana: 100, timber: 10 },
     stats: { focus: 3, order: 1 },
-    specialEffect: 'Well-Read trait activates (+10% classroom yield)',
-    rooms: 'any',
+    specialEffect: '+10% Output in study/craft rooms; +2 Composure in living/social rooms',
+    rooms: [
+      'library',
+      'wizard_study',
+      'class_arcane',
+      'class_nature',
+      'class_light',
+      'class_shadow',
+      'class_alchemy',
+      'scriptorium',
+      'observatory',
+      'alchemy_lab',
+      'dormitory',
+      'grand_dormitory',
+      'faculty_quarters',
+      'faculty_lounge',
+      'common_room',
+      'sunlit_sanctum',
+      'warding_chamber',
+      'detention_hall',
+      'training_yard',
+      'trophy_hall'
+    ],
     unlock: { type: 'std' }
   },
   tapestry: {
@@ -1341,7 +1361,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
     slots: 1,
     cost: { mana: 120, glass: 2, herbs: 2 },
     stats: { comfort: 2, charm: 2 },
-    specialEffect: 'Lounge career outputs +5%',
+    specialEffect: 'Lounge Leisure +2; Study pondering +5%',
     rooms: ['faculty_lounge', 'wizard_study'],
     unlock: { type: 'draft', school: 'light', rarity: 'common' }
   },
@@ -1520,7 +1540,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
     slots: 1,
     cost: { mana: 220, moonsilk: 2, insight: 5 },
     stats: { focus: 3 },
-    specialEffect: 'Scriptorium output +10%',
+    specialEffect: 'Scriptorium output +10%; Study pondering +10%',
     rooms: ['scriptorium', 'wizard_study'],
     unlock: { type: 'draft', school: 'arcane', rarity: 'uncommon' }
   },
@@ -1805,7 +1825,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
     cost: { mana: 180, glass: 10, umbra: 4 },
     stats: { aura: 2, charm: 1 },
     specialEffect: 'Creature bond gain +10%',
-    rooms: ['gloom_hutch', 'warding_chamber', 'dormitory'],
+    rooms: ['gloom_hutch', 'aviary', 'ember_pit', 'crystal_vivarium', 'menagerie'],
     unlock: { type: 'draft', school: 'shadow', rarity: 'common' }
   },
   // Craft, Storage & Training

@@ -195,27 +195,24 @@ export class NavGraph {
       }
     }
 
-    // 3. Add Vertical Edges between stacked Spiral Stairs
+    // 3. Add Vertical Edges between stacked Spiral Stairs & Portal Edges between Lv 3 Portals
     const stairs = castleRooms.filter(r => r.defId === 'spiral_stair');
     for (let i = 0; i < stairs.length; i++) {
       const a = stairs[i];
       for (let j = i + 1; j < stairs.length; j++) {
         const b = stairs[j];
-        if (a.x === b.x) {
-          if (a.y + a.h === b.y) {
-            // a is below b
-            const aNodeId = `room-${a.id}-f${a.y + a.h - 1}`;
-            const bNodeId = `room-${b.id}-f${b.y}`;
-            if (this.nodes.has(aNodeId) && this.nodes.has(bNodeId)) {
-              this.addEdge(aNodeId, bNodeId, 48 * 1.5);
-            }
-          } else if (b.y + b.h === a.y) {
-            // b is below a
-            const bNodeId = `room-${b.id}-f${b.y + b.h - 1}`;
-            const aNodeId = `room-${a.id}-f${a.y}`;
-            if (this.nodes.has(aNodeId) && this.nodes.has(bNodeId)) {
-              this.addEdge(aNodeId, bNodeId, 48 * 1.5);
-            }
+        const aLvl = a.level || 1;
+        const bLvl = b.level || 1;
+        const stacked = a.x === b.x && (a.y + a.h === b.y || b.y + b.h === a.y);
+        const bothPortals = aLvl >= 3 && bLvl >= 3;
+        if (stacked || bothPortals) {
+          const aFloor = stacked ? (a.y + a.h === b.y ? a.y + a.h - 1 : a.y) : a.y;
+          const bFloor = stacked ? (b.y + b.h === a.y ? b.y + b.h - 1 : b.y) : b.y;
+          const aNodeId = `room-${a.id}-f${aFloor}`;
+          const bNodeId = `room-${b.id}-f${bFloor}`;
+          if (this.nodes.has(aNodeId) && this.nodes.has(bNodeId)) {
+            const cost = bothPortals ? 4 : (aLvl >= 2 || bLvl >= 2) ? 24 : 48 * 1.5;
+            this.addEdge(aNodeId, bNodeId, cost);
           }
         }
       }

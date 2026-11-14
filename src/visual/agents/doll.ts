@@ -42,7 +42,7 @@ export function dollFrame(anim: DollAnim | string, elapsedMs: number): number {
 }
 
 /** Art px per second. Fixed. Never a function of review rate (Addendum 6.4). */
-export const MOVE_SPEED: Record<string, number> = { walk: 28, limp: 16, carry: 24, climb: 24 };
+export const MOVE_SPEED: Record<string, number> = { walk: 28, limp: 16, carry: 24, climb: 24, elevator: 72 };
 
 export type DollRole = 'wizard' | 'faculty' | 'resident' | 'student' | 'adventurer' | 'sabbatical';
 

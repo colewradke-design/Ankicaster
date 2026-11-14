@@ -130,7 +130,7 @@ const TABLE: Record<string, Row> = {
   penitent_benches: ['seat', 32, 16, 'floor', WD, W, 'bench'],
   silence_bell: ['lamp', 16, 16, 'ceiling', SL, INDIGO, 'bell', 1],
   shadow_ledger: ['shelf', 16, 16, 'wall', INDIGO, 0x5fc2c2, 'ledger'],
-  nightglass: ['frame', 16, 16, 'floor', INDIGO, 0x4c5ba3, 'pane', 1],
+  nightglass: ['frame', 16, 16, 'wall', INDIGO, 0x4c5ba3, 'pane', 1],
   brewing_cauldron: ['vessel', 16, 24, 'floor', IRON, 0x7db861, 'cauldron', 1],
   ingredient_rack: ['shelf', 16, 24, 'floor', W, 0xdb8c46, 'bottles'],
   fume_hood: ['box', 16, 24, 'floor', COPPER, SD, 'hood', 1],
@@ -185,6 +185,8 @@ export interface FurnitureDrawOpts {
   /** Category / school tint (Addendum 5.2) for banners, glyphs and orbs. */
   tint?: number;
   glyphKind?: string;
+  /** Mirror asymmetrical sprites horizontally (e.g. Teacher's Lectern facing room center). */
+  flipX?: boolean;
   /** Draw as an empty-slot ghost outline (Unfinished room, Section 5.3). */
   ghost?: boolean;
 }
@@ -209,7 +211,7 @@ export function drawFurniture(g: Painter, id: string, x: number, y: number, opts
   }
   const frame = art.animated && !opts.damaged ? (opts.frame ?? 0) % 4 : 0;
   const tint = opts.tint ?? art.a;
-  drawFamily(g, art, b, frame, tint, opts.glyphKind || 'star8');
+  drawFamily(g, art, b, frame, tint, opts.glyphKind || 'star8', !!opts.flipX);
   if (opts.damaged) drawDamagedFrame(g, b);
 }
 
@@ -239,7 +241,7 @@ export function drawDamagedFrame(g: Painter, b: { left: number; top: number; w: 
   g.rect(b.left + b.w - 5, b.top + b.h - 1.5, 2, 1.5).fill({ color: 0x5e5d66 });
 }
 
-function drawFamily(g: Painter, art: FurnitureArt, bx: { left: number; top: number; w: number; h: number }, f: number, tint: number, glyphKind: string) {
+function drawFamily(g: Painter, art: FurnitureArt, bx: { left: number; top: number; w: number; h: number }, f: number, tint: number, glyphKind: string, flipX = false) {
   const { left: L, top: T, w, h } = bx;
   const R = L + w, B = T + h, cx = L + w / 2;
   const a = art.a, c2 = art.b, v = art.variant || '';
@@ -356,8 +358,13 @@ function drawFamily(g: Painter, art: FurnitureArt, bx: { left: number; top: numb
       if (v === 'lectern') {
         g.rect(cx - 1.5, T + 8, 3, h - 9).fill({ color: a });
         g.rect(cx - 5, B - 2, 10, 2).fill({ color: darken(a, 0.7) });
-        g.poly([L + 2, T + 9, R - 2, T + 5, R - 2, T + 8, L + 2, T + 12]).fill({ color: darken(a, 0.85) });
-        g.poly([L + 3, T + 8, R - 3, T + 4.5, R - 3, T + 6, L + 3, T + 9.5]).fill({ color: c2 });
+        if (flipX) {
+          g.poly([R - 2, T + 9, L + 2, T + 5, L + 2, T + 8, R - 2, T + 12]).fill({ color: darken(a, 0.85) });
+          g.poly([R - 3, T + 8, L + 3, T + 4.5, L + 3, T + 6, R - 3, T + 9.5]).fill({ color: c2 });
+        } else {
+          g.poly([L + 2, T + 9, R - 2, T + 5, R - 2, T + 8, L + 2, T + 12]).fill({ color: darken(a, 0.85) });
+          g.poly([L + 3, T + 8, R - 3, T + 4.5, R - 3, T + 6, L + 3, T + 9.5]).fill({ color: c2 });
+        }
         break;
       }
       const top = v === 'trough' ? B - 7 : B - 9;

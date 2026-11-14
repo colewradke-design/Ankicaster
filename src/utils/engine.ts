@@ -45,7 +45,7 @@ import {
 import { normalizeAppearance } from './appearance';
 import {
   allFurnitureIds, Cost, fillRequiredFixtures, isFurnitureCompatibleWithRoom,
-  isRoomUnfinished, maxSameFurnitureInRoom, missingRequiredSlots,
+  isRoomUnfinished, maxOptionalSlots, maxSameFurnitureInRoom, missingRequiredSlots,
   optionalSlotsCostForNewPiece, optionalSlotsUsed, queuedRequiredBySlot,
   requiredInstallOption, requiredSlotStatus, costText, unaffordable, uniqueFurnitureId
 } from './requiredFurniture';
@@ -309,7 +309,11 @@ export class AnkicasterEngine {
 
     // 3. Advance Wizard Active Training Session (BR-06, BR-07)
     if (next.wizard.activeSession && next.wizard.activeSession.state === 'active') {
-      next.wizard.activeSession.progress += 1;
+      const ponderPct = studyRoom && !isRoomUnfinished(studyRoom)
+        ? academyFurnitureEffect(next.rooms, 'ponder_pct', studyRoom)
+        : 0;
+      const ponderStep = ponderPct > 0 ? Math.round((1 + ponderPct / 100) * 100) / 100 : 1;
+      next.wizard.activeSession.progress = Math.round((next.wizard.activeSession.progress + ponderStep) * 100) / 100;
       if (next.wizard.activeSession.progress >= next.wizard.activeSession.required) {
         const sess = next.wizard.activeSession;
         if (sess.kind === 'orb') {
@@ -363,9 +367,14 @@ export class AnkicasterEngine {
     }
 
     // 4. Advance Active Constructions
+    const buildSpeedPct = academyFurnitureEffect(
+      next.rooms.filter(r => r.state === 'built' && !isRoomUnfinished(r)),
+      'build_speed_pct'
+    );
+    const buildStep = buildSpeedPct > 0 ? Math.round((1 + buildSpeedPct / 100) * 100) / 100 : 1;
     for (const room of next.rooms) {
       if (room.state === 'site' && !room.buildPaused) {
-        room.buildProgress += 1;
+        room.buildProgress = Math.round((room.buildProgress + buildStep) * 100) / 100;
         if (room.buildProgress >= room.buildRequired) AnkicasterEngine.completeSite(next, room, notifications);
       }
     }
@@ -509,10 +518,19 @@ export class AnkicasterEngine {
         if (infirmaryBonus > 0) healRate += infirmaryBonus;
         healRate += activeHealers * 1.5;
         if (hasHealingCreature > 0) healRate += 1.5 * hasHealingCreature;
+        const healRooms = new Map<number, PlacedRoom>();
         const bedRoom = char.bedRoomId != null ? next.rooms.find(r => r.id === char.bedRoomId) : undefined;
-        const healPct =
-          academyFurnitureEffect(next.rooms, 'heal_pct', bedRoom) +
-          (infirmaryRoom && infirmaryRoom.id !== bedRoom?.id ? academyFurnitureEffect(next.rooms, 'heal_pct', infirmaryRoom) : 0);
+        if (bedRoom) healRooms.set(bedRoom.id, bedRoom);
+        if (infirmaryRoom) healRooms.set(infirmaryRoom.id, infirmaryRoom);
+        for (const hr of next.rooms) {
+          if ((hr.defId === 'bathhouse' || hr.defId === 'sunlit_sanctum') && hr.state === 'built' && !isRoomUnfinished(hr)) {
+            healRooms.set(hr.id, hr);
+          }
+        }
+        let healPct = 0;
+        for (const hr of healRooms.values()) {
+          healPct += academyFurnitureEffect(next.rooms, 'heal_pct', hr);
+        }
         if (healPct > 0) healRate *= 1 + healPct / 100;
         if (activeHealerChars.length > 0) {
           const charSchools: SchoolType[] = [...(char.currentSchool ? [char.currentSchool] : []), ...char.masteredSchools];
@@ -1057,13 +1075,14 @@ export class AnkicasterEngine {
         const before = bag.nectar || 0;
         bag.nectar = store(before, 0.5 * harvestMult);
         note('nectar', before, roomName(room.defId));
-      } else if (room.defId === 'library') {
+      } else if (room.defId === 'library' || room.defId === 'scriptorium') {
         const scholars = state.characters.filter(c => c.career === 'scholar' && c.careerState === 'active' && c.workplaceRoomId === room.id);
         if (scholars.length > 0) {
           const roomSchool = ROOM_DEFINITIONS[room.defId]?.school;
           const scholarMult = Math.max(...scholars.map(s => careerAffinityMultiplier(s.masteredSchools, 'scholar', roomSchool)));
+          const baseInsight = room.defId === 'library' ? 0.3 : 0.25;
           const before = bag.insight || 0;
-          bag.insight = before + 0.3 * harvestMult * scholarMult * starlitMult;
+          bag.insight = before + baseInsight * harvestMult * scholarMult * starlitMult;
           note('insight', before, roomName(room.defId));
         }
       } else if (room.defId === 'glassworks') {
@@ -1109,7 +1128,7 @@ export class AnkicasterEngine {
     const kitchenAdjacentToRefectory = state.rooms.some(k =>
       k.defId === 'kitchen' && k.state === 'built' && !isRoomUnfinished(k) &&
       state.rooms.some(ref => ref.defId === 'refectory' && ref.state === 'built' && !isRoomUnfinished(ref) &&
-        k.area === ref.area && k.x <= ref.x + ref.w && ref.x <= k.x + k.w && k.y <= ref.y + ref.h && ref.y <= k.y + k.h)
+        k.area === ref.area && k.x <= ref.x + ref.w && ref.x <= k.x + k.w && k.y <= ref.y + ref.h && ref.y <= k.y + ref.h)
     );
     if (state.bellIndex % 5 === 0) {
       if (state.characters.length > 0) {
@@ -1117,7 +1136,12 @@ export class AnkicasterEngine {
         const plan = AnkicasterEngine.mealPlan(state, reach, capFactor);
         state.pendingMealCapFactor = undefined;
         const served = plan.seated + plan.standing;
-        const foodCost = kitchenAdjacentToRefectory ? Math.round(served * 0.9 * 10) / 10 : served;
+        const mealCostPct = academyFurnitureEffect(
+          state.rooms.filter(r => r.state === 'built' && !isRoomUnfinished(r)),
+          'meal_cost_pct'
+        );
+        const mealMult = Math.max(0.5, 1 - (kitchenAdjacentToRefectory ? 0.1 : 0) + mealCostPct / 100);
+        const foodCost = Math.round(served * mealMult * 10) / 10;
         const before = bag.provisions || 0;
         bag.provisions = before - foodCost;
         note('provisions', before, `Meals (${served} people)`);
@@ -3067,8 +3091,7 @@ export class AnkicasterEngine {
       return { state, success: false, error: `At most ${maxSame} ${fDef.name} can be placed in one room.` };
     }
 
-    const roomDef = ROOM_DEFINITIONS[room.defId];
-    const maxSlots = (roomDef?.optionalSlots || 2) + (room.level - 1) * 2;
+    const maxSlots = maxOptionalSlots(room);
     const currentSlots = optionalSlotsUsed(room);
     const addedSlots = optionalSlotsCostForNewPiece(room, furnitureDefId);
     if (currentSlots + addedSlots > maxSlots) {

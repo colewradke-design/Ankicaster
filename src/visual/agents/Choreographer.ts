@@ -231,7 +231,7 @@ export class Choreographer {
       agent.currentFloor = agent.targetFloor = anchor ? anchor.floor : room.area === 'castle' ? room.y : 0;
       agent.currentRoomId = agent.targetRoomId = room.id;
       agent.targetAnchorId = anchor?.id;
-      this.setArrivedAnim(agent);
+      this.setArrivedAnim(agent, state);
     }
   }
 
@@ -458,7 +458,7 @@ export class Choreographer {
           if (partner) {
             partner.talkingWithId = undefined;
             partner.talkingRemainingMs = 0;
-            this.setArrivedAnim(partner);
+            this.setArrivedAnim(partner, state);
           }
         }
         this.agents.delete(id);
@@ -573,10 +573,10 @@ export class Choreographer {
           if (p && p.talkingWithId === agent.id) {
             p.talkingWithId = undefined;
             p.talkingRemainingMs = 0;
-            this.setArrivedAnim(p);
+            this.setArrivedAnim(p, state);
           }
         }
-        this.setArrivedAnim(agent);
+        this.setArrivedAnim(agent, state);
       }
     }
 
@@ -587,7 +587,7 @@ export class Choreographer {
 
     // If mandatory block starts (or injury/sleep/class/meal begins), cancel any conversation immediately
     if ((desired.mandatory && blockChanged) || (agent.character?.injury && isTalking)) {
-      this.endConversation(agent);
+      this.endConversation(agent, state);
     }
 
     // Check personal timer if NOT talking and in non-mandatory block (or Night Owl awake)
@@ -624,7 +624,7 @@ export class Choreographer {
           agent.currentFloor = agent.targetAnchorFloor ?? agent.currentFloor;
           agent.currentRoomId = agent.targetRoomId;
         }
-        this.setArrivedAnim(agent);
+        this.setArrivedAnim(agent, state);
       }
       agent.animFrame = 0;
       return;
@@ -642,7 +642,7 @@ export class Choreographer {
       if (agent.targetAnchorId) takenAnchors.delete(agent.targetAnchorId);
       const changed = this.applyResolvedGoal(agent, desired, state, takenAnchors, false, false);
       if (!changed && agent.path.length === 0) {
-        this.setArrivedAnim(agent);
+        this.setArrivedAnim(agent, state);
       }
     } else if (timerTriggeredPick) {
       if (agent.talkingRemainingMs <= 0 && agent.path.length === 0) {
@@ -669,11 +669,22 @@ export class Choreographer {
     // 4. Follow path along nav graph
     if (deltaMs > 0 && agent.path.length > 0 && agent.pathIndex < agent.path.length) {
       const targetNode = agent.path[agent.pathIndex];
+      const currentRoom = state.rooms.find(r => r.id === agent.currentRoomId);
+      const prevNode = agent.pathIndex > 0 ? agent.path[agent.pathIndex - 1] : undefined;
+      const targetRoom = targetNode.roomId !== undefined ? state.rooms.find(r => r.id === targetNode.roomId) : undefined;
+      const prevRoom = prevNode?.roomId !== undefined ? state.rooms.find(r => r.id === prevNode.roomId) : currentRoom;
+      const portalJump =
+        prevRoom?.defId === 'spiral_stair' &&
+        (prevRoom.level || 1) >= 3 &&
+        targetRoom?.defId === 'spiral_stair' &&
+        (targetRoom.level || 1) >= 3 &&
+        prevRoom.id !== targetRoom.id;
+
       const dx = targetNode.x - agent.x;
       const dy = targetNode.y - agent.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
 
-      if (dist < 4) {
+      if (portalJump || dist < 4) {
         agent.x = targetNode.x;
         agent.y = targetNode.y;
         agent.currentFloor = targetNode.floor;
@@ -690,7 +701,7 @@ export class Choreographer {
             agent.y = agent.targetAnchorY;
             if (agent.targetAnchorFloor !== undefined) agent.currentFloor = agent.targetAnchorFloor;
           }
-          this.setArrivedAnim(agent);
+          this.setArrivedAnim(agent, state);
           agent.arrivedAt = Date.now();
           if (desired.allowTalk && !desired.mandatory) {
             this.tryTriggerConversation(agent, state, hoursFloat, `arrive:${Math.floor(this.clockMs)}:${agent.currentRoomId}`);
@@ -699,16 +710,16 @@ export class Choreographer {
       } else {
         const inj = agent.character?.injury?.type;
         const limp = inj === 'sprained' || inj === 'broken_bone';
-        const currentRoom = state.rooms.find(r => r.id === agent.currentRoomId);
-        const prevNode = agent.pathIndex > 0 ? agent.path[agent.pathIndex - 1] : undefined;
-        const targetRoom = targetNode.roomId !== undefined ? state.rooms.find(r => r.id === targetNode.roomId) : undefined;
-        const prevRoom = prevNode?.roomId !== undefined ? state.rooms.find(r => r.id === prevNode.roomId) : currentRoom;
         const isStairLink = (r?: PlacedRoom) => r?.defId === 'spiral_stair' || r?.defId === 'wizard_study';
         const climbing =
           Math.abs(dy) > 2 &&
           targetNode.kind === 'stair' &&
           isStairLink(targetRoom) &&
           (prevNode ? prevNode.kind === 'stair' && isStairLink(prevRoom) : isStairLink(currentRoom));
+        const onElevator =
+          climbing &&
+          ((targetRoom?.defId === 'spiral_stair' && (targetRoom.level || 1) >= 2) ||
+            (prevRoom?.defId === 'spiral_stair' && (prevRoom.level || 1) >= 2));
         const pathStep =
           !climbing &&
           Math.abs(dy) > 2 &&
@@ -719,7 +730,15 @@ export class Choreographer {
             prevNode?.kind === 'plot' ||
             currentRoom?.defId === 'entrance_hall' ||
             currentRoom?.area === 'grounds');
-        const px = climbing ? MOVE_SPEED.climb : limp ? MOVE_SPEED.limp : agent.anim === 'carry_walk' ? MOVE_SPEED.carry : MOVE_SPEED.walk;
+        const px = onElevator
+          ? MOVE_SPEED.elevator
+          : climbing
+          ? MOVE_SPEED.climb
+          : limp
+          ? MOVE_SPEED.limp
+          : agent.anim === 'carry_walk'
+          ? MOVE_SPEED.carry
+          : MOVE_SPEED.walk;
         const speed = px * (deltaMs / 1000);
         if (Math.abs(dx) > 1) {
           agent.facing = dx > 0 ? 'R' : 'L';
@@ -727,7 +746,7 @@ export class Choreographer {
 
         if (Math.abs(dy) > 2) {
           if (climbing) {
-            agent.anim = 'climb';
+            agent.anim = onElevator ? 'idle' : 'climb';
             agent.y += (dy / dist) * Math.min(speed, Math.abs(dy));
           } else if (pathStep) {
             agent.anim = limp ? 'limp_walk' : 'walk';
@@ -751,19 +770,19 @@ export class Choreographer {
     } else if (agent.targetAnchorX !== undefined && agent.targetAnchorY !== undefined) {
       // Snap cleanly to anchor if already in same room with no active path
       if (agent.currentRoomId === agent.targetRoomId && Math.abs(agent.x - agent.targetAnchorX) < 1.5) {
-        this.setArrivedAnim(agent);
+        this.setArrivedAnim(agent, state);
       }
     }
     this.applyFrame(agent);
   }
 
-  private endConversation(agent: VisualAgent) {
+  private endConversation(agent: VisualAgent, state?: FullGameState) {
     if (agent.talkingWithId) {
       const p = this.agents.get(agent.talkingWithId);
       if (p && p.talkingWithId === agent.id) {
         p.talkingWithId = undefined;
         p.talkingRemainingMs = 0;
-        this.setArrivedAnim(p);
+        this.setArrivedAnim(p, state);
       }
     }
     agent.talkingWithId = undefined;
@@ -1799,16 +1818,14 @@ export class Choreographer {
     agent.animTimer = elapsed;
   }
 
-  private setArrivedAnim(agent: VisualAgent) {
+  private setArrivedAnim(agent: VisualAgent, state?: FullGameState) {
     if ((agent.talkingRemainingMs ?? 0) > 0) {
       agent.anim = 'talk';
       return;
     }
     if (agent.desiredAnim) {
       agent.anim = agent.desiredAnim;
-      return;
-    }
-    if (agent.activity === 'class') {
+    } else if (agent.activity === 'class') {
       agent.anim = agent.isWizard || agent.character?.career === 'teacher' ? 'teach' : 'sit_study';
     } else if (agent.activity === 'meal') {
       agent.anim = 'eat';
@@ -1818,6 +1835,26 @@ export class Choreographer {
       agent.anim = agent.isWizard && agent.wizardErrand === 'ponder' ? 'cast' : 'work';
     } else {
       agent.anim = 'idle';
+    }
+    if (state) {
+      this.orientClassroomFacing(agent, state);
+    }
+  }
+
+  private orientClassroomFacing(agent: VisualAgent, state: FullGameState) {
+    if (agent.path.length > 0 || agent.currentRoomId === undefined) return;
+    const room = state.rooms.find(r => r.id === agent.currentRoomId);
+    if (!room || !room.defId.startsWith('class_')) return;
+    const set = this.anchorsFor(room.id, state);
+    const anchor = agent.targetAnchorId ? set?.all.find(a => a.id === agent.targetAnchorId) : undefined;
+    const box = roomToWorldBox(room, this.groundY);
+    const centerX = box.left + box.width / 2;
+    if (anchor?.kind === 'lectern' || agent.anim === 'teach') {
+      agent.facing = agent.x < centerX ? 'R' : 'L';
+    } else if (anchor?.kind === 'student_desk' || agent.anim === 'sit_study') {
+      const lectern = set?.lecterns[0];
+      const targetX = lectern ? lectern.x : centerX;
+      agent.facing = agent.x <= targetX ? 'R' : 'L';
     }
   }
 

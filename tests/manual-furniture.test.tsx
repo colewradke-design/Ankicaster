@@ -93,7 +93,7 @@ test('MF-1: Bulk vs background classification, plane lock, and 4px grid snap', (
   assert.equal(pieceKind('potted_fern'), 'bulk');
   assert.equal(pieceKind('wooden_chair'), 'bulk');
   assert.equal(pieceKind('long_table'), 'bulk');
-  assert.equal(pieceKind('orrery_globe'), 'bulk');
+  assert.equal(pieceKind('orrery_globe'), 'background');
 
   assert.equal(piecePlane('woven_rug'), 'floor');
   assert.equal(pieceKind('woven_rug'), 'background');
