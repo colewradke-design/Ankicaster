@@ -363,7 +363,8 @@ test('Dead effects wired in engine: tea_service, silent_quill, stewpot, tool_wal
 
     // Tea Service in faculty_lounge gives +2 Leisure effect
     const lounge = makeRoom(81, 'faculty_lounge', 0, 0, 1, [
-      { id: 8110, defId: 'armchair', slotKind: 'required:couch_or_hearth', damaged: false },
+      { id: 8110, defId: 'armchair', slotKind: 'required:armchair', damaged: false },
+      { id: 8112, defId: 'armchair', slotKind: 'required:armchair', damaged: false },
       { id: 8111, defId: 'tea_service', slotKind: 'optional', damaged: false }
     ]);
     assert.equal(roomFurnitureEffects(lounge).leisure_bonus, 2);

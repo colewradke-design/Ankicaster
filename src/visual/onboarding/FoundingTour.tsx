@@ -10,6 +10,11 @@ const STAGES = ['The doors are shut.', 'The doors open.', 'Your crest unfurls.',
 
 export const FoundingDay: React.FC<{ reduceMotion?: boolean; onDone: () => void; onSkip?: () => void }> = ({ reduceMotion, onDone, onSkip }) => {
   const [stage, setStage] = useState(0);
+  const onDoneRef = useRef(onDone);
+  useEffect(() => {
+    onDoneRef.current = onDone;
+  }, [onDone]);
+
   useEffect(() => {
     if (reduceMotion) return;
     const started = Date.now();
@@ -18,11 +23,11 @@ export const FoundingDay: React.FC<{ reduceMotion?: boolean; onDone: () => void;
       setStage(Math.min(STAGES.length - 1, Math.floor(t / (FOUNDING_MS / STAGES.length))));
       if (t >= FOUNDING_MS) {
         window.clearInterval(id);
-        onDone();
+        onDoneRef.current();
       }
     }, 200);
     return () => window.clearInterval(id);
-  }, [reduceMotion, onDone]);
+  }, [reduceMotion]);
 
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center bg-slate-950/55 p-4" data-testid="founding-day">

@@ -11,7 +11,8 @@ import { AlertTriangle, Trash2 } from 'lucide-react';
 import { FullGameState } from '../types/ankicaster';
 import { roomDisplayName } from '../data/content';
 import { AnkicasterEngine } from '../utils/engine';
-import { REFUND_MATERIALS } from '../utils/placement';
+import { BUILD_MATERIALS } from '../utils/placement';
+import { resourceLabel } from '../utils/resourceReport';
 
 export const DemolishConfirm: React.FC<{
   state: FullGameState;
@@ -24,7 +25,10 @@ export const DemolishConfirm: React.FC<{
   if (!room || !preview) return null;
   const displayName = roomDisplayName(room);
   const { refund } = preview;
-  const back = REFUND_MATERIALS.filter(k => refund[k] > 0).map(k => `${refund[k]} ${k[0].toUpperCase()}${k.slice(1)}`);
+  const back = BUILD_MATERIALS
+    .map(k => ({ k, amt: Number(refund[k] || 0) }))
+    .filter(x => x.amt > 0)
+    .map(x => `${x.amt} ${resourceLabel(x.k)}`);
   if (refund.mana > 0) back.unshift(`${refund.mana} Mana`);
   const verb = refund.cancel ? 'Cancel construction' : 'Demolish';
 

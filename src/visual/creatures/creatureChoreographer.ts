@@ -387,11 +387,7 @@ export class CreatureChoreographer {
       this.prevStatuses.set(c.id, c.status);
       this.prevBonds.set(c.id, c.bondLevel ?? 1);
 
-      const wizardPaw =
-        c.status === 'wary' &&
-        def?.rarity === 'common' &&
-        (state.wizard?.levels?.nature ?? 0) >= 3 &&
-        c.tamerId === 0;
+      const wizardPaw = c.status === 'wary' && c.tamerId === 0;
       if (wizardPaw && item.room) {
         this.wizardPawRooms.add(item.room.id);
       }

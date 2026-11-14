@@ -936,7 +936,7 @@ export class VisualEventDispatcher {
     }
     this.lastMealWindowMs = nowMs;
     const refectory =
-      state.rooms.find(r => r.state === 'built' && (r.defId === 'refectory' || r.defId === 'great_hall')) ||
+      state.rooms.find(r => r.state === 'built' && r.defId === 'refectory') ||
       findEntranceHallRoom(state.rooms);
     this.enqueueEvent(state, 'meal_window', refectory?.id, nowMs);
     return true;

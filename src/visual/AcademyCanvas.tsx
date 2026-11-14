@@ -20,6 +20,7 @@ import { ROOM_DEFINITIONS, roomDisplayName, FURNITURE_DEFINITIONS } from '../dat
 import { AnkicasterEngine } from '../utils/engine';
 import { validatePlacement, roomLimitStatus, getGridSize, findAutoPlacement, PlacementCheck } from '../utils/placement';
 import { reviewsToGoText } from '../utils/construction';
+import { academyFurnitureEffect } from '../utils/formulas';
 import { formatMaterialCost } from '../utils/resourceReport';
 import { tamingRequirement } from './creatures/creatureArt';
 import { arrivalStage, arrivalStageLabel, originLabel } from '../utils/creatures';
@@ -253,7 +254,7 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
       });
 
       if (!isMounted) {
-        app.destroy(true);
+        app.destroy(true, { children: true });
         return;
       }
 
@@ -335,7 +336,7 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
       if (onVis) document.removeEventListener('visibilitychange', onVis);
       if (onWinFocus) window.removeEventListener('focus', onWinFocus);
       if (clockInterval) clearInterval(clockInterval);
-      try { app.destroy(true); } catch { /* not initialised yet */ }
+      try { app.destroy(true, { children: true }); } catch { /* not initialised yet */ }
       if (personActivityRef) personActivityRef.current = null;
       if (creatureActivityRef) creatureActivityRef.current = null;
       appRef.current = null;
@@ -416,23 +417,18 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     if (placement.kind === 'build') {
       const spot = findAutoPlacement(state, placement.defId);
       if (spot) showCandidate(spot.x, spot.y);
-      else setCandidate(null);
+      else {
+        setCandidate(null);
+        world?.setGhost(null);
+        onPlacementReject?.('No free valid space: move or demolish something first');
+        onPlacementCancel?.();
+      }
     } else {
       setCandidate(null);
       world?.setGhost(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [placementKey]);
-
-  // Esc cancels placement
-  useEffect(() => {
-    if (!placement) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); onPlacementCancel?.(); }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [placementKey, onPlacementCancel]);
 
   function showCandidate(x: number, y: number) {
     const mode = placementRef.current;
@@ -511,12 +507,65 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     };
   }, [fitCanvasToDevicePixels]);
 
+  // Non-passive wheel listener to prevent page scroll while zooming
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const world = worldRef.current;
+      if (!world) return;
+      if (e.deltaY < 0) world.camera.zoomIn();
+      else world.camera.zoomOut();
+      setCurrentZoom(world.camera.zoom);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  // Keyboard zoom hotkeys (+/= to zoom in, -/_ to zoom out)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) return;
+      const world = worldRef.current;
+      if (!world) return;
+      if (e.key === '+' || e.key === '=') {
+        world.camera.zoomIn();
+        setCurrentZoom(world.camera.zoom);
+      } else if (e.key === '-' || e.key === '_') {
+        world.camera.zoomOut();
+        setCurrentZoom(world.camera.zoom);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  // Ensure pan always ends on window pointerup / pointercancel
+  useEffect(() => {
+    const stopDrag = () => {
+      isDraggingRef.current = false;
+    };
+    window.addEventListener('pointerup', stopDrag);
+    window.addEventListener('pointercancel', stopDrag);
+    return () => {
+      window.removeEventListener('pointerup', stopDrag);
+      window.removeEventListener('pointercancel', stopDrag);
+    };
+  }, []);
+
   // Mouse / Pointer Controls: Pan, Click Room, Zoom Wheel
   const handlePointerDown = (e: React.PointerEvent) => {
     isDraggingRef.current = true;
     dragStartPosRef.current = { x: e.clientX, y: e.clientY };
     lastMousePosRef.current = { x: e.clientX, y: e.clientY };
     totalDragDistRef.current = 0;
+    try {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    } catch { /* ignore unsupported synthetic pointer events */ }
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -544,7 +593,8 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
               setHoverTip({ x: px, y: py, text });
             } else {
               const hit = worldRef.current.hitTestRoom(px, py);
-              const text = hit && hit.state === 'site' ? (hit.buildPaused ? `Paused · ${reviewsToGoText(hit)}` : reviewsToGoText(hit)) : null;
+              const buildSpeedPct = academyFurnitureEffect(latestRef.current.state.rooms, 'build_speed_pct');
+              const text = hit && hit.state === 'site' ? (hit.buildPaused ? `Paused · ${reviewsToGoText(hit, buildSpeedPct)}` : reviewsToGoText(hit, buildSpeedPct)) : null;
               setHoverTip(prev => (text ? { x: px, y: py, text } : prev ? null : prev));
             }
           }
@@ -573,6 +623,11 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
 
   const handlePointerUp = (e: React.PointerEvent) => {
     isDraggingRef.current = false;
+    try {
+      if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
+        e.currentTarget.releasePointerCapture?.(e.pointerId);
+      }
+    } catch { /* ignore */ }
   };
 
   const handleClick = (e: React.MouseEvent) => {
@@ -661,19 +716,6 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     }
   };
 
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const world = worldRef.current;
-    if (!world) return;
-
-    if (e.deltaY < 0) {
-      world.camera.zoomIn();
-    } else {
-      world.camera.zoomOut();
-    }
-    setCurrentZoom(world.camera.zoom);
-  };
-
   // Toolbar actions
   const handleZoomIn = () => {
     if (worldRef.current) {
@@ -712,12 +754,12 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
         onClick={e => { setHoverTip(null); handleClick(e); }}
         onPointerLeave={() => setHoverTip(null)}
         onContextMenu={e => {
           if (placementRef.current) { e.preventDefault(); onPlacementCancel?.(); }
         }}
-        onWheel={handleWheel}
         data-placing={placement ? placement.kind : undefined}
         style={placement ? { cursor: 'crosshair' } : undefined}
       />

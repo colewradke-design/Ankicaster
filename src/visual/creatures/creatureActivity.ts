@@ -72,15 +72,16 @@ export function describeCreatureActivity(
     const tamer = findTamerName(state, creature.tamerId);
     const req = Math.max(1, def?.tamingReviews ?? 40);
     const pct = Math.min(100, Math.round(((creature.tamingProgress || 0) / req) * 100));
+    const hungryNote = creature.hungry ? ' (hungry)' : '';
     if (unhomed || !resolvedRoom) {
       return tamer
-        ? `Waiting outside the Entrance Hall for a pen; ${tamer} is taming it (${pct}%).`
-        : 'Waiting outside the Entrance Hall for a compatible pen.';
+        ? `Waiting outside the Entrance Hall for a pen${hungryNote}; ${tamer} is taming it (${pct}%).`
+        : `Waiting outside the Entrance Hall for a compatible pen${hungryNote}.`;
     }
     if (tamer) {
-      return `Being tamed by ${tamer} in the ${roomDisplayName(resolvedRoom)} (${pct}%).`;
+      return `Being tamed by ${tamer} in the ${roomDisplayName(resolvedRoom)} (${pct}%)${hungryNote}.`;
     }
-    return `Wary inside the ${roomDisplayName(resolvedRoom)} (${pct}% tamed).`;
+    return `Wary inside the ${roomDisplayName(resolvedRoom)} (${pct}% tamed)${hungryNote}.`;
   }
 
   // Tamed

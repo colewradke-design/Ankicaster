@@ -444,6 +444,7 @@ export const FURNITURE_EFFECTS: Record<string, FurnitureEffectDef> = {
 const BOOKSHELF_OUTPUT_ROOMS = new Set([
   'library',
   'scriptorium',
+  'observatory',
   'alchemy_lab',
   'class_arcane',
   'class_nature',
@@ -482,7 +483,7 @@ export function furnitureEffectForRoom(defId: string, roomDefId?: string): Furni
  */
 export function roomFurnitureEffects(room: PlacedRoom): Partial<Record<FurnitureEffectKind, number>> {
   const out: Partial<Record<FurnitureEffectKind, number>> = {};
-  if (room.state !== 'built' || !room.furniture?.length) return out;
+  if (room.state !== 'built' || isRoomUnfinished(room) || !room.furniture?.length) return out;
   const counts: Record<string, number> = {};
   const sorted = [...room.furniture].sort((a, b) => (a.damaged ? 1 : 0) - (b.damaged ? 1 : 0));
   for (const f of sorted) {
@@ -520,7 +521,7 @@ export function academyFurnitureEffect(
 ): number {
   let total = 0;
   for (const r of rooms) {
-    if (r.state !== 'built' || !r.furniture?.length) continue;
+    if (r.state !== 'built' || isRoomUnfinished(r) || !r.furniture?.length) continue;
     const counts: Record<string, number> = {};
     const sorted = [...r.furniture].sort((a, b) => (a.damaged ? 1 : 0) - (b.damaged ? 1 : 0));
     for (const f of sorted) {

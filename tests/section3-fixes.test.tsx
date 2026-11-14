@@ -123,7 +123,7 @@ test('Section 3: RiftPanel shows potion supplies, provisions cost, and disables 
   const s = createInitialGameState();
   s.alumniGallery = [{ name: 'A' }, { name: 'B' }, { name: 'C' }] as any;
   s.resources.provisions = 20;
-  s.resources.potions = { mending_draught: 2, rift_elixir: 1 };
+  s.resources.potions = { mending_draught: 2, courage_draught: 2, rift_elixir: 1 };
   const baseNeeds = { hunger: 80, energy: 80, hygiene: 80, social: 80, fun: 80 };
   s.characters = [
     {
@@ -151,8 +151,9 @@ test('Section 3: RiftPanel shows potion supplies, provisions cost, and disables 
     })
   );
   assert.ok(html.includes('Expedition Supplies (0/'), 'RiftPanel renders potion supply selector');
-  assert.ok(html.includes('Mending Draught'), 'RiftPanel lists available potions');
+  assert.ok(html.includes('Courage Draught'), 'RiftPanel lists courage_draught');
   assert.ok(html.includes('Rift Elixir'), 'RiftPanel lists rift_elixir');
+  assert.ok(!html.includes('Mending Draught'), 'RiftPanel excludes non-expedition potions');
   assert.ok(html.includes('Provisions'), 'RiftPanel shows provisions cost');
   assert.ok(html.includes('On Expedition'), 'RiftPanel marks away adventurers');
   assert.ok(html.includes('Injured'), 'RiftPanel marks injured adventurers');

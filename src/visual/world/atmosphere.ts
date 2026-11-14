@@ -644,18 +644,15 @@ export function computeVeilDomeState(
   const showWardCircles = Boolean(options.showHazardsLens);
   const wardCircles: VeilDomeState['wardCircles'] = [];
   if (showWardCircles) {
-    const floors = new Set<number>(options.wardwaterFloors || []);
-    if ((options.wardPulseBells || 0) > 0) {
-      for (const r of options.rooms) {
-        if (r.state === 'built') floors.add(r.y);
-      }
-    }
+    const castleFloors = new Set<number>(options.wardwaterFloors || []);
+    const hasPulse = (options.wardPulseBells || 0) > 0;
+    const wardedCastleFloors = new Set<number>();
     for (const r of options.rooms) {
       if (r.state !== 'built') continue;
       const hasWardItem =
         r.defId === 'standing_stones' ||
         r.furniture.some(f => !f.damaged && (f.defId.includes('ward') || f.defId.includes('seal') || f.defId.includes('bell_of_vigil')));
-      if (hasWardItem || floors.has(r.y)) {
+      if (hasWardItem || hasPulse || (r.area === 'castle' && castleFloors.has(r.y))) {
         const box = roomToWorldBox(r, options.groundY);
         wardCircles.push({
           floor: r.y,
@@ -664,10 +661,11 @@ export function computeVeilDomeState(
           radius: Math.max(18, Math.min(box.width, box.height) * 0.45),
           color: 0x2e8b8b
         });
+        if (r.area === 'castle') wardedCastleFloors.add(r.y);
       }
     }
-    for (const fl of floors) {
-      if (!wardCircles.some(w => w.floor === fl)) {
+    for (const fl of castleFloors) {
+      if (!wardedCastleFloors.has(fl)) {
         wardCircles.push({
           floor: fl,
           x: options.worldWidth * 0.5,

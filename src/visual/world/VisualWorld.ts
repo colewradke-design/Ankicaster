@@ -36,6 +36,7 @@ import { unlockedPlotIndices } from '../../utils/groundsLayout';
 import { drawRoomInterior, drawEmitter, drawAnimatedItem, Emitter, AnimatedItem, roomTier, TIERS, vaultFillStep } from '../rooms/roomArt';
 import { drawSite } from '../rooms/siteArt';
 import { isRoomUnfinished } from '../../utils/requiredFurniture';
+import { academyFurnitureEffect } from '../../utils/formulas';
 import { drawDirt, dirtLevel, drawLockHazard, drawPadlock, drawWrench, drawDirtyBadge, drawRing, drawUnfinishedBadge } from '../rooms/statusArt';
 import { drawEffect, VisualEffect, EFFECT_MS } from '../rooms/effects';
 import { reviewsToGo, siteFraction } from '../../utils/construction';
@@ -54,6 +55,7 @@ import {
   DEFAULT_WALL_Y,
   DropTargetInput,
   FURNITURE_SNAP_GRID,
+  getRoomDoors,
   longTableSeatMarks,
   MEZZANINE_ROOMS,
   piecePlane,
@@ -439,32 +441,30 @@ export class VisualWorld {
     const activeExp = this.state.expeditions?.find(e => e.state === 'active');
     const riftReturning = !this.state.settings.reduceMotion && this.clockMs < this.riftReturningUntilMs;
     const riftVisualState = getRiftGateVisualState(this.state, riftReturning);
+    const buildSpeedPct = academyFurnitureEffect(rooms, 'build_speed_pct');
+    const reachableIds = new Set<number>();
+    for (const [id, info] of this.reachability.entries()) {
+      if (info.reachable) reachableIds.add(id);
+    }
 
     for (const room of rooms) {
       currentRoomIds.add(room.id);
       const box = roomToWorldBox(room, this.groundY);
-      const isReachable = this.reachability.get(room.id)?.reachable ?? false;
+      const isReachable = reachableIds.has(room.id);
       const isSelected = this.selectedRoomId === room.id;
 
-      // Check left/right doorways for castle rooms
-      let hasLeftDoor = false;
-      let hasRightDoor = false;
-      if (room.area === 'castle') {
-        const leftNeighbour = rooms.find(
-          r => r.area === 'castle' && r.state === 'built' && r.x + r.w === room.x && r.y === room.y
-        );
-        const rightNeighbour = rooms.find(
-          r => r.area === 'castle' && r.state === 'built' && r.x === room.x + room.w && r.y === room.y
-        );
-        hasLeftDoor = !!leftNeighbour && isReachable;
-        hasRightDoor = !!rightNeighbour && isReachable;
-      }
+      // Check left/right doorways across walkable floors for castle rooms
+      const doors = room.area === 'castle'
+        ? getRoomDoors(room, rooms, reachableIds)
+        : { hasLeftDoor: false, hasRightDoor: false, leftDoorFloors: [], rightDoorFloors: [] };
 
       if (room.state === 'built') {
         const art = drawRoomInterior(this.castleGraphics, room, box, {
           robeColor,
-          hasLeftDoor,
-          hasRightDoor,
+          hasLeftDoor: doors.hasLeftDoor,
+          hasRightDoor: doors.hasRightDoor,
+          leftDoorFloors: doors.leftDoorFloors,
+          rightDoorFloors: doors.rightDoorFloors,
           cropStage,
           vaultFill,
           riftState: room.defId === 'rift_gate' ? riftVisualState : undefined,
@@ -509,7 +509,7 @@ export class VisualWorld {
         // Progress ring at the top-right + the same countdown the Build panel shows
         const rx = box.left + box.width - 10, ry = box.top + 11;
         drawRing(this.statusGraphics, rx, ry, 6, siteFraction(room), site.paused ? 0xb9b8c2 : 0x7dd87a);
-        const n = reviewsToGo(room);
+        const n = reviewsToGo(room, buildSpeedPct);
         this.overlayLabels.push({ key: `site:${room.id}`, text: `${n} to go`, wx: rx, wy: ry + 9, color: 0xffffff, size: 10, align: 'center' });
         if (site.ribbon) this.overlayLabels.push({ key: `paused:${room.id}`, text: 'Paused', wx: site.ribbon.x, wy: site.ribbon.y - 4, color: 0xf6e08c, size: 10, align: 'center' });
       }
@@ -1104,6 +1104,9 @@ export class VisualWorld {
 
     if (!this.state) return;
 
+    const z = this.camera.zoom;
+    const ox = this.worldContainer.x;
+    const oy = this.worldContainer.y;
     const currentUnreachableRoomIds = new Set<number>();
 
     for (const room of this.state.rooms) {
@@ -1113,8 +1116,8 @@ export class VisualWorld {
         const box = roomToWorldBox(room, this.groundY);
         // Sites carry the progress ring at the top-right, so their badge sits at the left
         const badgeWX = room.state === 'site' ? box.left + 34 : box.left + box.width - 20;
-        const screenX = badgeWX * this.camera.zoom - (this.camera.x * this.camera.zoom - this.camera.viewportWidth / 2);
-        const screenY = (box.top + 16) * this.camera.zoom - (this.camera.y * this.camera.zoom - this.camera.viewportHeight / 2);
+        const screenX = ox + badgeWX * z;
+        const screenY = oy + (box.top + 16) * z;
 
         // Circle with diagonal bar (Unreachable badge)
         this.overlayGraphics.circle(screenX, screenY, 10).fill({ color: 0x202020, alpha: 0.85 });
@@ -1178,8 +1181,8 @@ export class VisualWorld {
       }
     }
     const paint = (wx: number, wy: number, b: BubbleKind) => {
-      const sx = wx * this.camera.zoom - (this.camera.x * this.camera.zoom - this.camera.viewportWidth / 2);
-      const sy = wy * this.camera.zoom - (this.camera.y * this.camera.zoom - this.camera.viewportHeight / 2);
+      const sx = ox + wx * z;
+      const sy = oy + wy * z;
       drawBubble(this.overlayGraphics, b, sx, sy, 2);
     };
     for (const [roomId, list] of byRoom) {
@@ -1200,9 +1203,6 @@ export class VisualWorld {
     }
 
     // Creature status overlays: wary "?" + taming ring, loose "!", hungry bowl, wizard paw charm, +N cap badge
-    const z = this.camera.zoom;
-    const ox = this.worldContainer.x;
-    const oy = this.worldContainer.y;
     for (const cAgent of this.creatureChoreographer.agents.values()) {
       const c = this.state.creatures.find(cr => cr.id === cAgent.creatureId);
       if (!c || c.status === 'away') continue;
@@ -1212,6 +1212,9 @@ export class VisualWorld {
       if (c.status === 'wary') {
         drawCreatureBubble(this.overlayGraphics, 'wary', sx - 8, sy, 1);
         drawRing(this.overlayGraphics, sx + 8, sy, 6, tamingRingFraction(c), 0x7dd87a);
+        if (c.hungry) {
+          drawCreatureBubble(this.overlayGraphics, 'hungry', sx, sy - 13, 0.9);
+        }
       } else if (c.status === 'loose') {
         drawCreatureBubble(this.overlayGraphics, 'loose', sx, sy, 1);
       } else if (c.status === 'tamed' && c.hungry) {
@@ -1339,8 +1342,8 @@ export class VisualWorld {
     if (!room) return null;
     const box = roomToWorldBox(room, this.groundY);
     const z = this.camera.zoom;
-    const ox = this.camera.viewportWidth / 2 - this.camera.x * z;
-    const oy = this.camera.viewportHeight / 2 - this.camera.y * z;
+    const ox = this.snap(this.camera.viewportWidth / 2 - this.camera.x * z);
+    const oy = this.snap(this.camera.viewportHeight / 2 - this.camera.y * z);
     return { left: ox + box.left * z, top: oy + box.top * z, width: box.width * z, height: box.height * z };
   }
 
@@ -1522,10 +1525,11 @@ export class VisualWorld {
     const worldX = (screenX - this.worldContainer.x) / this.camera.zoom;
     const worldY = (screenY - this.worldContainer.y) / this.camera.zoom;
 
-    const list = Array.from(this.creatureChoreographer.agents.values()).reverse();
+    // Reverse draw order (highest baseline Y is drawn on top)
+    const list = Array.from(this.creatureChoreographer.agents.values()).sort((a, b) => b.y - a.y);
     for (const cAgent of list) {
       if (cAgent.status === 'away') continue;
-      const { w, h } = creatureSize(cAgent.defId);
+      const { w, h } = cAgent.status === 'egg' ? { w: 16, h: 16 } : creatureSize(cAgent.defId);
       const cy = cAgent.y + (cAgent.drawOffsetY ?? 0);
       const pad = 4;
       if (

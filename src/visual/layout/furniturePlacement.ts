@@ -113,13 +113,23 @@ export function maxFloorForPlane(room: Pick<PlacedRoom, 'defId' | 'h'>, plane: F
   return Math.max(0, room.h - 1);
 }
 
+/** Walkable floor indices covered by `room` in the castle nav/visual layout. */
+export function walkableFloorsForRoom(room: Pick<PlacedRoom, 'area' | 'defId' | 'y' | 'h'>): number[] {
+  if (room.area !== 'castle') return [0];
+  const hasUpper = MEZZANINE_ROOMS.has(room.defId) || room.defId === 'spiral_stair';
+  const count = hasUpper ? Math.max(1, room.h) : 1;
+  const floors: number[] = [];
+  for (let i = 0; i < count; i++) floors.push(room.y + i);
+  return floors;
+}
+
 export function getRoomDoors(
   room: PlacedRoom,
   allRooms: PlacedRoom[],
   reach?: Set<number>
-): { hasLeftDoor: boolean; hasRightDoor: boolean } {
+): { hasLeftDoor: boolean; hasRightDoor: boolean; leftDoorFloors: number[]; rightDoorFloors: number[] } {
   if (room.area !== 'castle' || room.state !== 'built') {
-    return { hasLeftDoor: false, hasRightDoor: false };
+    return { hasLeftDoor: false, hasRightDoor: false, leftDoorFloors: [], rightDoorFloors: [] };
   }
   let isReachable: boolean;
   if (reach) {
@@ -130,16 +140,32 @@ export function getRoomDoors(
   } else {
     isReachable = true;
   }
-  if (!isReachable) return { hasLeftDoor: false, hasRightDoor: false };
-  const leftNeighbour = allRooms.find(
-    r => r.area === 'castle' && r.state === 'built' && r.x + r.w === room.x && r.y === room.y
-  );
-  const rightNeighbour = allRooms.find(
-    r => r.area === 'castle' && r.state === 'built' && r.x === room.x + room.w && r.y === room.y
-  );
+  if (!isReachable) {
+    return { hasLeftDoor: false, hasRightDoor: false, leftDoorFloors: [], rightDoorFloors: [] };
+  }
+  const myFloors = walkableFloorsForRoom(room);
+  const leftDoorFloors: number[] = [];
+  const rightDoorFloors: number[] = [];
+  for (const r of allRooms) {
+    if (r.area !== 'castle' || r.state !== 'built') continue;
+    const isLeft = r.x + r.w === room.x;
+    const isRight = r.x === room.x + room.w;
+    if (!isLeft && !isRight) continue;
+    const theirFloors = new Set(walkableFloorsForRoom(r));
+    for (const f of myFloors) {
+      if (!theirFloors.has(f)) continue;
+      const localFloor = f - room.y;
+      if (isLeft && !leftDoorFloors.includes(localFloor)) leftDoorFloors.push(localFloor);
+      if (isRight && !rightDoorFloors.includes(localFloor)) rightDoorFloors.push(localFloor);
+    }
+  }
+  leftDoorFloors.sort((a, b) => a - b);
+  rightDoorFloors.sort((a, b) => a - b);
   return {
-    hasLeftDoor: !!leftNeighbour,
-    hasRightDoor: !!rightNeighbour
+    hasLeftDoor: leftDoorFloors.length > 0,
+    hasRightDoor: rightDoorFloors.length > 0,
+    leftDoorFloors,
+    rightDoorFloors
   };
 }
 
@@ -371,13 +397,13 @@ function checkBoundsAndKeepOuts(
     return undefined;
   }
 
-  // Floor checks (door gap on ground floor + private keep-outs)
-  if (room.area === 'castle' && box.floor === 0) {
+  // Floor checks (door gap on any floor with an active doorway + private keep-outs)
+  if (room.area === 'castle') {
     const doors = getRoomDoors(room, allRooms, reach);
-    if (doors.hasLeftDoor && box.left < DOOR_GAP_PX) {
+    if (doors.leftDoorFloors.includes(box.floor) && box.left < DOOR_GAP_PX) {
       return 'Keep the left doorway clear';
     }
-    if (doors.hasRightDoor && box.right > W - DOOR_GAP_PX) {
+    if (doors.rightDoorFloors.includes(box.floor) && box.right > W - DOOR_GAP_PX) {
       return 'Keep the right doorway clear';
     }
   }

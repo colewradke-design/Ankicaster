@@ -52,6 +52,25 @@ export const FlashcardReviewer: React.FC<FlashcardReviewerProps> = ({
     setCurrentIndex(prev => prev + 1);
   };
 
+  useEffect(() => {
+    if (isAddonMode || !activeCard) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) return;
+      if ((e.code === 'Space' || e.key === ' ') && !showAnswer) {
+        e.preventDefault();
+        setShowAnswer(true);
+      } else if (showAnswer && (e.key === '1' || e.key === '2' || e.key === '3' || e.key === '4')) {
+        e.preventDefault();
+        handleAnswer(Number(e.key) as 1 | 2 | 3 | 4);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  });
+
   return (
     <div className="bg-slate-900 border border-amber-900/40 rounded-2xl p-5 shadow-2xl text-slate-100 max-w-2xl mx-auto space-y-4">
       {/* Header bar */}

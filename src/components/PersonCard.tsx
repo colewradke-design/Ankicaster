@@ -55,8 +55,16 @@ export const PersonCard: React.FC<PersonCardProps> = ({
 
   if (!isWizard && !char) return null;
 
-  const findRoom = (id: number | undefined): PlacedRoom | undefined =>
-    id != null ? state.rooms.find(r => r.id === id) : undefined;
+  const findRoom = (id: number | undefined): { room: PlacedRoom; shelved: boolean } | undefined => {
+    if (id == null) return undefined;
+    const active = state.rooms.find(r => r.id === id);
+    if (active) return { room: active, shelved: false };
+    const shelved = (state.shelvedRooms || []).find(r => r.id === id);
+    if (shelved) return { room: shelved, shelved: true };
+    return undefined;
+  };
+  const formatRoomRef = (entry: { room: PlacedRoom; shelved: boolean }) =>
+    entry.shelved ? `${roomDisplayName(entry.room)} (on shelf)` : roomDisplayName(entry.room);
 
   const displayName = isWizard
     ? [state.wizard.title, state.wizard.name].filter(Boolean).join(' ')
@@ -184,19 +192,19 @@ export const PersonCard: React.FC<PersonCardProps> = ({
             {bedRoom && (
               <div className="text-slate-300" data-testid="person-bed">
                 <span className="text-slate-500">Bed: </span>
-                {roomDisplayName(bedRoom)}
+                {formatRoomRef(bedRoom)}
               </div>
             )}
             {classRoom && (
               <div className="text-slate-300" data-testid="person-class">
                 <span className="text-slate-500">Class: </span>
-                {roomDisplayName(classRoom)}
+                {formatRoomRef(classRoom)}
               </div>
             )}
             {workplaceRoom && (
               <div className="text-slate-300" data-testid="person-workplace">
                 <span className="text-slate-500">Workplace: </span>
-                {roomDisplayName(workplaceRoom)}
+                {formatRoomRef(workplaceRoom)}
               </div>
             )}
           </div>

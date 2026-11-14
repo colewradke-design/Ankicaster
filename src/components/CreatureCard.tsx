@@ -80,8 +80,8 @@ export const CreatureCard: React.FC<CreatureCardProps> = ({
   const homeRoom = resolution?.room ?? shelvedPen;
 
   const characters = state.characters || [];
-  const tamers = characters.filter(c => c.career === 'tamer');
-  const adventurers = characters.filter(c => c.career === 'adventurer');
+  const tamers = characters.filter(c => c.career === 'tamer' && c.status !== 'student' && c.careerState !== 'sabbatical');
+  const adventurers = characters.filter(c => c.career === 'adventurer' && c.status !== 'student' && c.careerState !== 'sabbatical');
   const pairedAdventurer =
     creature.adventurerId != null
       ? adventurers.find(a => a.id === creature.adventurerId)

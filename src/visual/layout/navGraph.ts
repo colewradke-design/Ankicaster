@@ -12,6 +12,7 @@
 import { PlacedRoom } from '../../types/ankicaster';
 import { computeReachability } from '../../utils/reachability';
 import { roomToWorldBox, getFloorLineY, castleCellToWorldX } from '../layout/gridToWorld';
+import { MEZZANINE_ROOMS } from './furniturePlacement';
 
 function isSpiralStairLink(defId: string): boolean {
   return defId === 'spiral_stair';
@@ -98,8 +99,10 @@ export class NavGraph {
         // 6px step between front path (groundY + 2) and plot floor line (groundY - 4)
         this.addEdge(nodeId, plotPathId, 9);
       } else {
-        // Castle room: can span multiple floors r.y .. r.y + r.h - 1
-        for (let f = r.y; f < r.y + r.h; f++) {
+        // Castle room: create nodes only on walkable floors (ground floor, plus upper floors for mezzanine rooms and stairs)
+        const hasWalkableUpper = MEZZANINE_ROOMS.has(r.defId) || isSpiralStairLink(r.defId);
+        const floorCount = hasWalkableUpper ? Math.max(1, r.h) : 1;
+        for (let f = r.y; f < r.y + floorCount; f++) {
           const nodeId = `room-${r.id}-f${f}`;
           const nodeX = box.left + box.width / 2;
           const nodeY = getFloorLineY(f, groundY);

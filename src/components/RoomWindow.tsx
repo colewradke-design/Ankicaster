@@ -31,7 +31,7 @@ import { CreaturePortrait } from './CreaturePortrait';
 import { FullGameState, PlacedRoom, RoomDefinition } from '../types/ankicaster';
 import { ROOM_DEFINITIONS, roomDisplayName, FURNITURE_DEFINITIONS, SPELL_DEFINITIONS, CREATURE_DEFINITIONS } from '../data/content';
 import {
-  calculateRoomQuality, wizardOrbQuote,
+  calculateRoomQuality, wizardOrbQuote, academyFurnitureEffect,
   furnitureEffectForRoom, formatFurnitureEffect, FurnitureEffectKind, roomFurnitureEffects,
   careerAffinityMultiplier, classroomSchool, getFacultySummary, FURNITURE_EFFECTS
 } from '../utils/formulas';
@@ -75,7 +75,7 @@ export const Chip: React.FC<{
 );
 
 export function upgradeCost(room: PlacedRoom): number {
-  return Math.round((ROOM_DEFINITIONS[room.defId]?.cost.mana || 100) * 0.75) + 50;
+  return Math.round((ROOM_DEFINITIONS[room.defId]?.cost.mana ?? 100) * 0.75) + 50;
 }
 
 const STAT_LABELS: Record<string, string> = {
@@ -159,7 +159,7 @@ const RoomSummary: React.FC<{
     chips.push(<Chip key="f" icon={<Briefcase className="w-3.5 h-3.5 text-amber-300" />} label="Faculty" value={`${activeFaculty}/${maxAllowed}`} title="Faculty / limit (F12)" />);
   }
   if (getRoomScreens(id).includes('students')) {
-    const st = state.characters.filter(c => !c.career).length;
+    const st = state.characters.filter(c => c.status === 'student').length;
     chips.push(<Chip key="s" icon={<Users className="w-3.5 h-3.5 text-emerald-400" />} label="Students" value={st} />);
   }
   if (id === 'entrance_hall') {
@@ -329,6 +329,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
   const primary = screens.slice(0, 3);
   const extra = screens.slice(3);
   const isSite = room.state === 'site';
+  const buildSpeedPct = isSite ? academyFurnitureEffect(state.rooms, 'build_speed_pct') : 0;
   const reqStatus = requiredSlotStatus(room);
   const reqMissing = reqStatus.filter(s => !s.filled).length;
   const unfinished = !isSite && reqMissing > 0;
@@ -518,7 +519,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
               {/* 1. Stats */}
               <div className="flex flex-wrap gap-2" data-testid="room-stats" data-tour="room-stats">
                 {isSite ? (
-                  <Chip icon={<Hammer className="w-3.5 h-3.5 text-amber-400" />} label="Building" value={`${room.buildProgress}/${room.buildRequired}`} title={reviewsToGoText(room)} />
+                  <Chip icon={<Hammer className="w-3.5 h-3.5 text-amber-400" />} label="Building" value={`${room.buildProgress}/${room.buildRequired}`} title={reviewsToGoText(room, buildSpeedPct)} />
                 ) : (
                   <Chip
                     icon={<Gauge className={`w-3.5 h-3.5 ${unfinished ? 'text-amber-400' : 'text-emerald-400'}`} />}
@@ -604,34 +605,40 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                 </div>
               )}
 
-              {/* 3. Hazard */}
-              {room.hazard && (
+              {/* 3. Hazard / Lockout */}
+              {(room.hazard || (room.lockedUntilReviewIndex || 0) > state.reviewIndex) && (
                 <div className="bg-rose-950/40 border border-rose-500/50 p-3 rounded-xl space-y-2 text-rose-200" data-testid="hazard-banner">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <AlertTriangle className="w-4 h-4 text-rose-300" />
-                    <span className="font-bold text-[13px] capitalize" title={room.hazard.description}>
-                      {room.hazard.type.replace(/_/g, ' ')}
+                    {room.hazard ? (
+                      <AlertTriangle className="w-4 h-4 text-rose-300" />
+                    ) : (
+                      <Lock className="w-4 h-4 text-rose-300" />
+                    )}
+                    <span className="font-bold text-[13px] capitalize" title={room.hazard?.description || 'This room is temporarily locked'}>
+                      {room.hazard ? room.hazard.type.replace(/_/g, ' ') : 'Room Locked'}
                     </span>
                     <span className="text-[12px] bg-rose-900/60 px-2 py-0.5 rounded font-mono" title="Room locked for this many honest reviews">
                       🔒 {Math.max(0, (room.lockedUntilReviewIndex || 0) - state.reviewIndex)} reviews
                     </span>
                   </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => onResolveHazard(room.id, 'warder')}
-                      className="flex-1 min-h-[32px] px-3 py-1.5 bg-rose-800 hover:bg-rose-700 text-white font-bold text-[13px] rounded-lg"
-                      title="Send an active Warder to cleanse the room"
-                    >
-                      Dispel (Warder)
-                    </button>
-                    <button
-                      onClick={() => onResolveHazard(room.id, 'spell')}
-                      className="flex-1 min-h-[32px] px-3 py-1.5 bg-purple-700 hover:bg-purple-600 text-white font-bold text-[13px] rounded-lg"
-                      title={`Dispel immediately using ${HAZARD_DISPEL_MANA_COST} Mana`}
-                    >
-                      Dispel ({HAZARD_DISPEL_MANA_COST} Mana)
-                    </button>
-                  </div>
+                  {room.hazard && (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => onResolveHazard(room.id, 'warder')}
+                        className="flex-1 min-h-[32px] px-3 py-1.5 bg-rose-800 hover:bg-rose-700 text-white font-bold text-[13px] rounded-lg"
+                        title="Send an active Warder to cleanse the room"
+                      >
+                        Dispel (Warder)
+                      </button>
+                      <button
+                        onClick={() => onResolveHazard(room.id, 'spell')}
+                        className="flex-1 min-h-[32px] px-3 py-1.5 bg-purple-700 hover:bg-purple-600 text-white font-bold text-[13px] rounded-lg"
+                        title={`Dispel immediately using ${HAZARD_DISPEL_MANA_COST} Mana`}
+                      >
+                        Dispel ({HAZARD_DISPEL_MANA_COST} Mana)
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -639,7 +646,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
               {isSite ? (
                 <div className="flex items-center justify-between gap-2 bg-slate-950/60 border border-slate-800 rounded-xl px-3 py-2 text-[13px]" data-testid="site-countdown">
                   <span className={room.buildPaused ? 'text-slate-400' : 'text-emerald-300'}>
-                    {room.buildPaused ? `Paused · ${reviewsToGo(room)} honest reviews left (progress is kept)` : reviewsToGoText(room)}
+                    {room.buildPaused ? `Paused · ${reviewsToGo(room, buildSpeedPct)} honest reviews left (progress is kept)` : reviewsToGoText(room, buildSpeedPct)}
                   </span>
                   {onTogglePause && (
                     <button
@@ -1054,14 +1061,14 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                                     className="font-bold text-slate-100 hover:text-amber-200 truncate text-left transition cursor-pointer"
                                   >
                                     {c.nickname || cDef?.name || 'Creature'}
-                                    {cDef?.name && c.nickname !== cDef.name && (
+                                    {c.nickname && cDef?.name && c.nickname !== cDef.name && (
                                       <span className="font-normal text-slate-400"> ({cDef.name})</span>
                                     )}
                                   </button>
                                 ) : (
                                   <span className="font-bold text-slate-100 truncate">
                                     {c.nickname || cDef?.name || 'Creature'}
-                                    {cDef?.name && c.nickname !== cDef.name && (
+                                    {c.nickname && cDef?.name && c.nickname !== cDef.name && (
                                       <span className="font-normal text-slate-400"> ({cDef.name})</span>
                                     )}
                                   </span>

@@ -291,23 +291,37 @@ export const RosterPanel: React.FC<{
 }> = ({ state, onAssignCareer, onRetireCharacter, onEnrollSecondSchool, view = 'all' }) => {
   const { cardSets, allCards, alumniGallery } = state;
   const characters =
-    view === 'students' ? state.characters.filter(c => !c.career) :
+    view === 'students' ? state.characters.filter(c => c.status === 'student') :
     view === 'faculty' ? state.characters.filter(c => !!c.career || c.masteredSchools.length > 0) :
     state.characters;
   const [selectedCharId, setSelectedCharId] = useState<number | null>(characters[0]?.id || null);
   const [activeSubTab, setActiveSubTab] = useState<'roster' | 'alumni'>(view === 'alumni' ? 'alumni' : 'roster');
 
+  useEffect(() => {
+    if (characters.length === 0) {
+      if (selectedCharId !== null) setSelectedCharId(null);
+      return;
+    }
+    if (selectedCharId === null || !characters.some(c => c.id === selectedCharId)) {
+      setSelectedCharId(characters[0].id);
+    }
+  }, [characters, selectedCharId]);
+
   const selectedChar = characters.find(c => c.id === selectedCharId);
   const studySet = cardSets.find(s => s.id === selectedChar?.studySetId && !s.released);
   const studyCardIds = studySet?.cardIds || [];
+  const cardsPerStudent = state.settings.cardsPerStudent || 50;
 
   const ivls = studyCardIds.map(id => allCards[id]?.honestIvl || 0);
-  const skill = calculateStudentSkill(ivls, state.settings.cardsPerStudent);
-  const ready = isMasteryReady(ivls, state.settings.cardsPerStudent);
+  const skill = calculateStudentSkill(ivls, cardsPerStudent);
+  const ready = isMasteryReady(ivls, cardsPerStudent);
 
-  // Retirement eligibility: all cards > retirementAgeDays
+  // Retirement eligibility: all cards across all linked sets >= retirementAgeDays (matches AnkicasterEngine.retireCharacter)
   const retirementThreshold = state.settings.retirementAgeDays || 90;
-  const canRetire = selectedChar && selectedChar.masteredSchools.length > 0 && ivls.length > 0 && ivls.every(ivl => ivl >= retirementThreshold);
+  const allCharSets = selectedChar ? cardSets.filter(s => s.characterId === selectedChar.id && !s.released) : [];
+  const allCharIvls = allCharSets.flatMap(s => s.cardIds).map(id => allCards[id]?.honestIvl || 0);
+  const retireRenown = 10 + academyFurnitureEffect(state.rooms, 'renown_bonus');
+  const canRetire = selectedChar && selectedChar.masteredSchools.length > 0 && allCharIvls.length > 0 && allCharIvls.every(ivl => ivl >= retirementThreshold);
 
   // Faculty limit calculation (Formula F12)
   const { activeFaculty, maxAllowed: facultyLimit, breakdown } = getFacultySummary(state);
@@ -486,10 +500,10 @@ export const RosterPanel: React.FC<{
                 </div>
               </div>
 
-              {/* 50-Card Constellation Grid */}
+              {/* Constellation Grid */}
               <div className="bg-slate-950/80 border border-slate-800 p-4 rounded-xl shadow-inner">
                 <div className="flex items-center justify-between text-xs font-semibold text-slate-200 mb-2">
-                  <span title="Rule BR-13/14: Cards are never shared. Intervals directly mirror your real memory retention and reset honestly on lapses.">Constellation · 50 cards ⓘ</span>
+                  <span title="Rule BR-13/14: Cards are never shared. Intervals directly mirror your real memory retention and reset honestly on lapses.">Constellation · {studyCardIds.length || cardsPerStudent} cards ⓘ</span>
                   <span className="text-xs text-amber-300 font-mono">Gold = &gt;30d interval (Mastery)</span>
                 </div>
 
@@ -520,7 +534,7 @@ export const RosterPanel: React.FC<{
 
                 {ready && (
                   <div className="mt-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs text-amber-200">
-                    ✨ <strong>Mastery Ready!</strong> All 50 cards exceed 30 days interval. Waiting on teacher delay before graduation ceremony.
+                    ✨ <strong>Mastery Ready!</strong> All {studyCardIds.length || cardsPerStudent} cards exceed 30 days interval. Waiting on teacher delay before graduation ceremony.
                   </div>
                 )}
               </div>
@@ -542,7 +556,7 @@ export const RosterPanel: React.FC<{
                             onClick={() => onEnrollSecondSchool(selectedChar.id, sch)}
                             className="px-3 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-200 border border-indigo-500/40 rounded-xl text-xs font-bold transition capitalize"
                           >
-                            + Enroll in {sch} (50 Cards)
+                            + Enroll in {sch} ({cardsPerStudent} Cards)
                           </button>
                         ))}
                     </div>
@@ -554,9 +568,9 @@ export const RosterPanel: React.FC<{
                       onClick={() => onRetireCharacter(selectedChar.id)}
                       disabled={!canRetire}
                       className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/40 text-amber-200 border border-amber-500/50 rounded-xl text-xs font-bold disabled:opacity-40 transition"
-                      title={canRetire ? 'Retire to Alumni Gallery (+10 Renown)' : `Requires all 50 cards ≥ ${retirementThreshold}d interval`}
+                      title={canRetire ? `Retire to Alumni Gallery (+${retireRenown} Renown)` : `Requires all linked cards ≥ ${retirementThreshold}d interval`}
                     >
-                      🏛️ Retire to Alumni (+10 Renown)
+                      🏛️ Retire to Alumni (+{retireRenown} Renown)
                     </button>
                   )}
                 </div>
@@ -666,7 +680,10 @@ export const RecruitmentPanel: React.FC<{
     }
   }
 
-  const eligibleYoungCards = Object.values(allCards).filter(c => c.honestIvl <= 30 && c.queue !== -1);
+  const allowNew = state.settings.linkNewCards ?? false;
+  const eligibleYoungCards = Object.values(allCards).filter(
+    c => c.honestIvl <= 30 && c.queue !== -1 && (allowNew || (c.type ?? 2) !== 0)
+  );
   const freeYoungCards = eligibleYoungCards.filter(c => !linkedCardIds.has(c.id));
   const needed = state.settings.cardsPerStudent;
   const canEnroll = freeYoungCards.length >= needed;
@@ -794,6 +811,7 @@ export const BuildMenuPanel: React.FC<{
   );
 
   const sites = state.rooms.filter(r => r.state === 'site');
+  const buildSpeedPct = sites.length > 0 ? academyFurnitureEffect(state.rooms, 'build_speed_pct') : 0;
 
   return (
     <div className="space-y-4">
@@ -804,7 +822,7 @@ export const BuildMenuPanel: React.FC<{
             <div key={site.id} className="flex items-center justify-between gap-3 text-[13px]" data-site={site.defId}>
               <span className="text-slate-200">{ROOM_DEFINITIONS[site.defId]?.name || site.defId} <span className="text-slate-500 font-mono">{site.buildProgress}/{site.buildRequired}</span></span>
               <span className={site.buildPaused ? 'text-slate-400' : 'text-emerald-300'} data-testid="site-to-go">
-                {site.buildPaused ? 'Paused · ' : ''}{reviewsToGoText(site)}
+                {site.buildPaused ? 'Paused · ' : ''}{reviewsToGoText(site, buildSpeedPct)}
               </span>
             </div>
           ))}
@@ -985,7 +1003,7 @@ export const BestiaryPanel: React.FC<{
 }> = ({ state, onFeedCreature, onAssignTamer, onSelectCreature }) => {
   const creatures = state.creatures || [];
   const characters = state.characters || [];
-  const [statusFilter, setStatusFilter] = useState<'all' | 'tamed' | 'wary' | 'loose' | 'egg'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'tamed' | 'wary' | 'loose' | 'away' | 'egg'>('all');
   const [habitatFilter, setHabitatFilter] = useState<'all' | HabitatType>('all');
   const [rarityFilter, setRarityFilter] = useState<'all' | CreatureRarity>('all');
 
@@ -999,7 +1017,7 @@ export const BestiaryPanel: React.FC<{
     return true;
   });
 
-  const tamers = characters.filter(c => c.career === 'tamer');
+  const tamers = characters.filter(c => c.career === 'tamer' && c.status !== 'student' && c.careerState !== 'sabbatical');
   const filteredOwned = creatures.filter(c => statusFilter === 'all' || c.status === statusFilter);
 
   return (
@@ -1033,7 +1051,7 @@ export const BestiaryPanel: React.FC<{
           <div className="flex items-center justify-between gap-2 flex-wrap border-b border-slate-800 pb-2">
             <h4 className="text-sm font-bold text-slate-200">In Your Academy</h4>
             <div className="flex items-center gap-1.5 flex-wrap">
-              {(['all', 'tamed', 'wary', 'egg', 'loose'] as const).map(f => (
+              {(['all', 'tamed', 'wary', 'egg', 'away', 'loose'] as const).map(f => (
                 <button
                   key={f}
                   onClick={() => setStatusFilter(f)}
@@ -1043,7 +1061,7 @@ export const BestiaryPanel: React.FC<{
                       : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  {f === 'egg' ? 'Arriving' : f}
+                  {f === 'egg' ? 'Arriving' : f === 'away' ? 'On Expedition' : f}
                 </button>
               ))}
             </div>
@@ -1115,9 +1133,11 @@ export const BestiaryPanel: React.FC<{
                                 ? 'bg-amber-500/20 text-amber-300'
                                 : c.status === 'egg'
                                 ? 'bg-sky-500/20 text-sky-300'
+                                : c.status === 'away'
+                                ? 'bg-purple-500/20 text-purple-300'
                                 : 'bg-rose-500/20 text-rose-300'
                             }`}>
-                              {c.status === 'egg' ? originLabel(def.origin, c.defId) : c.status}
+                              {c.status === 'egg' ? originLabel(def.origin, c.defId) : c.status === 'away' ? 'On Expedition' : c.status}
                             </span>
                           </div>
                           {roaming && (
@@ -1476,10 +1496,12 @@ export const RiftPanel: React.FC<{
 
   const dest = RIFT_DESTINATIONS[selectedDestId];
   const activeExpedition = expeditions.find(e => e.state === 'active');
-  const adventurers = characters.filter(c => c.career === 'adventurer');
+  const adventurers = characters.filter(c => c.career === 'adventurer' && c.status !== 'student' && c.careerState !== 'sabbatical');
   const tamedCreatures = creatures.filter(c => c.status === 'tamed');
   const maxSupplies = 1 + academyFurnitureEffect(state.rooms, 'rift_supply_slots');
-  const availablePotions = Object.entries(state.resources.potions || {}).filter(([, count]) => count > 0);
+  const availablePotions = Object.entries(state.resources.potions || {}).filter(
+    ([pid, count]) => count > 0 && (pid === 'rift_elixir' || pid === 'courage_draught')
+  );
   const provisionsNeeded = dest ? dest.supplies * selectedHeroIds.length : 0;
   const hasElixir = (state.activeBuffs?.riftElixirCharges || 0) > 0 || selectedSupplies.includes('rift_elixir');
 
@@ -1674,7 +1696,9 @@ export const RiftPanel: React.FC<{
                 >
                   <option value="">No Companion</option>
                   {tamedCreatures.map(c => (
-                    <option key={c.id} value={c.id}>{c.nickname} (+Fortune)</option>
+                    <option key={c.id} value={c.id}>
+                      {c.nickname} (+{CREATURE_DEFINITIONS[c.defId]?.companionBonus ?? 1} Fortune)
+                    </option>
                   ))}
                 </select>
               </div>

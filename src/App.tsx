@@ -95,13 +95,8 @@ export default function App() {
       return;
     }
     const timer = setInterval(() => setPersonActivityTick(t => t + 1), 500);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setSelectedPersonId(null);
-    };
-    window.addEventListener('keydown', onKey);
     return () => {
       clearInterval(timer);
-      window.removeEventListener('keydown', onKey);
     };
   }, [selectedPersonId, state.characters]);
 
@@ -112,13 +107,8 @@ export default function App() {
       return;
     }
     const timer = setInterval(() => setCreatureActivityTick(t => t + 1), 500);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setSelectedCreatureId(null);
-    };
-    window.addEventListener('keydown', onKey);
     return () => {
       clearInterval(timer);
-      window.removeEventListener('keydown', onKey);
     };
   }, [selectedCreatureId, state.creatures]);
   const [draftDeck, setDraftDeck] = useState<'foundation' | 'grounds' | 'magic'>('foundation');
@@ -952,9 +942,36 @@ export default function App() {
     setOpenScreen(id);
   };
 
+  const resetTransientUiState = () => {
+    setSelectedRoom(null);
+    setPlacement(null);
+    setDemolishRoomId(null);
+    setOpenScreen(null);
+    setBuildModeOpen(false);
+    setSelectedPersonId(null);
+    setSelectedCreatureId(null);
+    setActiveEventModal(null);
+    setIsDraftModalOpen(false);
+    setIsDaySummaryOpen(false);
+    setIsCodexOpen(false);
+    setIsSettingsOpen(false);
+  };
+
   const handleOpenRoomById = (roomId: number) => {
     const room = state.rooms.find(r => r.id === roomId);
     if (room) {
+      if (buildModeOpen) {
+        const res = AnkicasterEngine.closeBuildMode(state);
+        if (res.releasedCount > 0) {
+          setState(res.state);
+          addToast(
+            `${res.releasedCount} creature${res.releasedCount === 1 ? '' : 's'} broke loose from shelved pens!`,
+            'warning'
+          );
+        }
+        setBuildModeOpen(false);
+      }
+      setPlacement(null);
       setOpenScreen(null);
       setSelectedRoom(room);
       setState(prev => ({ ...prev, tutorial: applyTutorialAction(prev.tutorial, room.defId === 'wizard_study' ? 'open-study' : 'open-other') }));
@@ -1033,6 +1050,113 @@ export default function App() {
   const currentSelectedRoom = selectedRoom
     ? state.rooms.find(r => r.id === selectedRoom.id) || null
     : null;
+
+  // Unified topmost-first Escape dispatcher so one Esc closes only the topmost overlay
+  const escapeStateRef = useRef({
+    isCreationModalOpen,
+    canCloseCreation: lookOnly || state.reviewIndex > 0 || state.characters.length > 0 || state.mana > 0 || state.renown > 0,
+    demolishRoomId,
+    selectedPersonId,
+    selectedCreatureId,
+    openScreen,
+    isCodexOpen,
+    isSettingsOpen,
+    activeEventModal,
+    isDaySummaryOpen,
+    isDraftModalOpen,
+    currentSelectedRoom,
+    placement
+  });
+  escapeStateRef.current = {
+    isCreationModalOpen,
+    canCloseCreation: lookOnly || state.reviewIndex > 0 || state.characters.length > 0 || state.mana > 0 || state.renown > 0,
+    demolishRoomId,
+    selectedPersonId,
+    selectedCreatureId,
+    openScreen,
+    isCodexOpen,
+    isSettingsOpen,
+    activeEventModal,
+    isDaySummaryOpen,
+    isDraftModalOpen,
+    currentSelectedRoom,
+    placement
+  };
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      const s = escapeStateRef.current;
+      if (s.isCreationModalOpen) {
+        if (s.canCloseCreation) {
+          e.preventDefault();
+          setIsCreationModalOpen(false);
+          setLookOnly(false);
+        }
+        return;
+      }
+      if (s.demolishRoomId !== null) {
+        e.preventDefault();
+        setDemolishRoomId(null);
+        return;
+      }
+      if (s.selectedPersonId !== null) {
+        e.preventDefault();
+        setSelectedPersonId(null);
+        return;
+      }
+      if (s.selectedCreatureId !== null) {
+        e.preventDefault();
+        setSelectedCreatureId(null);
+        return;
+      }
+      if (s.openScreen === 'ponder' || s.openScreen === 'grimoire') {
+        e.preventDefault();
+        setOpenScreen(null);
+        return;
+      }
+      if (s.isCodexOpen) {
+        e.preventDefault();
+        setIsCodexOpen(false);
+        return;
+      }
+      if (s.isSettingsOpen) {
+        e.preventDefault();
+        setIsSettingsOpen(false);
+        return;
+      }
+      if (s.activeEventModal !== null) {
+        e.preventDefault();
+        setActiveEventModal(null);
+        return;
+      }
+      if (s.isDaySummaryOpen) {
+        e.preventDefault();
+        setIsDaySummaryOpen(false);
+        return;
+      }
+      if (s.isDraftModalOpen) {
+        return;
+      }
+      if (s.openScreen !== null) {
+        e.preventDefault();
+        setOpenScreen(null);
+        return;
+      }
+      if (s.currentSelectedRoom !== null) {
+        e.preventDefault();
+        const wasStudy = s.currentSelectedRoom.defId === 'wizard_study';
+        setSelectedRoom(null);
+        if (wasStudy) setState(prev => ({ ...prev, tutorial: applyTutorialAction(prev.tutorial, 'close-study') }));
+        return;
+      }
+      if (s.placement !== null) {
+        e.preventDefault();
+        setPlacement(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const tutorial = state.tutorial;
   const studyOpen = currentSelectedRoom?.defId === 'wizard_study';
@@ -1114,7 +1238,7 @@ export default function App() {
             if (evt) setActiveEventModal(evt);
             else handleOpenScreen('events');
           }}
-          selectedRoomId={selectedRoom?.id}
+          selectedRoomId={currentSelectedRoom?.id}
           onResolveHazard={handleResolveHazard}
           placement={placement}
           onPlacementConfirm={handlePlacementConfirm}
@@ -1645,14 +1769,31 @@ export default function App() {
                   </div>
                   <button
                     onClick={() => {
-                      setState(prev => ({
-                        ...prev,
-                        settings: {
-                          ...prev.settings,
-                          examTimer: !prev.settings.examTimer,
-                          mode: !prev.settings.examTimer ? 'timed' : 'endless'
-                        }
-                      }));
+                      setState(prev => {
+                        const nextTimed = !prev.settings.examTimer;
+                        const now = Date.now();
+                        const termDays = prev.settings.termLengthDays || 30;
+                        const mastersNow = prev.characters.filter(c => c.masteredSchools.length > 0).length + prev.alumniGallery.length;
+                        return {
+                          ...prev,
+                          settings: {
+                            ...prev.settings,
+                            examTimer: nextTimed,
+                            mode: nextTimed ? 'timed' : 'endless'
+                          },
+                          ...(nextTimed ? {
+                            termStartDateMs: prev.termStartDateMs ?? now,
+                            termEndDateMs: prev.termEndDateMs && prev.termEndDateMs > now
+                              ? prev.termEndDateMs
+                              : prev.settings.termEndDate
+                                ? new Date(`${prev.settings.termEndDate}T23:59:59`).getTime()
+                                : now + termDays * 86_400_000,
+                            termInitialReviewIndex: prev.termInitialReviewIndex ?? prev.reviewIndex,
+                            termInitialMasters: prev.termInitialMasters ?? mastersNow,
+                            termInitialRenown: prev.termInitialRenown ?? prev.renown
+                          } : {})
+                        };
+                      });
                     }}
                     className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
                       state.settings.examTimer ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-400'
@@ -1674,7 +1815,7 @@ export default function App() {
                           setState(prev => ({
                             ...prev,
                             settings: { ...prev.settings, termEndDate: val },
-                            termEndDateMs: val ? new Date(val).getTime() : undefined
+                            termEndDateMs: val ? new Date(`${val}T23:59:59`).getTime() : undefined
                           }));
                         }}
                         className="bg-slate-900 border border-slate-700 px-2 py-1 rounded-lg text-slate-200 text-xs"
@@ -1702,7 +1843,12 @@ export default function App() {
                     </div>
                     <button
                       onClick={() => {
-                        const res = AnkicasterEngine.checkTimedTermStatus(state, Date.now() + 999999999);
+                        const termDays = state.settings.termLengthDays || 30;
+                        const forceEndMs = Math.max(
+                          Date.now() + termDays * 86_400_000 + 86_400_000,
+                          (state.termEndDateMs || 0) + 1000
+                        );
+                        const res = AnkicasterEngine.checkTimedTermStatus(structuredClone(state), forceEndMs);
                         setState(res.state);
                         setIsSettingsOpen(false);
                       }}
@@ -1722,7 +1868,7 @@ export default function App() {
                     const fresh = createInitialGameState();
                     setState(fresh);
                     localStorage.removeItem(STORAGE_KEY);
-                    setIsSettingsOpen(false);
+                    resetTransientUiState();
                     addToast('Academy restarted afresh!', 'info');
                   }}
                   className="w-full py-2.5 bg-rose-950/60 hover:bg-rose-900 text-rose-200 border border-rose-800/60 font-bold rounded-xl transition text-xs shadow"
@@ -1778,6 +1924,7 @@ export default function App() {
                 onClick={() => {
                   const updated = AnkicasterEngine.startNextTerm(state, state.settings.termLengthDays || 30);
                   setState(updated.state);
+                  resetTransientUiState();
                   addToast('New academic semester commenced!', 'success');
                 }}
                 className="flex-1 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold rounded-xl shadow-lg transition text-xs"

@@ -5,7 +5,7 @@
  * Generic window for a management screen opened from a room window or the Academy menu.
  * Opens over the map with the map dimmed behind it (Addendum 11.1).
  */
-import React, { useEffect } from 'react';
+import React from 'react';
 import { X } from 'lucide-react';
 import { ScreenId, SCREEN_DEFS } from '../ui/screens';
 import { ScreenIcon } from './ScreenIcon';
@@ -23,11 +23,6 @@ export const ScreenWindow: React.FC<{
   children: React.ReactNode;
   width?: string;
 }> = ({ id, subtitle, onClose, children, width = 'max-w-5xl' }) => {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
   return (
     <div
       className="fixed inset-0 z-[55] bg-black/40 backdrop-blur-[1px] flex items-center justify-center p-3 md:p-6"

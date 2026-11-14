@@ -8,12 +8,11 @@
 import { PlacedRoom } from '../types/ankicaster';
 
 /**
- * Honest reviews of progress per review for a site. The engine advances every unpaused site by 1 per
- * honest review (engine.ts processReview step 4) and has no Builder slots yet, so the rate is 1.
- * GDD 15.4's Builder rate (1.25) applies once the engine gains Builder slots.
+ * Honest reviews of progress per review for a site.
+ * Matches engine.ts processReview step 4 (`build_speed_pct` furniture bonus).
  */
-export function siteRate(_room: Pick<PlacedRoom, 'state'>): number {
-  return 1;
+export function siteRate(_room: Pick<PlacedRoom, 'state'>, buildSpeedPct = 0): number {
+  return buildSpeedPct > 0 ? Math.round((1 + buildSpeedPct / 100) * 100) / 100 : 1;
 }
 
 /** Fraction built, 0..1. */
@@ -24,13 +23,13 @@ export function siteFraction(room: Pick<PlacedRoom, 'buildProgress' | 'buildRequ
 }
 
 /** N in "About N honest reviews to go" = ceil((buildRequired - buildProgress) / rate). */
-export function reviewsToGo(room: Pick<PlacedRoom, 'buildProgress' | 'buildRequired' | 'state'>): number {
+export function reviewsToGo(room: Pick<PlacedRoom, 'buildProgress' | 'buildRequired' | 'state'>, buildSpeedPct = 0): number {
   if (room.state === 'built') return 0;
-  return Math.max(0, Math.ceil(((room.buildRequired || 0) - (room.buildProgress || 0)) / siteRate(room)));
+  return Math.max(0, Math.ceil(((room.buildRequired || 0) - (room.buildProgress || 0)) / siteRate(room, buildSpeedPct)));
 }
 
-export function reviewsToGoText(room: Pick<PlacedRoom, 'buildProgress' | 'buildRequired' | 'state'>): string {
-  const n = reviewsToGo(room);
+export function reviewsToGoText(room: Pick<PlacedRoom, 'buildProgress' | 'buildRequired' | 'state'>, buildSpeedPct = 0): string {
+  const n = reviewsToGo(room, buildSpeedPct);
   return `About ${n} honest review${n === 1 ? '' : 's'} to go`;
 }
 

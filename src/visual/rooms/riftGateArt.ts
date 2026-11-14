@@ -32,7 +32,7 @@ const GOLDS = PALETTE.gold.map(hex);
 
 /** Pure helper determining Rift Gate visual state from read-only game state + returning flare flag. */
 export function getRiftGateVisualState(
-  state: Pick<FullGameState, 'characters' | 'alumniGallery' | 'expeditions' | 'rooms' | 'reviewIndex'>,
+  state: Pick<FullGameState, 'characters' | 'alumniGallery' | 'expeditions' | 'rooms' | 'reviewIndex' | 'debugRiftLock'>,
   returningActive: boolean = false
 ): RiftGateVisualState {
   if (state.expeditions?.some(e => e.state === 'active')) {
@@ -43,7 +43,7 @@ export function getRiftGateVisualState(
   }
   const room = state.rooms?.find(r => r.defId === 'rift_gate');
   if (!room || room.state !== 'built') return 'dormant';
-  const locked = (room.lockedUntilReviewIndex ?? -1) > (state.reviewIndex ?? 0);
+  const locked = !!state.debugRiftLock || (room.lockedUntilReviewIndex ?? -1) > (state.reviewIndex ?? 0);
   if (locked) return 'dormant';
   const totalMasters =
     (state.characters?.filter(c => c.masteredSchools.length > 0).length ?? 0) +

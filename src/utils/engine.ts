@@ -126,6 +126,36 @@ export const HAZARD_DISPEL_MANA_COST = 30;
 
 const STAFF_CAREERS = new Set<string>(['teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist', 'builder']);
 
+let _lastNumericId = 0;
+let _noticeSeq = 0;
+
+function uniqueNumericId(existing: number[] = []): number {
+  const candidate = Math.max(Date.now(), _lastNumericId + 1, ...existing.map(n => n + 1));
+  _lastNumericId = candidate;
+  return candidate;
+}
+
+function uniqueNoticeId(prefix: string, state: FullGameState): string {
+  let id: string;
+  do {
+    _noticeSeq += 1;
+    id = `${prefix}-${Date.now()}-${_noticeSeq}`;
+  } while (state.notices?.some(n => n.id === id));
+  return id;
+}
+
+function cloneRoom(r: PlacedRoom): PlacedRoom {
+  return {
+    ...r,
+    settings: { ...r.settings },
+    furniture: (r.furniture || []).map(f => ({ ...f })),
+    unplacedFurniture: r.unplacedFurniture ? r.unplacedFurniture.map(u => ({ ...u })) : undefined,
+    hazard: r.hazard ? { ...r.hazard } : undefined,
+    troubleMalus: r.troubleMalus ? { ...r.troubleMalus } : undefined,
+    spent: r.spent ? { ...r.spent } : undefined
+  };
+}
+
 export class AnkicasterEngine {
   /** One-off resource changes (builds, draws, events). Display only. */
   static logResourceChange(state: FullGameState, resource: string, amount: number, label: string): void {
@@ -147,7 +177,7 @@ export class AnkicasterEngine {
     state.riftGateGranted = true;
     state.notices = state.notices || [];
     state.notices.push({
-      id: `rift-plan-${Date.now()}`,
+      id: uniqueNoticeId('rift-plan', state),
       time: Date.now(),
       type: 'blueprint',
       text: 'Three masters now serve the Academy. A Rift Gate plan has been granted.'
@@ -186,6 +216,7 @@ export class AnkicasterEngine {
       wizard: {
         ...state.wizard,
         levels: { ...state.wizard.levels },
+        knownSpells: [...(state.wizard.knownSpells || [])],
         spellCooldowns: { ...state.wizard.spellCooldowns },
         activeSession: state.wizard.activeSession ? { ...state.wizard.activeSession } : undefined,
         queuedSessions: state.wizard.queuedSessions ? state.wizard.queuedSessions.map(s => ({ ...s })) : []
@@ -193,16 +224,65 @@ export class AnkicasterEngine {
       allCards: { ...state.allCards },
       characters: state.characters.map(c => ({
         ...c,
+        masteredSchools: [...(c.masteredSchools || [])],
+        traits: [...(c.traits || [])],
+        careerSetIds: [...(c.careerSetIds || [])],
         needs: { ...c.needs },
         readyDays: { ...c.readyDays },
-        chronicle: [...c.chronicle],
+        chronicle: c.chronicle.map(ch => ({ ...ch })),
         injury: c.injury ? { ...c.injury } : undefined
       })),
       cardSets: state.cardSets.map(s => ({ ...s, cardIds: [...s.cardIds] })),
-      rooms: state.rooms.map(r => ({ ...r, settings: { ...r.settings }, furniture: [...r.furniture] })),
-      creatures: state.creatures.map(c => ({ ...c })),
-      expeditions: state.expeditions.map(e => ({ ...e, suppliesTaken: [...e.suppliesTaken] })),
-      resources: { ...state.resources, potions: { ...state.resources.potions } },
+      rooms: state.rooms.map(cloneRoom),
+      shelvedRooms: state.shelvedRooms ? state.shelvedRooms.map(cloneRoom) : undefined,
+      creatures: state.creatures.map(c => ({
+        ...c,
+        stashed: c.stashed ? { ...c.stashed } : undefined
+      })),
+      expeditions: state.expeditions.map(e => ({
+        ...e,
+        teamIds: [...e.teamIds],
+        suppliesTaken: [...e.suppliesTaken],
+        lootSummary: e.lootSummary ? [...e.lootSummary] : undefined
+      })),
+      resources: {
+        ...state.resources,
+        seedsUnlocked: Array.isArray(state.resources.seedsUnlocked)
+          ? [...state.resources.seedsUnlocked]
+          : state.resources.seedsUnlocked,
+        potions: state.resources.potions && typeof state.resources.potions === 'object'
+          ? { ...state.resources.potions }
+          : state.resources.potions
+      },
+      veil: {
+        ...state.veil,
+        reductions: (state.veil.reductions || []).map(r => ({ ...r }))
+      },
+      activeBuffs: state.activeBuffs
+        ? {
+            ...state.activeBuffs,
+            wardwaterFloors: state.activeBuffs.wardwaterFloors ? [...state.activeBuffs.wardwaterFloors] : undefined
+          }
+        : undefined,
+      resourceLedger: state.resourceLedger
+        ? {
+            bells: state.resourceLedger.bells.map(b => ({ entries: b.entries.map(e => ({ ...e })) })),
+            recent: Object.fromEntries(
+              Object.entries(state.resourceLedger.recent || {}).map(([k, v]) => [k, v.map(item => ({ ...item }))])
+            ),
+            recentAll: state.resourceLedger.recentAll ? state.resourceLedger.recentAll.map(item => ({ ...item })) : undefined
+          }
+        : undefined,
+      activeEvents: (state.activeEvents || []).map(ev => ({ ...ev })),
+      potions: (state.potions || []).map(p => ({ ...p, ingredients: [...p.ingredients] })),
+      roomPlans: state.roomPlans ? { ...state.roomPlans } : undefined,
+      hand: state.hand ? [...state.hand] : [],
+      draftHistory: state.draftHistory ? { ...state.draftHistory } : {},
+      draftPity: state.draftPity ? { ...state.draftPity } : {},
+      roomlessStreak: state.roomlessStreak ? { ...state.roomlessStreak } : undefined,
+      knownPatterns: state.knownPatterns ? [...state.knownPatterns] : [],
+      knownPlans: state.knownPlans ? [...state.knownPlans] : [],
+      discoveredCreatures: state.discoveredCreatures ? [...state.discoveredCreatures] : undefined,
       notices: [...state.notices],
       processedReviewIds: state.processedReviewIds ? [...state.processedReviewIds] : []
     };
@@ -325,7 +405,7 @@ export class AnkicasterEngine {
           next.wizard.levels[sch] = Math.min(10, newLevel);
           notifications.push(`🎉 Wizard reached Level ${newLevel} in ${sch.toUpperCase()}!`);
           next.notices.push({
-            id: `lvl-${Date.now()}`,
+            id: uniqueNoticeId('lvl', next),
             time: Date.now(),
             type: 'level_up',
             text: `Wizard attained Level ${newLevel} in ${sch} magic.`,
@@ -342,7 +422,7 @@ export class AnkicasterEngine {
             const spDef = SPELL_DEFINITIONS[sess.spellId];
             notifications.push(`✨ Mastered Grimoire Spell: ${spDef ? spDef.name : sess.spellId}!`);
             next.notices.push({
-              id: `spell-learn-${Date.now()}-${sess.spellId}`,
+              id: uniqueNoticeId(`spell-learn-${sess.spellId}`, next),
               time: Date.now(),
               type: 'wizard_new_spell',
               text: `Mastered Grimoire Spell: ${spDef ? spDef.name : sess.spellId}!`,
@@ -453,7 +533,7 @@ export class AnkicasterEngine {
       } else if (c.status === 'tamed') {
         const bondBonus = academyFurnitureEffect(next.rooms, 'creature_bond_pct', cRoom);
         c.bondProgress += 1 + bondBonus / 100;
-        if (c.bondLevel === 1 && c.bondProgress >= 150) {
+        if (c.bondLevel <= 1 && c.bondProgress >= 150) {
           c.bondLevel = 2;
           notifications.push(`❤️ Bond Level 2 reached with ${c.nickname}!`);
           next.notices.push({
@@ -747,8 +827,8 @@ export class AnkicasterEngine {
         const chosenBed =
           candidates.find(r => !isRoomUnfinished(r) && bedOpen(r)) ||
           candidates.find(r => bedOpen(r)) ||
-          candidates.find(r => !isRoomUnfinished(r)) ||
-          candidates[0];
+          candidates.find(r => !isRoomUnfinished(r) && roomBedCapacity(r) > 0) ||
+          candidates.find(r => roomBedCapacity(r) > 0);
         if (chosenBed) {
           c.bedRoomId = chosenBed.id;
         }
@@ -854,7 +934,7 @@ export class AnkicasterEngine {
   private static charmBonus(state: FullGameState): number {
     let charm = 0;
     for (const room of state.rooms) {
-      if (room.state !== 'built') continue;
+      if (room.state !== 'built' || isRoomUnfinished(room)) continue;
       for (const f of room.furniture) {
         const pts = FURNITURE_DEFINITIONS[f.defId]?.stats?.charm || 0;
         charm += f.damaged ? pts * 0.5 : pts;
@@ -1314,9 +1394,9 @@ export class AnkicasterEngine {
       state.wizard.presenceRoomId = undefined;
     } else {
       const candidates = state.rooms.filter(
-        r => r.state === 'built' && r.defId !== 'wizard_study' && r.defId !== 'support_pillar' && r.defId !== 'spiral_stair'
+        r => r.state === 'built' && !isRoomUnfinished(r) && r.defId !== 'wizard_study' && r.defId !== 'support_pillar' && r.defId !== 'spiral_stair'
       );
-      const pool = candidates.length > 0 ? candidates : state.rooms.filter(r => r.state === 'built');
+      const pool = candidates.length > 0 ? candidates : state.rooms.filter(r => r.state === 'built' && !isRoomUnfinished(r));
       if (pool.length > 0) {
         state.wizard.presenceRoomId = pool[state.bellIndex % pool.length].id;
       }
@@ -1408,6 +1488,8 @@ export class AnkicasterEngine {
       }
 
       // Real Day Mastery Delays & Graduations
+      const realSchedule = buildAcademySchedule(next);
+      let anyGraduated = false;
       for (const char of next.characters) {
         if (char.status === 'student' && char.studySetId) {
           const studySet = next.cardSets.find(s => s.id === char.studySetId);
@@ -1417,34 +1499,34 @@ export class AnkicasterEngine {
               const sch = char.currentSchool || 'nature';
               char.readyDays[sch] = (char.readyDays[sch] || 0) + 1;
 
-              const teacher = next.characters.find(c => c.career === 'teacher' && c.workplaceRoomId === char.seatRoomId);
-              let teacherIvls: number[] = [];
-              if (teacher && teacher.careerSetIds.length > 0) {
-                const tSet = next.cardSets.find(s => s.id === teacher.careerSetIds[0]);
-                if (tSet) teacherIvls = tSet.cardIds.map(id => next.allCards[id]?.honestIvl || 0);
-              }
-
+              const delaySrc = getStudentDelaySource(next, realSchedule, char);
               const delay = calculateTeacherDelay(
-                teacher ? 'teacher' : 'wizard',
-                teacherIvls,
+                delaySrc.teacherType,
+                delaySrc.teacherIvls,
                 next.wizard.levels[sch],
                 next.wizard.levels.light
               );
 
               if (char.readyDays[sch] >= delay && !char.masteredSchools.includes(sch)) {
+                const gradRoomId = char.seatRoomId ?? ehRoom?.id;
                 char.masteredSchools.push(sch);
                 char.title = `Master of ${sch.toUpperCase()}`;
                 char.status = 'resident';
+                char.currentSchool = undefined;
+                char.classRoomId = undefined;
+                char.period = undefined;
+                char.seatRoomId = undefined;
+                anyGraduated = true;
                 const renownGain = 10 + academyFurnitureEffect(next.rooms, 'renown_bonus');
                 next.renown += renownGain;
                 summary.push(`🎓 ${char.name} completed real-time mastery countdown and graduated as Master of ${sch.toUpperCase()}!`);
                 next.notices.push({
-                  id: `master-${Date.now()}-${char.id}`,
+                  id: uniqueNoticeId(`master-${char.id}`, next),
                   time: Date.now(),
                   type: 'mastery',
                   text: `${char.name} graduated as Master of ${sch.toUpperCase()} (+${renownGain} Renown)!`,
                   data: {
-                    roomId: char.seatRoomId ?? ehRoom?.id,
+                    roomId: gradRoomId,
                     characterIds: [char.id],
                     school: sch,
                     visualEventType: 'master_graduated'
@@ -1456,6 +1538,7 @@ export class AnkicasterEngine {
           }
         }
       }
+      if (anyGraduated) AnkicasterEngine.syncWorkplaces(next);
 
       // Real-day event arrival roll (one roll per real day picking from all 25 SCHOOL_EVENTS)
       if (Math.random() < 0.4) {
@@ -1465,7 +1548,7 @@ export class AnkicasterEngine {
           next.activeEvents.push({ eventId: chosen.id, dayArrived: startDay + d + 1 });
           summary.push(`📜 Event arrived at Academy gates: ${chosen.name}.`);
           next.notices.push({
-            id: `event-arrive-${Date.now()}-${chosen.id}-${d}`,
+            id: uniqueNoticeId(`event-arrive-${chosen.id}`, next),
             time: Date.now(),
             type: 'event',
             text: `📜 Event arrived at Academy gates: ${chosen.name}.`,
@@ -1483,7 +1566,9 @@ export class AnkicasterEngine {
           const eligibleRooms = next.rooms.filter(r => r.state === 'built' && !r.hazard);
           if (eligibleRooms.length > 0) {
             const target = eligibleRooms[Math.floor(Math.random() * eligibleRooms.length)];
-            const wardFloorIdx = next.activeBuffs?.wardwaterFloors?.indexOf(target.y) ?? -1;
+            const wardFloorIdx = target.area === 'castle'
+              ? (next.activeBuffs?.wardwaterFloors?.indexOf(target.y) ?? -1)
+              : -1;
             if (wardFloorIdx >= 0) {
               next.activeBuffs!.wardwaterFloors!.splice(wardFloorIdx, 1);
               summary.push(`🛡️ Wardwater prevented a hazard on Floor ${target.y + 1}!`);
@@ -1503,7 +1588,7 @@ export class AnkicasterEngine {
                 target.hazard = chosenHazard;
                 summary.push(`⚠️ Thin Veil hazard emerged: ${chosenHazard.name} in ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}!`);
                 next.notices.push({
-                  id: `hazard-${Date.now()}-${target.id}-${d}`,
+                  id: uniqueNoticeId(`hazard-${target.id}`, next),
                   time: Date.now(),
                   type: 'hazard',
                   text: `⚠️ Thin Veil hazard emerged: ${chosenHazard.name} in ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}!`,
@@ -1522,7 +1607,7 @@ export class AnkicasterEngine {
       const allDefs = Object.values(CREATURE_DEFINITIONS);
       if (allDefs.length > 0) {
         const cDef = allDefs[Math.floor(Math.random() * allDefs.length)];
-        const newCid = Date.now() + Math.floor(Math.random() * 1000);
+        const newCid = uniqueNumericId(next.creatures.map(c => c.id));
         next.creatures.push({
           id: newCid,
           defId: cDef.id,
@@ -1538,7 +1623,7 @@ export class AnkicasterEngine {
         syncDiscoveredCreatures(next);
         summary.push(`🐾 Lure Musk attracted a wild ${cDef.name} to the Academy!`);
         next.notices.push({
-          id: `creature-arrive-${newCid}`,
+          id: uniqueNoticeId(`creature-arrive-${newCid}`, next),
           time: Date.now(),
           type: 'creature_arrival',
           text: `🐾 Lure Musk attracted a wild ${cDef.name} to the Academy!`,
@@ -1622,7 +1707,7 @@ export class AnkicasterEngine {
     }
 
     next.notices.push({
-      id: `day-tick-${next.day}-${Date.now()}`,
+      id: uniqueNoticeId(`day-tick-${next.day}`, next),
       time: Date.now(),
       type: paidFully ? 'day_tick_paid' : 'day_tick_unpaid',
       text: paidFully
@@ -1636,6 +1721,7 @@ export class AnkicasterEngine {
 
     // 2. Mastery Delays and Graduation Checks
     const tickSchedule = buildAcademySchedule(next);
+    let anyTickGraduated = false;
     for (const char of next.characters) {
       if (char.status === 'student' && char.studySetId) {
         const studySet = next.cardSets.find(s => s.id === char.studySetId);
@@ -1654,19 +1740,25 @@ export class AnkicasterEngine {
             );
 
             if (char.readyDays[sch] >= delay && !char.masteredSchools.includes(sch)) {
+              const gradRoomId = char.seatRoomId ?? ehRoom?.id;
               char.masteredSchools.push(sch);
               char.title = `Master of ${sch.toUpperCase()}`;
               char.status = 'resident';
+              char.currentSchool = undefined;
+              char.classRoomId = undefined;
+              char.period = undefined;
+              char.seatRoomId = undefined;
+              anyTickGraduated = true;
               const renownGain = 10 + academyFurnitureEffect(next.rooms, 'renown_bonus');
               next.renown += renownGain;
               summary.push(`🎓 Congratulations! ${char.name} has graduated as a Master of ${sch.toUpperCase()}!`);
               next.notices.push({
-                id: `master-${Date.now()}-${char.id}`,
+                id: uniqueNoticeId(`master-${char.id}`, next),
                 time: Date.now(),
                 type: 'mastery',
                 text: `${char.name} graduated as Master of ${sch.toUpperCase()} (+${renownGain} Renown)!`,
                 data: {
-                  roomId: char.seatRoomId ?? ehRoom?.id,
+                  roomId: gradRoomId,
                   characterIds: [char.id],
                   school: sch,
                   visualEventType: 'master_graduated'
@@ -1678,6 +1770,7 @@ export class AnkicasterEngine {
         }
       }
     }
+    if (anyTickGraduated) AnkicasterEngine.syncWorkplaces(next);
 
     // 3. New Random Event Arrival
     if (Math.random() < 0.4) {
@@ -1687,7 +1780,7 @@ export class AnkicasterEngine {
         next.activeEvents.push({ eventId: chosen.id, dayArrived: next.day });
         summary.push(`📜 A new event has arrived at the Academy gates: ${chosen.name}.`);
         next.notices.push({
-          id: `event-arrive-${Date.now()}-${chosen.id}`,
+          id: uniqueNoticeId(`event-arrive-${chosen.id}`, next),
           time: Date.now(),
           type: 'event',
           text: `📜 A new event has arrived at the Academy gates: ${chosen.name}.`,
@@ -1703,7 +1796,9 @@ export class AnkicasterEngine {
       const eligibleRooms = next.rooms.filter(r => r.state === 'built' && !r.hazard);
       if (eligibleRooms.length > 0) {
         const target = eligibleRooms[Math.floor(Math.random() * eligibleRooms.length)];
-        const wardFloorIdx = next.activeBuffs?.wardwaterFloors?.indexOf(target.y) ?? -1;
+        const wardFloorIdx = target.area === 'castle'
+          ? (next.activeBuffs?.wardwaterFloors?.indexOf(target.y) ?? -1)
+          : -1;
         if (wardFloorIdx >= 0) {
           next.activeBuffs!.wardwaterFloors!.splice(wardFloorIdx, 1);
           summary.push(`🛡️ Wardwater prevented a hazard on Floor ${target.y + 1}!`);
@@ -1723,7 +1818,7 @@ export class AnkicasterEngine {
             target.hazard = chosenHazard;
             summary.push(`⚠️ Thin Veil hazard emerged: ${chosenHazard.name} in ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}!`);
             next.notices.push({
-              id: `hazard-${Date.now()}-${target.id}`,
+              id: uniqueNoticeId(`hazard-${target.id}`, next),
               time: Date.now(),
               type: 'hazard',
               text: `⚠️ Thin Veil hazard emerged: ${chosenHazard.name} in ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}!`,
@@ -1740,7 +1835,7 @@ export class AnkicasterEngine {
       const allDefs = Object.values(CREATURE_DEFINITIONS);
       if (allDefs.length > 0) {
         const cDef = allDefs[Math.floor(Math.random() * allDefs.length)];
-        const newCid = Date.now() + Math.floor(Math.random() * 1000);
+        const newCid = uniqueNumericId(next.creatures.map(c => c.id));
         next.creatures.push({
           id: newCid,
           defId: cDef.id,
@@ -1756,7 +1851,7 @@ export class AnkicasterEngine {
         syncDiscoveredCreatures(next);
         summary.push(`🐾 Lure Musk attracted a wild ${cDef.name} to the Academy!`);
         next.notices.push({
-          id: `creature-arrive-${newCid}`,
+          id: uniqueNoticeId(`creature-arrive-${newCid}`, next),
           time: Date.now(),
           type: 'creature_arrival',
           text: `🐾 Lure Musk attracted a wild ${cDef.name} to the Academy!`,
@@ -1833,7 +1928,7 @@ export class AnkicasterEngine {
 
     const ehRoom = next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || next.rooms[0];
     next.notices.push({
-      id: `retire-${Date.now()}`,
+      id: uniqueNoticeId('retire', next),
       time: Date.now(),
       type: 'retirement',
       text: `🏛️ ${char.name} has gracefully retired to the Academy Alumni Gallery (+10 Renown)! Flashcards returned to free pool.`,
@@ -1893,6 +1988,7 @@ export class AnkicasterEngine {
         next.characters.splice(i, 1);
         for (const cr of next.creatures) {
           if (cr.tamerId === char.id) cr.tamerId = undefined;
+          if (cr.adventurerId === char.id) cr.adventurerId = undefined;
         }
         retired.push(char);
         AnkicasterEngine.grantRiftGate(next);
@@ -1900,7 +1996,7 @@ export class AnkicasterEngine {
         const msg = `🏛️ ${char.name} has automatically retired to the Alumni Gallery (+10 Renown) after all cards reached ${retirementThreshold}d retirement age!`;
         if (summary) summary.push(msg);
         next.notices.push({
-          id: `auto-retire-${Date.now()}-${char.id}`,
+          id: uniqueNoticeId(`auto-retire-${char.id}`, next),
           time: Date.now(),
           type: 'retirement',
           text: msg,
@@ -1944,6 +2040,16 @@ export class AnkicasterEngine {
         lastStudiedMs: prior?.lastStudiedMs ?? Date.now(),
         installBaselineMs: prior?.installBaselineMs ?? state.installBaselineMs
       };
+    }
+
+    // Preserve linked card entries referenced by active card sets if omitted from a partial snapshot
+    for (const set of state.cardSets || []) {
+      if (set.released) continue;
+      for (const cid of set.cardIds) {
+        if (!updatedCards[cid] && existing[cid]) {
+          updatedCards[cid] = { ...existing[cid] };
+        }
+      }
     }
 
     return {
@@ -2044,7 +2150,9 @@ export class AnkicasterEngine {
     // 5. Reset rooms and materials back to starting layout & stock (BR-34 / F36)
     const fresh = createInitialGameState();
     next.rooms = fresh.rooms;
+    next.shelvedRooms = [];
     next.resources = fresh.resources;
+    next.activeBuffs = {};
 
     // 6. Reset unspent mana, renown, patterns, and this term's draw prices. Room plans stay.
     next.mana = 0;
@@ -2081,7 +2189,7 @@ export class AnkicasterEngine {
     next.termFinishedReport = undefined;
 
     next.notices.push({
-      id: `term-start-${now}`,
+      id: uniqueNoticeId('term-start', next),
       time: now,
       type: 'term_start',
       text: `📜 New Academic Term commenced (${termLengthDays} days). Students, faculty, and creatures reset; card links freed; wizard masteries, spellbooks, and alumni honored!`,
@@ -2152,7 +2260,7 @@ export class AnkicasterEngine {
     next.mana -= 60;
 
     const chosenCards = freeYoungCards.slice(0, needed).map(c => c.id);
-    const newSetId = Date.now();
+    const newSetId = uniqueNumericId(next.cardSets.map(s => s.id));
 
     next.cardSets.push({
       id: newSetId,
@@ -2165,6 +2273,14 @@ export class AnkicasterEngine {
       cardIds: chosenCards
     });
 
+    delete char.career;
+    delete char.careerState;
+    delete char.workplaceRoomId;
+    for (const cr of next.creatures) {
+      if (cr.tamerId === char.id) cr.tamerId = undefined;
+      if (cr.adventurerId === char.id) cr.adventurerId = undefined;
+    }
+
     char.studySetId = newSetId;
     char.currentSchool = school;
     char.status = 'student';
@@ -2174,10 +2290,10 @@ export class AnkicasterEngine {
     AnkicasterEngine.syncWorkplaces(next);
 
     next.notices.push({
-      id: `sec-school-${char.id}`,
+      id: uniqueNoticeId(`sec-school-${char.id}`, next),
       time: Date.now(),
       type: 'enrollment',
-      text: `✨ ${char.name} embarked on advanced study in ${school.toUpperCase()} with 50 new flashcards linked!`,
+      text: `✨ ${char.name} embarked on advanced study in ${school.toUpperCase()} with ${needed} new flashcards linked!`,
       data: {
         roomId: char.seatRoomId,
         characterIds: [char.id],
@@ -2243,11 +2359,17 @@ export class AnkicasterEngine {
       }
       return beds;
     };
-    const dorms = next.rooms.filter(r => r.state === 'built' && (r.defId === 'dormitory' || r.defId === 'grand_dormitory'));
+    const dorms = next.rooms.filter(
+      r => r.state === 'built' && !isRoomUnfinished(r) && (r.defId === 'dormitory' || r.defId === 'grand_dormitory')
+    );
+    const dormIds = new Set(dorms.map(d => d.id));
     let totalBeds = 0;
     for (const d of dorms) totalBeds += dormBedCount(d);
+    const occupiedDormBeds = next.characters.filter(
+      c => c.bedRoomId != null && dormIds.has(c.bedRoomId)
+    ).length;
     const currentStudents = next.characters.filter(c => c.status === 'student');
-    if (currentStudents.length >= totalBeds) {
+    if (Math.max(currentStudents.length, occupiedDormBeds) >= totalBeds) {
       return { state, success: false, error: 'No free student beds available. Build more Dormitories.' };
     }
 
@@ -2261,11 +2383,14 @@ export class AnkicasterEngine {
     // Deduct mana
     next.mana -= 60;
 
-    // Pick 50 youngest cards
+    // Pick youngest cards
     const chosenCards = freeYoungCards.slice(0, needed).map(c => c.id);
 
-    const charId = Date.now();
-    const setId = charId + 1;
+    const charId = uniqueNumericId([
+      ...next.characters.map(c => c.id),
+      ...next.alumniGallery.map(a => a.id)
+    ]);
+    const setId = uniqueNumericId([...next.cardSets.map(s => s.id), charId]);
 
     const newSet: CardSet = {
       id: setId,
@@ -2304,20 +2429,20 @@ export class AnkicasterEngine {
       careerSetIds: []
     };
 
-    // Auto-assign first finished dorm with a free bed, falling back to any built one
-    const freeDorm = dorms.find(d => !isRoomUnfinished(d) && currentStudents.filter(s => s.bedRoomId === d.id).length < dormBedCount(d))
-      || dorms.find(d => currentStudents.filter(s => s.bedRoomId === d.id).length < dormBedCount(d))
-      || dorms[0];
+    // Auto-assign first finished dorm with a free bed
+    const freeDorm = dorms.find(
+      d => next.characters.filter(s => s.bedRoomId === d.id).length < dormBedCount(d)
+    ) || dorms[0];
     if (freeDorm) newStudent.bedRoomId = freeDorm.id;
 
     const ehRoom = next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || next.rooms[0];
     next.characters.push(newStudent);
     AnkicasterEngine.syncWorkplaces(next);
     next.notices.push({
-      id: `enr-${charId}`,
+      id: uniqueNoticeId(`enr-${charId}`, next),
       time: Date.now(),
       type: 'enrollment',
-      text: `${name} enrolled in ${school.toUpperCase()} with 50 flashcards linked!`,
+      text: `${name} enrolled in ${school.toUpperCase()} with ${needed} flashcards linked!`,
       data: {
         roomId: newStudent.seatRoomId ?? ehRoom?.id,
         characterIds: [charId],
@@ -2362,6 +2487,9 @@ export class AnkicasterEngine {
       if (!hero) return { state, success: false, error: 'Selected adventurer not found.' };
       if (hero.status === 'away') return { state, success: false, error: `${hero.name} is already away on an expedition.` };
       if (hero.status === 'student') return { state, success: false, error: `${hero.name} is still a student and cannot join expeditions.` };
+      if (hero.status === 'faculty' || hero.careerState === 'sabbatical' || hero.career !== 'adventurer') {
+        return { state, success: false, error: `${hero.name} must be an active Adventurer to join an expedition.` };
+      }
       if (hero.injury) return { state, success: false, error: `${hero.name} is injured and must recover first.` };
     }
 
@@ -2376,7 +2504,7 @@ export class AnkicasterEngine {
       if (!comp || comp.status !== 'tamed') {
         return { state, success: false, error: 'Selected creature companion is not available.' };
       }
-      companionBonus = 1;
+      companionBonus = CREATURE_DEFINITIONS[comp.defId]?.companionBonus ?? 1;
     }
 
     if (next.mana < dest.cost) {
@@ -2448,8 +2576,9 @@ export class AnkicasterEngine {
       next.activeBuffs.riftBeaconActive = false;
     }
 
+    const expeditionId = uniqueNumericId(next.expeditions.map(e => e.id));
     const expedition: ActiveExpedition = {
-      id: Date.now(),
+      id: expeditionId,
       destinationId,
       teamIds,
       companionId,
@@ -2470,7 +2599,7 @@ export class AnkicasterEngine {
 
     next.expeditions.push(expedition);
     next.notices.push({
-      id: `rift-launch-${expedition.id}`,
+      id: uniqueNoticeId(`rift-launch-${expedition.id}`, next),
       time: Date.now(),
       type: 'expedition',
       text: `Party stepped through the Rift towards ${dest.name}! (${requiredReviews} reviews to return)`,
@@ -2506,50 +2635,73 @@ export class AnkicasterEngine {
     const loot: string[] = [];
     const fortuneBonus = Math.max(0, (exp.fortune || 1) - 1);
 
+    const grantDestinationLoot = (factor: 1 | 0.5) => {
+      const amt = (n: number) => Math.max(1, Math.round(n * factor));
+      const suffix = factor < 1 ? ' (Half Loot)' : '';
+      if (dest?.id === 'mossy_hollow') {
+        const timber = amt(40);
+        const herbs = amt(20);
+        state.resources.timber += timber;
+        state.resources.herbs += herbs;
+        loot.push(`${timber} Timber${suffix}`, `${herbs} Herbs${suffix}`);
+        if (factor === 1 && Math.random() < 0.4 && !state.resources.seedsUnlocked.includes('glimmerberry')) {
+          state.resources.seedsUnlocked.push('glimmerberry');
+          loot.push('Glimmerberry Seeds');
+        }
+      } else if (dest?.id === 'whispering_fen') {
+        const herbs = amt(40);
+        const moonsilk = amt(2);
+        state.resources.herbs += herbs;
+        state.resources.moonsilk += moonsilk;
+        loot.push(`${herbs} Herbs${suffix}`, `${moonsilk} Moonsilk${suffix}`);
+        if (factor === 1 && Math.random() < 0.3 && !state.resources.seedsUnlocked.includes('lumen_lily')) {
+          state.resources.seedsUnlocked.push('lumen_lily');
+          loot.push('Lumen Lily Seeds');
+        }
+      } else if (dest?.id === 'crystal_caverns') {
+        const crystal = amt(5);
+        const stone = amt(50);
+        const cores = amt(1);
+        const starmetal = amt(1);
+        state.resources.crystal += crystal;
+        state.resources.stone += stone;
+        state.resources.golem_core += cores;
+        state.resources.starmetal += starmetal;
+        loot.push(`${crystal} Crystal${suffix}`, `${stone} Stone${suffix}`, `${cores} Golem Core${suffix}`, `${starmetal} Starmetal${suffix}`);
+      } else if (dest?.id === 'ashen_wastes') {
+        const emberSalt = amt(3);
+        const sunstone = amt(2);
+        const voidPearl = amt(1);
+        const phoenixAsh = amt(1);
+        state.resources.ember_salt += emberSalt;
+        state.resources.sunstone += sunstone;
+        state.resources.void_pearl += voidPearl;
+        state.resources.phoenix_ash += phoenixAsh;
+        loot.push(`${emberSalt} Ember Salt${suffix}`, `${sunstone} Sunstone${suffix}`, `${voidPearl} Void Pearl${suffix}`, `${phoenixAsh} Phoenix Ash${suffix}`);
+      } else if (dest?.id === 'shattered_spire') {
+        const starmetal = amt(4);
+        const voidPearl = amt(3);
+        const phoenixAsh = amt(2);
+        const renownGain = amt(15);
+        state.resources.starmetal += starmetal;
+        state.resources.void_pearl += voidPearl;
+        state.resources.phoenix_ash += phoenixAsh;
+        state.renown += renownGain;
+        loot.push(`${starmetal} Starmetal${suffix}`, `${voidPearl} Void Pearl${suffix}`, `${phoenixAsh} Phoenix Ash${suffix}`, `+${renownGain} Renown${suffix}`);
+      } else {
+        const crystal = amt(3);
+        const herbs = amt(30);
+        state.resources.crystal += crystal;
+        state.resources.herbs += herbs;
+        loot.push(`${crystal} Crystal${suffix}`, `${herbs} Herbs${suffix}`);
+      }
+    };
+
     if (exp.roll <= exp.chance) {
       // Safe Return (Full Rewards)
       exp.outcome = 'safe';
       notifications.push(`🏆 Safe Return from ${dest.name}! Party returned triumphant without a scratch.`);
-
-      if (dest.id === 'mossy_hollow') {
-        state.resources.timber += 40;
-        state.resources.herbs += 20;
-        loot.push('40 Timber', '20 Herbs');
-        if (Math.random() < 0.4 && !state.resources.seedsUnlocked.includes('glimmerberry')) {
-          state.resources.seedsUnlocked.push('glimmerberry');
-          loot.push('Glimmerberry Seeds');
-        }
-      } else if (dest.id === 'whispering_fen') {
-        state.resources.herbs += 40;
-        state.resources.moonsilk += 2;
-        loot.push('40 Herbs', '2 Moonsilk');
-        if (Math.random() < 0.3 && !state.resources.seedsUnlocked.includes('lumen_lily')) {
-          state.resources.seedsUnlocked.push('lumen_lily');
-          loot.push('Lumen Lily Seeds');
-        }
-      } else if (dest.id === 'crystal_caverns') {
-        state.resources.crystal += 5;
-        state.resources.stone += 50;
-        state.resources.golem_core += 1;
-        state.resources.starmetal += 1;
-        loot.push('5 Crystal', '50 Stone', '1 Golem Core', '1 Starmetal');
-      } else if (dest.id === 'ashen_wastes') {
-        state.resources.ember_salt += 3;
-        state.resources.sunstone += 2;
-        state.resources.void_pearl += 1;
-        state.resources.phoenix_ash += 1;
-        loot.push('3 Ember Salt', '2 Sunstone', '1 Void Pearl', '1 Phoenix Ash');
-      } else if (dest.id === 'shattered_spire') {
-        state.resources.starmetal += 4;
-        state.resources.void_pearl += 3;
-        state.resources.phoenix_ash += 2;
-        state.renown += 15;
-        loot.push('4 Starmetal', '3 Void Pearl', '2 Phoenix Ash', '+15 Renown');
-      } else {
-        state.resources.crystal += 3;
-        state.resources.herbs += 30;
-        loot.push('Exotic rift essences and treasures');
-      }
+      grantDestinationLoot(1);
 
       if (fortuneBonus > 0) {
         const extraHerbs = fortuneBonus * 5;
@@ -2602,17 +2754,20 @@ export class AnkicasterEngine {
       if (chosenOutcome === 'minor_injury') {
         notifications.push(`⚠️ Expedition to ${dest.name}: ${injuredHero?.name} suffered minor bruises, but brought back full loot!`);
         if (injuredHero) injuredHero.injury = { type: 'bruised', points: 0, required: Math.round(30 * recoveryMult) };
-        state.resources.timber += 25;
-        state.resources.herbs += 10;
-        loot.push('25 Timber', '10 Herbs');
+        exp.injuredHeroId = injuredHero?.id;
+        exp.injuryApplied = injuredHero?.injury?.type;
+        grantDestinationLoot(1);
       } else if (chosenOutcome === 'serious_injury') {
         notifications.push(`🚨 Serious Injury! ${injuredHero?.name} suffered a sprain/fracture. Half loot returned.`);
         if (injuredHero) injuredHero.injury = { type: 'sprained', points: 0, required: Math.round(80 * recoveryMult) };
-        state.resources.timber += 12;
-        loot.push('12 Timber (Half Loot)');
+        exp.injuredHeroId = injuredHero?.id;
+        exp.injuryApplied = injuredHero?.injury?.type;
+        grantDestinationLoot(0.5);
       } else if (chosenOutcome === 'curse') {
         notifications.push(`🔮 Curse of the Rift! ${injuredHero?.name} was hexed by otherworldly energies.`);
         if (injuredHero) injuredHero.injury = { type: 'hexed', points: 0, required: Math.round(120 * recoveryMult) };
+        exp.injuredHeroId = injuredHero?.id;
+        exp.injuryApplied = injuredHero?.injury?.type;
         loot.push('Curio relic fragments');
       } else {
         notifications.push(`🏃 Party was forced to retreat empty-handed from ${dest.name}!`);
@@ -2624,7 +2779,7 @@ export class AnkicasterEngine {
       || state.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built')
       || state.rooms[0];
     state.notices.push({
-      id: `rift-return-${exp.id}-${Date.now()}`,
+      id: uniqueNoticeId(`rift-return-${exp.id}`, state),
       time: Date.now(),
       type: `expedition_${exp.outcome || 'safe'}`,
       text: notifications[notifications.length - 1] || `Expedition returned from ${dest?.name || 'the Rift'}.`,
@@ -2701,11 +2856,10 @@ export class AnkicasterEngine {
     }
     logResourceDiff(next, beforeRes, `Built ${def.name}`);
 
-    const roomId = Math.max(
-      Date.now(),
-      ...next.rooms.map(r => r.id + 1),
-      ...(next.shelvedRooms || []).map(r => r.id + 1)
-    );
+    const roomId = uniqueNumericId([
+      ...next.rooms.map(r => r.id),
+      ...(next.shelvedRooms || []).map(r => r.id)
+    ]);
     const buildReq = def.buildReviews;
     const isInstant = buildReq === 0;
 
@@ -2731,7 +2885,7 @@ export class AnkicasterEngine {
 
     // Auto-place required starter furniture if built instantly (sites finish with it empty, GDD 15.4)
     if (isInstant && def.requiredFurniture) {
-      fillRequiredFixtures(newRoom, allFurnitureIds(next.rooms));
+      fillRequiredFixtures(newRoom, allFurnitureIds([...next.rooms, ...(next.shelvedRooms || [])]));
       const allWithNew = [...next.rooms, newRoom];
       for (const f of newRoom.furniture) {
         const drop = findFirstValidFurnitureDrop(newRoom, allWithNew, f.defId);
@@ -2756,7 +2910,7 @@ export class AnkicasterEngine {
     next.rooms.push(newRoom);
     AnkicasterEngine.syncWorkplaces(next);
     next.notices.push({
-      id: `room-built-${roomId}`,
+      id: uniqueNoticeId(`room-built-${roomId}`, next),
       time: Date.now(),
       type: 'construction',
       text: isInstant
@@ -2834,7 +2988,7 @@ export class AnkicasterEngine {
     room.x = x;
     room.y = room.area === 'grounds' ? 0 : y;
     next.notices.push({
-      id: `move-${roomId}-${Date.now()}`,
+      id: uniqueNoticeId(`move-${roomId}`, next),
       time: Date.now(),
       type: 'construction',
       text: `Moved ${roomDisplayName(room)} to ${room.area === 'castle' ? `Floor ${room.y}, column ${room.x}` : `plot ${room.x}`}.`,
@@ -2897,7 +3051,7 @@ export class AnkicasterEngine {
     next.rooms.push(room);
     AnkicasterEngine.syncWorkplaces(next);
     next.notices.push({
-      id: `unshelve-${roomId}-${Date.now()}`,
+      id: uniqueNoticeId(`unshelve-${roomId}`, next),
       time: Date.now(),
       type: 'construction',
       text: `Placed ${roomDisplayName(room)} at ${room.area === 'castle' ? `Floor ${room.y}, column ${room.x}` : `plot ${room.x}`}.`,
@@ -2925,6 +3079,7 @@ export class AnkicasterEngine {
       if (CREATURE_DEFINITIONS[c.defId]?.roamsFreely) continue;
       c.returnStatus = c.status;
       c.status = 'loose';
+      c.roomId = undefined;
       startCapture(next, c, notifications);
       releasedCount += 1;
     }
@@ -2963,7 +3118,7 @@ export class AnkicasterEngine {
     r.buildPaused = paused;
     const name = ROOM_DEFINITIONS[r.defId]?.name || 'site';
     next.notices.push({
-      id: `pause-${Date.now()}-${r.id}`,
+      id: uniqueNoticeId(`pause-${r.id}`, next),
       time: Date.now(),
       type: 'build',
       text: paused ? `Paused construction of ${name}. Progress is kept.` : `Resumed construction of ${name}.`,
@@ -3042,7 +3197,7 @@ export class AnkicasterEngine {
     const parts = BUILD_MATERIALS.filter(k => ((refund as unknown as Record<string, number>)[k] || 0) > 0).map(k => `${(refund as unknown as Record<string, number>)[k]} ${k}`);
     if (refund.mana > 0) parts.unshift(`${refund.mana} mana`);
     next.notices.push({
-      id: `demolish-${roomId}-${Date.now()}`,
+      id: uniqueNoticeId(`demolish-${roomId}`, next),
       time: Date.now(),
       type: 'construction',
       text: `${refund.cancel ? 'Cancelled' : 'Demolished'} ${roomName}${parts.length ? ` (returned ${parts.join(', ')})` : ''}${moved ? '; occupants reassigned' : ''}.`,
@@ -3076,7 +3231,7 @@ export class AnkicasterEngine {
     // room that finishes construction later keeps its fixtures empty until the player installs
     // them, even across reloads. Running it again changes nothing.
     if (Array.isArray(out.rooms) && (out.requiredFixturesVersion ?? 0) < 1) {
-      const ids = allFurnitureIds(out.rooms);
+      const ids = allFurnitureIds([...out.rooms, ...(out.shelvedRooms || [])]);
       out.rooms = out.rooms.map((r: PlacedRoom) => {
         if (!r || r.state !== 'built' || missingRequiredSlots({ defId: r.defId, furniture: r.furniture || [] }).length === 0) return r;
         const copy: PlacedRoom = { ...r, furniture: [...(r.furniture || [])] };
@@ -3130,7 +3285,7 @@ export class AnkicasterEngine {
       ? `🏗️ Completed construction of ${name}! Install its required fixtures (${list}) to open it.`
       : `🏗️ Completed construction of ${name}!`);
     next.notices.push({
-      id: `build-${Date.now()}-${room.id}`,
+      id: uniqueNoticeId(`build-${room.id}`, next),
       time: Date.now(),
       type: 'build_complete',
       text: missing.length
@@ -3174,7 +3329,7 @@ export class AnkicasterEngine {
       const res = next.resources as unknown as Record<string, number>;
       for (const [k, v] of Object.entries(opt.cost)) if (k !== 'mana' && v) res[k] -= v;
     }
-    const ids = allFurnitureIds(next.rooms);
+    const ids = allFurnitureIds([...next.rooms, ...(next.shelvedRooms || [])]);
     const id = uniqueFurnitureId(ids, r.id * 10 + slot.index + 1);
     r.unplacedFurniture = [...(r.unplacedFurniture || []), { id, defId: opt.defId, slotKind: `required:${slot.role}`, damaged: false }];
     logResourceDiff(next, beforeRes, `Acquired required ${slot.name}`);
@@ -3240,7 +3395,7 @@ export class AnkicasterEngine {
       }
     }
 
-    const ids = allFurnitureIds(next.rooms);
+    const ids = allFurnitureIds([...next.rooms, ...(next.shelvedRooms || [])]);
     const id = uniqueFurnitureId(ids, room.id * 100 + allItems.length + 1);
     const slotKind = fDef.role === 'bed' ? 'bed' : 'optional';
     room.unplacedFurniture = [...(room.unplacedFurniture || []), { id, defId: furnitureDefId, slotKind, damaged: false }];
@@ -3317,7 +3472,7 @@ export class AnkicasterEngine {
     if (isReq) {
       const left = missingRequiredSlots(room).length;
       next.notices.push({
-        id: `reqfurn-${Date.now()}-${room.id}-${placed.id}`,
+        id: uniqueNoticeId(`reqfurn-${room.id}-${placed.id}`, next),
         time: Date.now(),
         type: 'furniture',
         text: `Installed ${label} in ${rDef?.name || 'room'}.${left ? ` ${left} required fixture${left === 1 ? '' : 's'} still missing.` : ' The room is now open.'}`,
@@ -3325,7 +3480,7 @@ export class AnkicasterEngine {
       });
     } else {
       next.notices.push({
-        id: `furn-${Date.now()}-${placed.id}`,
+        id: uniqueNoticeId(`furn-${placed.id}`, next),
         time: Date.now(),
         type: 'furniture',
         text: `Installed ${label} into ${rDef?.name || 'room'}.`,
@@ -3442,7 +3597,7 @@ export class AnkicasterEngine {
     if (room.level >= 3) return { state, success: false, error: 'Room is already at maximum Level 3.' };
 
     const def = ROOM_DEFINITIONS[room.defId];
-    const upgradeCost = Math.round((def?.cost.mana || 100) * 0.75) + 50;
+    const upgradeCost = Math.round((def?.cost.mana ?? 100) * 0.75) + 50;
     if (next.mana < upgradeCost) {
       return { state, success: false, error: `Need ${upgradeCost} Mana to renovate to Level ${room.level + 1}.` };
     }
@@ -3455,7 +3610,7 @@ export class AnkicasterEngine {
     room.renownGranted = (room.renownGranted || 0) + 5;
 
     next.notices.push({
-      id: `upg-${roomId}-${room.level}`,
+      id: uniqueNoticeId(`upg-${roomId}-${room.level}`, next),
       time: Date.now(),
       type: 'renovation',
       text:
@@ -3667,7 +3822,7 @@ export class AnkicasterEngine {
       }
 
       const chosen = freeCards.slice(0, needed).map(c => c.id);
-      const careerSetId = Date.now();
+      const careerSetId = uniqueNumericId(next.cardSets.map(s => s.id));
       next.cardSets.push({
         id: careerSetId,
         characterId: char.id,
@@ -3704,7 +3859,7 @@ export class AnkicasterEngine {
     });
 
     next.notices.push({
-      id: `career-${char.id}`,
+      id: uniqueNoticeId(`career-${char.id}`, next),
       time: Date.now(),
       type: 'career',
       text: previousCareer
@@ -3987,11 +4142,17 @@ export class AnkicasterEngine {
             clearedFog++;
           }
         }
-        const targetRoom = targetId ? next.rooms.find(r => r.id === targetId) : undefined;
-        const floorY = targetRoom ? targetRoom.y : (next.rooms.find(r => r.state === 'built')?.y ?? 0);
-        next.activeBuffs.wardwaterFloors = [...(next.activeBuffs.wardwaterFloors || []), floorY];
-        potionTargetRoomId = targetRoom?.id;
-        message = `💧 Wardwater sprinkled on Floor ${floorY + 1}! Next hazard prevented${clearedFog > 0 ? ` and ${clearedFog} Hex Fog dispelled` : ''}.`;
+        const targetRoom =
+          (targetId ? next.rooms.find(r => r.id === targetId && r.area === 'castle') : undefined) ||
+          next.rooms.find(r => r.state === 'built' && r.area === 'castle');
+        if (targetRoom) {
+          const floorY = targetRoom.y;
+          next.activeBuffs.wardwaterFloors = [...(next.activeBuffs.wardwaterFloors || []), floorY];
+          potionTargetRoomId = targetRoom.id;
+          message = `💧 Wardwater sprinkled on Floor ${floorY + 1}! Next hazard prevented${clearedFog > 0 ? ` and ${clearedFog} Hex Fog dispelled` : ''}.`;
+        } else {
+          message = `💧 Wardwater sprinkled!${clearedFog > 0 ? ` ${clearedFog} Hex Fog dispelled.` : ''}`;
+        }
         break;
       }
 
@@ -4076,7 +4237,7 @@ export class AnkicasterEngine {
 
     const labRoomId = next.rooms.find(r => r.defId === 'alchemy_lab' && r.state === 'built')?.id;
     next.notices.push({
-      id: `potion-use-${Date.now()}`,
+      id: uniqueNoticeId('potion-use', next),
       time: Date.now(),
       type: 'potion',
       text: message,
@@ -4120,7 +4281,7 @@ export class AnkicasterEngine {
     room.cleanliness = Math.max(room.cleanliness, 80);
 
     next.notices.push({
-      id: `hazard-clear-${Date.now()}`,
+      id: uniqueNoticeId('hazard-clear', next),
       time: Date.now(),
       type: 'hazard',
       text: `✨ Cleared hazard "${hazardName}" from ${ROOM_DEFINITIONS[room.defId]?.name || 'room'} using ${method}!`,
@@ -4175,13 +4336,13 @@ export class AnkicasterEngine {
     const prevBond = creature.bondLevel;
     creature.bondProgress += MANUAL_FEED_BOND;
     if (creature.status === 'tamed') {
-      if (creature.bondLevel === 1 && creature.bondProgress >= 150) creature.bondLevel = 2;
+      if (creature.bondLevel <= 1 && creature.bondProgress >= 150) creature.bondLevel = 2;
       else if (creature.bondLevel === 2 && creature.bondProgress >= 400) creature.bondLevel = 3;
     }
     const bondLeveled = creature.bondLevel > prevBond;
 
     next.notices.push({
-      id: `feed-${creature.id}-${next.bellIndex}`,
+      id: uniqueNoticeId(`feed-${creature.id}`, next),
       time: Date.now(),
       type: 'creature',
       text: `🍎 Fed ${creature.nickname} (${def.name}). Bond +${MANUAL_FEED_BOND}.`,
@@ -4246,7 +4407,7 @@ export class AnkicasterEngine {
     const [removed] = next.creatures.splice(idx, 1);
     const def = CREATURE_DEFINITIONS[removed.defId];
     next.notices.push({
-      id: `release-${removed.id}-${Date.now()}`,
+      id: uniqueNoticeId(`release-${removed.id}`, next),
       time: Date.now(),
       type: 'creature',
       text: `Released ${removed.nickname} (${def?.name || removed.defId}) back to the wild.`,
@@ -4290,7 +4451,9 @@ export class AnkicasterEngine {
       }
       const tierReviews: Record<string, number> = { T1: 25, T2: 50, T3: 75, T4: 100, Cap: 150 };
       required = tierReviews[spDef.tier] || 50;
-      const hasL3Library = next.rooms.some(r => r.defId === 'library' && r.state === 'built' && r.level >= 3);
+      const hasL3Library = next.rooms.some(
+        r => r.defId === 'library' && r.state === 'built' && !isRoomUnfinished(r) && r.level >= 3
+      );
       cost = Math.max(10, Math.round(spDef.manaCost * (hasL3Library ? 0.9 : 1)));
       spellName = spDef.name;
     } else {
@@ -4316,8 +4479,12 @@ export class AnkicasterEngine {
     }
 
     next.mana -= cost;
+    const existingSessionIds = [
+      ...(next.wizard.activeSession ? [next.wizard.activeSession.id] : []),
+      ...next.wizard.queuedSessions.map(q => q.id)
+    ];
     const session = {
-      id: Date.now(),
+      id: uniqueNumericId(existingSessionIds),
       kind: (isGrimoire ? 'grimoire' : 'orb') as 'orb' | 'grimoire',
       school,
       targetLevel,
@@ -4344,7 +4511,7 @@ export class AnkicasterEngine {
 
     const studyRoomId = next.rooms.find(r => r.defId === 'wizard_study' && r.state === 'built')?.id;
     next.notices.push({
-      id: `study-${Date.now()}`,
+      id: uniqueNoticeId('study', next),
       time: Date.now(),
       type: 'wizard',
       text: isGrimoire
@@ -4380,7 +4547,9 @@ export class AnkicasterEngine {
       return { state, success: false, error: `Spell on cooldown for ${next.wizard.spellCooldowns[spellId]} more reviews.` };
     }
 
-    const hasL3Study = next.rooms.some(r => r.defId === 'wizard_study' && r.state === 'built' && r.level >= 3);
+    const hasL3Study = next.rooms.some(
+      r => r.defId === 'wizard_study' && r.state === 'built' && !isRoomUnfinished(r) && r.level >= 3
+    );
     const manaCost = Math.max(1, Math.round(spell.manaCost * (hasL3Study ? 0.9 : 1)));
 
     if (next.mana < manaCost) {
@@ -4417,12 +4586,14 @@ export class AnkicasterEngine {
           const floorY = target.y;
           let count = 0;
           for (const r of next.rooms) {
-            if (r.y === floorY && r.hazard && (r.hazard.type === 'spill_of_night' || r.hazard.type === 'echo_loop')) {
+            if (r.area === target.area && r.y === floorY && r.hazard && (r.hazard.type === 'spill_of_night' || r.hazard.type === 'echo_loop')) {
               r.hazard = undefined;
               count++;
             }
           }
-          notice = `Glow cast! Dispelled ${count} Spill of Night / Echo Loop hazard(s) on Floor ${floorY + 1}.`;
+          notice = target.area === 'castle'
+            ? `Glow cast! Dispelled ${count} Spill of Night / Echo Loop hazard(s) on Floor ${floorY + 1}.`
+            : `Glow cast! Dispelled ${count} Spill of Night / Echo Loop hazard(s) on the Grounds.`;
         } else {
           notice = 'Glow cast! Illuminated the halls (no Spill of Night or Echo Loop active).';
         }
@@ -4525,9 +4696,11 @@ export class AnkicasterEngine {
         break;
       }
       case 'soothing_light': {
-        const builtFloors = [...new Set(next.rooms.filter(r => r.state === 'built').map(r => r.y))];
-        const targetFloor = builtFloors[0] ?? 0;
-        const floorRoomIds = new Set(next.rooms.filter(r => r.y === targetFloor).map(r => r.id));
+        const builtCastle = next.rooms.filter(r => r.state === 'built' && r.area === 'castle');
+        const pool = builtCastle.length > 0 ? builtCastle : next.rooms.filter(r => r.state === 'built');
+        const targetArea = pool[0]?.area ?? 'castle';
+        const targetFloor = pool[0]?.y ?? 0;
+        const floorRoomIds = new Set(next.rooms.filter(r => r.area === targetArea && r.y === targetFloor).map(r => r.id));
         const affected = next.characters.filter(c =>
           (c.seatRoomId && floorRoomIds.has(c.seatRoomId)) ||
           (c.workplaceRoomId && floorRoomIds.has(c.workplaceRoomId)) ||
@@ -4537,7 +4710,7 @@ export class AnkicasterEngine {
         for (const c of list) {
           c.needs.composure = Math.min(100, c.needs.composure + 20);
         }
-        notice = `Soothing Light cast! Composure +20 for ${list.length} resident(s) on Floor ${targetFloor + 1}.`;
+        notice = `Soothing Light cast! Composure +20 for ${list.length} resident(s) on ${targetArea === 'castle' ? `Floor ${targetFloor + 1}` : 'the Grounds'}.`;
         break;
       }
       case 'mend_object': {
@@ -4621,12 +4794,18 @@ export class AnkicasterEngine {
       case 'tidy_wind': {
         const built = next.rooms.filter(r => r.state === 'built');
         const dirtiest = [...built].sort((a, b) => a.cleanliness - b.cleanliness)[0];
-        const floorY = dirtiest ? dirtiest.y : 0;
-        spellTargetRoomId = dirtiest?.id;
-        for (const r of next.rooms) {
-          if (r.y === floorY) r.cleanliness = 100;
+        if (dirtiest) {
+          const floorY = dirtiest.y;
+          spellTargetRoomId = dirtiest.id;
+          for (const r of next.rooms) {
+            if (r.area === dirtiest.area && r.y === floorY) r.cleanliness = 100;
+          }
+          notice = dirtiest.area === 'castle'
+            ? `Tidy Wind cast! Floor ${floorY + 1} restored to 100 cleanliness.`
+            : 'Tidy Wind cast! Sacred Grounds restored to 100 cleanliness.';
+        } else {
+          notice = 'Tidy Wind cast! (No built rooms to clean.)';
         }
-        notice = `Tidy Wind cast! Floor ${floorY + 1} restored to 100 cleanliness.`;
         break;
       }
       case 'douse': {
@@ -4670,7 +4849,7 @@ export class AnkicasterEngine {
 
     const studyRoomId = next.rooms.find(r => r.defId === 'wizard_study' && r.state === 'built')?.id;
     next.notices.push({
-      id: `spell-${Date.now()}`,
+      id: uniqueNoticeId('spell', next),
       time: Date.now(),
       type: 'spell',
       text: notice,
@@ -4732,7 +4911,7 @@ export class AnkicasterEngine {
     next.resources.potions[potionId] = (next.resources.potions[potionId] || 0) + yieldCount;
 
     next.notices.push({
-      id: `brew-${Date.now()}`,
+      id: uniqueNoticeId('brew', next),
       time: Date.now(),
       type: 'alchemy',
       text: `Brewed ${yieldCount}x ${potion.name}! (${potion.effect})`,
@@ -4856,7 +5035,7 @@ export class AnkicasterEngine {
       }
     } else if (card.type === 'lure') {
       const creatureDefId = (card.targetId && card.targetId in CREATURE_DEFINITIONS) ? card.targetId : 'bramblefox';
-      spawnedCreatureId = Date.now();
+      spawnedCreatureId = uniqueNumericId(next.creatures.map(c => c.id));
       next.creatures.push({
         id: spawnedCreatureId,
         defId: creatureDefId,
@@ -4876,7 +5055,7 @@ export class AnkicasterEngine {
     const studyRoomId = next.rooms.find(r => r.defId === 'wizard_study' && r.state === 'built')?.id
       ?? next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built')?.id;
     next.notices.push({
-      id: `draft-pick-${Date.now()}`,
+      id: uniqueNoticeId('draft-pick', next),
       time: Date.now(),
       type: 'draft',
       text: message,
@@ -4922,7 +5101,7 @@ export class AnkicasterEngine {
       case 'buy_bed':
         if (next.mana >= 150) {
           next.mana -= 150;
-          next.knownPatterns.push('canopy_bed');
+          if (!next.knownPatterns.includes('canopy_bed')) next.knownPatterns.push('canopy_bed');
           summary = 'Purchased Canopy Bed blueprint from the Curio Cart!';
         } else {
           summary = 'Insufficient mana for the curio purchase.';
@@ -4931,14 +5110,14 @@ export class AnkicasterEngine {
       case 'buy_lantern':
         if (next.mana >= 120) {
           next.mana -= 120;
-          next.knownPatterns.push('ward_lantern');
+          if (!next.knownPatterns.includes('ward_lantern')) next.knownPatterns.push('ward_lantern');
           summary = 'Purchased Ward Lantern blueprint from the Curio Cart!';
         } else {
           summary = 'Insufficient mana for the curio purchase.';
         }
         break;
       case 'keep_creature':
-        spawnedCreatureId = Date.now();
+        spawnedCreatureId = uniqueNumericId(next.creatures.map(c => c.id));
         next.creatures.push({
           id: spawnedCreatureId,
           defId: 'velvet_bat_swarm',
@@ -5020,7 +5199,7 @@ export class AnkicasterEngine {
         summary = 'The alchemist bowed warmly and shared travel tales (+5 Renown).';
         break;
       case 'shelter_fox':
-        spawnedCreatureId = Date.now();
+        spawnedCreatureId = uniqueNumericId(next.creatures.map(c => c.id));
         next.creatures.push({
           id: spawnedCreatureId,
           defId: 'bramblefox',
@@ -5172,7 +5351,7 @@ export class AnkicasterEngine {
         summary = 'The mossy golem makes a stately academy garden monument (+5 Renown).';
         break;
       case 'healer_cure':
-        next.characters.forEach(c => { c.injury = undefined; });
+        next.characters.forEach(c => { c.injury = undefined; c.needs.health = 100; });
         summary = 'Silver Spring doctor treated all injuries across the Academy infirmary!';
         break;
       case 'healer_herbs':
@@ -5354,7 +5533,7 @@ export class AnkicasterEngine {
     syncDiscoveredCreatures(next);
     const hallId = next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built')?.id;
     next.notices.push({
-      id: `evt-${Date.now()}`,
+      id: uniqueNoticeId('evt', next),
       time: Date.now(),
       type: 'event',
       text: summary,

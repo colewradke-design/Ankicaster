@@ -77,6 +77,8 @@ export interface RoomArtOpts {
   robeColor?: string;
   hasLeftDoor?: boolean;
   hasRightDoor?: boolean;
+  leftDoorFloors?: number[];
+  rightDoorFloors?: number[];
   /** Force a tier (catalog test / screenshots); default = calculateRoomQuality(room). */
   tier?: Tier;
   /** Crop growth stage 0..3 (bell index modulo 4 until the engine has harvest timing). */
@@ -134,7 +136,7 @@ export function drawRoomInterior(g: Painter, room: PlacedRoom, box: Box, opts: R
   } else {
     drawTierSkin(g, box, tier, tint, gk, room.id);
     res.bespoke = drawDressing(g, room, box, tint, gk, res.emitters, opts.cropStage ?? 3, opts.vaultFill);
-    drawShell(g, room, box, tier, !!opts.hasLeftDoor, !!opts.hasRightDoor);
+    drawShell(g, room, box, tier, !!opts.hasLeftDoor, !!opts.hasRightDoor, opts.leftDoorFloors, opts.rightDoorFloors);
     res.trimTags = drawRoomUpgradeTrim(g, room, box, tint, gk);
   }
   placeFurniture(g, room, box, tint, gk, res, opts.cropStage ?? 3);
@@ -416,12 +418,28 @@ function sconce(g: Painter, x: number, y: number, em: Emitter[]) {
 }
 
 /** Outer cutaway walls, ceiling beam and doorways (kept from V1, tier border colours). */
-function drawShell(g: Painter, room: PlacedRoom, box: Box, tier: Tier, left: boolean, right: boolean) {
+function drawShell(
+  g: Painter,
+  room: PlacedRoom,
+  box: Box,
+  tier: Tier,
+  left: boolean,
+  right: boolean,
+  leftDoorFloors?: number[],
+  rightDoorFloors?: number[]
+) {
   const border = hex((PALETTE.tierColors[tier] || PALETTE.tierColors.bare).border);
   g.rect(box.left, box.top, box.width, 3).fill({ color: 0x2a2533 });
   const doorH = 30;
-  g.rect(box.left, box.top, 2, left ? box.height - doorH : box.height).fill({ color: border });
-  g.rect(box.left + box.width - 2, box.top, 2, right ? box.height - doorH : box.height).fill({ color: border });
+  const floors = Math.max(1, room.h || 1);
+  const floorH = box.height / floors;
+  const lSet = new Set(leftDoorFloors ?? (left ? [0] : []));
+  const rSet = new Set(rightDoorFloors ?? (right ? [0] : []));
+  for (let lf = 0; lf < floors; lf++) {
+    const segTop = box.top + (floors - 1 - lf) * floorH;
+    g.rect(box.left, segTop, 2, lSet.has(lf) ? Math.max(0, floorH - doorH) : floorH).fill({ color: border });
+    g.rect(box.left + box.width - 2, segTop, 2, rSet.has(lf) ? Math.max(0, floorH - doorH) : floorH).fill({ color: border });
+  }
   const layout = getRoomLayout(room.defId, room.w, room.h);
   if (layout.mezzanine) {
     for (let f = 1; f < room.h; f++) {

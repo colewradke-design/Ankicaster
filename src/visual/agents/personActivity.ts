@@ -53,11 +53,12 @@ function describeFreeTime(room: PlacedRoom | undefined, anim?: DollAnim): string
       return anim === 'sit_study' ? `Studying in the ${name}.` : `Resting in the ${name}.`;
     case 'menagerie':
     case 'aviary':
-    case 'paddock':
-    case 'tide_pool':
-    case 'burrow_hutch':
-    case 'shadow_hollow':
-    case 'hearth_roost':
+    case 'meadow_paddock':
+    case 'tide_tank':
+    case 'gloom_hutch':
+    case 'ember_pit':
+    case 'crystal_vivarium':
+    case 'pond':
       return `Visiting the ${name}.`;
     default:
       return `In the ${name}.`;

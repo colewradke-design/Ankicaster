@@ -447,6 +447,8 @@ export class Choreographer {
             alchemy: '#B5651D'
           };
           agent.robeColor = schoolColors[char.currentSchool] || agent.robeColor;
+        } else {
+          agent.robeColor = look.robeColor;
         }
 
         if (this.reachability) {

@@ -13,6 +13,7 @@ import { BookOpen, Leaf, Sun, Moon, FlaskConical, Sparkles, Lock, Clock } from '
 import { FullGameState, SchoolType } from '../types/ankicaster';
 import { SPELL_DEFINITIONS } from '../data/content';
 import { wizardOrbQuote } from '../utils/formulas';
+import { isRoomUnfinished } from '../utils/requiredFurniture';
 
 export const SCHOOLS: SchoolType[] = ['arcane', 'nature', 'light', 'shadow', 'alchemy'];
 
@@ -140,11 +141,16 @@ export const GrimoireBook: React.FC<{
   const half = Math.ceil(spells.length / 2);
   const pages = [spells.slice(0, half), spells.slice(half)];
 
+  const hasL3Study = (state.rooms || []).some(
+    r => r.defId === 'wizard_study' && r.state === 'built' && !isRoomUnfinished(r) && (r.level || 1) >= 3
+  );
+
   const Page: React.FC<{ list: typeof spells; side: 'left' | 'right' }> = ({ list, side }) => (
     <div className={`flex-1 p-4 space-y-3 ${side === 'left' ? 'border-r border-[#c9b78f] shadow-[inset_-12px_0_16px_-12px_rgba(0,0,0,0.35)]' : 'shadow-[inset_12px_0_16px_-12px_rgba(0,0,0,0.35)]'}`}>
       {list.map(sp => {
         const cd = wizard.spellCooldowns[sp.id];
-        const disabled = mana < sp.manaCost || !!cd;
+        const effectiveCost = Math.max(1, Math.round(sp.manaCost * (hasL3Study ? 0.9 : 1)));
+        const disabled = mana < effectiveCost || !!cd;
         return (
           <div key={sp.id} className="border-b border-dashed border-[#c9b78f] pb-2.5" data-spell={sp.id}>
             <div className="flex items-center gap-2">
@@ -154,11 +160,15 @@ export const GrimoireBook: React.FC<{
             </div>
             <p className="text-[13px] leading-snug mt-1 text-[#4a4152]">{sp.effect}</p>
             <div className="flex items-center justify-between mt-1.5">
-              <span className="text-[12px] font-mono text-[#7a4b12]">{sp.manaCost} mana{cd ? ` · ${cd}r cooldown` : ''}</span>
+              <span className="text-[12px] font-mono text-[#7a4b12]">
+                {effectiveCost} mana
+                {effectiveCost < sp.manaCost && <span className="text-[#5c390d]/70 line-through ml-1">{sp.manaCost}</span>}
+                {cd ? ` · ${cd}r cooldown` : ''}
+              </span>
               <button
                 onClick={() => onCast(sp.id)}
                 disabled={disabled}
-                title={cd ? `Cooling down: ${cd} reviews` : mana < sp.manaCost ? `Needs ${sp.manaCost} mana` : `Cast ${sp.name}`}
+                title={cd ? `Cooling down: ${cd} reviews` : mana < effectiveCost ? `Needs ${effectiveCost} mana` : `Cast ${sp.name}${effectiveCost < sp.manaCost ? ' (Lv 3 Study −10%)' : ''}`}
                 className="min-h-[32px] px-3 py-1 rounded-lg bg-[#2A2533] text-[#F4EBD9] text-[12px] font-bold hover:bg-[#3b3446] disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {cd ? <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{cd}r</span> : 'Cast'}
