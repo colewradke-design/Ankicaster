@@ -51,15 +51,30 @@ export function drawLockHazard(g: Painter, room: PlacedRoom, box: Box) {
   const kind = (room.hazard?.type || room.lockReason || '').toLowerCase();
   const L = box.left, W = box.width, B = box.floorLineY, T = box.top;
   if (kind.includes('spill') || kind.includes('night')) {
-    g.ellipse(L + W / 2, B - 1, W * 0.35, 3).fill({ color: 0x151a38, alpha: 0.9 });
-    g.rect(L, T, W, box.height).fill({ color: 0x151a38, alpha: 0.25 });
+    // night_ink look: dark indigo-violet ink pool + blotches + rising ink droplets
+    g.rect(L, T, W, box.height).fill({ color: 0x151a38, alpha: 0.28 });
+    g.ellipse(L + W / 2, B - 1.5, W * 0.38, 3.2).fill({ color: 0x12152e, alpha: 0.92 });
+    g.ellipse(L + W * 0.32, B - 2, W * 0.16, 2.2).fill({ color: 0x222b57, alpha: 0.85 });
+    g.ellipse(L + W * 0.68, B - 2, W * 0.14, 2.0).fill({ color: 0x2f3a73, alpha: 0.82 });
+    g.circle(L + W * 0.38, B - 7, 1.3).fill({ color: 0x4c5ba3, alpha: 0.75 });
+    g.circle(L + W * 0.60, B - 10, 1.0).fill({ color: 0x4c5ba3, alpha: 0.7 });
   } else if (kind.includes('fog')) {
     for (let i = 0; i < 5; i++) g.ellipse(L + (i + 0.5) * (W / 5), B - 10 - (i % 2) * 6, W / 6, 6).fill({ color: 0x9c86e0, alpha: 0.3 });
   } else if (kind.includes('cold') || kind.includes('frost')) {
     g.rect(L, T, W, box.height).fill({ color: 0xd8eef7, alpha: 0.25 });
     for (let x = L + 4; x < L + W; x += 8) line(g, x, T + 3, x + 2, T + 7, 0xffffff, 0.75, 0.8);
   } else if (kind.includes('breach')) {
-    g.ellipse(L + W / 2, T + box.height / 2, 7, 12).fill({ color: 0x7d5ba6, alpha: 0.7 });
+    // Small violet crack and drifting wisps
+    const cx = L + W / 2;
+    const cy = T + box.height / 2;
+    g.ellipse(cx, cy, 7, 12).fill({ color: 0x3d2856, alpha: 0.65 });
+    line(g, cx - 2, cy - 10, cx + 1, cy - 3, 0xb9a6ff, 1.4, 0.95);
+    line(g, cx + 1, cy - 3, cx - 2, cy + 4, 0xd8b4fe, 1.4, 0.95);
+    line(g, cx - 2, cy + 4, cx + 2, cy + 10, 0xb9a6ff, 1.2, 0.9);
+    // Drifting wisps
+    g.circle(cx - 8, cy - 5, 1.8).fill({ color: 0xb9a6ff, alpha: 0.78 });
+    g.circle(cx + 9, cy - 2, 1.5).fill({ color: 0x9bd4ff, alpha: 0.72 });
+    g.circle(cx - 6, cy + 6, 1.4).fill({ color: 0xd8b4fe, alpha: 0.75 });
   } else if (kind.includes('echo')) {
     g.rect(L, T, W, box.height).fill({ color: 0x1e254d, alpha: 0.28 });
     const cx = L + W / 2;

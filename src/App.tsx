@@ -23,7 +23,7 @@ import { FoundingDay, GuidedTour, GoalBanner } from './visual/onboarding/Foundin
 import { applyTutorialAction, phaseAfterCreate, STUDY_PARTS, tourOpensDetails, tourStepId, tourView } from './visual/onboarding/flow';
 import { AnkicasterEngine } from './utils/engine';
 import type { DraftDeckId } from './utils/decks';
-import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS } from './data/content';
+import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS, SCHOOL_EVENTS } from './data/content';
 
 // Components
 import { TopBar } from './components/TopBar';
@@ -941,6 +941,12 @@ export default function App() {
             setState(prev => ({ ...prev, tutorial: applyTutorialAction(prev.tutorial, room.defId === 'wizard_study' ? 'open-study' : 'open-other') }));
           }}
           onSelectCreature={() => handleOpenScreen('bestiary')}
+          onSelectEvent={evtId => {
+            const evt = SCHOOL_EVENTS.find(e => e.id === evtId)
+              || (state.activeEvents[0] ? SCHOOL_EVENTS.find(e => e.id === state.activeEvents[0].eventId) : undefined);
+            if (evt) setActiveEventModal(evt);
+            else handleOpenScreen('events');
+          }}
           selectedRoomId={selectedRoom?.id}
           onResolveHazard={handleResolveHazard}
           placement={placement}
@@ -1326,6 +1332,75 @@ export default function App() {
                   }`}
                 >
                   {state.settings.reduceMotion ? 'On' : 'Off'}
+                </button>
+              </div>
+
+              {/* Visual Time-of-Day Setting (VOA §7.1 / Part A.5) */}
+              <div className="flex items-center justify-between bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+                <div>
+                  <span className="block font-medium text-slate-200">Sky & Lighting</span>
+                  <span className="text-[11px] text-slate-400">Cosmetic time-of-day look</span>
+                </div>
+                <select
+                  aria-label="Sky & Lighting"
+                  value={state.settings.visualTime ?? 'clock'}
+                  onChange={e => {
+                    const val = e.target.value as 'clock' | 'day' | 'night';
+                    setState(prev => ({
+                      ...prev,
+                      settings: { ...prev.settings, visualTime: val }
+                    }));
+                  }}
+                  className="bg-slate-900 border border-slate-700 px-2.5 py-1.5 rounded-xl text-xs font-bold text-amber-200"
+                >
+                  <option value="clock">Follow my clock</option>
+                  <option value="day">Always day</option>
+                  <option value="night">Always night</option>
+                </select>
+              </div>
+
+              {/* Celebration Size Setting (VOA §9.4 / Part B.5) */}
+              <div className="flex items-center justify-between bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+                <div>
+                  <span className="block font-medium text-slate-200">Celebration Size</span>
+                  <span className="text-[11px] text-slate-400">Room event vignettes & celebrations</span>
+                </div>
+                <select
+                  aria-label="Celebration Size"
+                  value={state.settings.celebrationSize ?? 'full'}
+                  onChange={e => {
+                    const val = e.target.value as 'full' | 'small' | 'off';
+                    setState(prev => ({
+                      ...prev,
+                      settings: { ...prev.settings, celebrationSize: val }
+                    }));
+                  }}
+                  className="bg-slate-900 border border-slate-700 px-2.5 py-1.5 rounded-xl text-xs font-bold text-amber-200"
+                >
+                  <option value="full">Full</option>
+                  <option value="small">Small</option>
+                  <option value="off">Off</option>
+                </select>
+              </div>
+
+              {/* Hazards / Wards Lens Toggle (VOA §7.4 / Part A.6) */}
+              <div className="flex items-center justify-between bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+                <div>
+                  <span className="block font-medium text-slate-200">Hazards / Wards Lens</span>
+                  <span className="text-[11px] text-slate-400">Show teal ward circles around warded rooms</span>
+                </div>
+                <button
+                  onClick={() => {
+                    setState(prev => ({
+                      ...prev,
+                      settings: { ...prev.settings, showHazardsLens: !prev.settings.showHazardsLens }
+                    }));
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                    state.settings.showHazardsLens ? 'bg-teal-600 text-white' : 'bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  {state.settings.showHazardsLens ? 'On' : 'Off'}
                 </button>
               </div>
 

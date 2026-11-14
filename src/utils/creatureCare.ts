@@ -211,9 +211,18 @@ function findBuilt(state: FullGameState, defId?: string, fallbackId?: number): P
   return state.rooms.find(r => r.state === 'built');
 }
 
-function pushNotice(state: FullGameState, notifications: string[], id: string, text: string): void {
+import type { NoticeData } from '../types/ankicaster';
+
+function pushNotice(
+  state: FullGameState,
+  notifications: string[],
+  id: string,
+  text: string,
+  data?: NoticeData,
+  type: string = 'creature'
+): void {
   notifications.push(text);
-  state.notices.push({ id, time: Date.now(), type: 'creature', text });
+  state.notices.push({ id, time: Date.now(), type, text, data });
 }
 
 function takeFromBag(
@@ -426,8 +435,23 @@ function startCapture(state: FullGameState, creature: CreatureInstance, notifica
   });
   creature.captureTamerId = catcher.id;
   creature.captureReviewsLeft = reviews;
+  const ehRoom = state.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || state.rooms[0];
+  const resolved = resolveAllCreatureRooms(state.creatures, state.rooms);
+  const roomId = creature.roomId ?? resolved.get(creature.id)?.room?.id ?? ehRoom?.id;
   const text = `${def?.name || 'A creature'} (${creature.nickname}) is loose. ${catcher.name} is after it (${reviews} reviews).`;
-  pushNotice(state, notifications, `escape-${creature.id}-${state.reviewIndex}`, text);
+  pushNotice(
+    state,
+    notifications,
+    `escape-${creature.id}-${state.reviewIndex}`,
+    text,
+    {
+      roomId,
+      creatureId: creature.id,
+      characterIds: catcher.id ? [catcher.id] : undefined,
+      visualEventType: 'creature_escape'
+    },
+    'creature_escape'
+  );
 }
 
 function escapeOne(
@@ -444,11 +468,20 @@ function escapeOne(
   startCapture(state, creature, notifications);
   const def = CREATURE_DEFINITIONS[creature.defId];
   if (def?.troubleDescription) {
+    const ehRoom = state.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || state.rooms[0];
+    const resolved = resolveAllCreatureRooms(state.creatures, state.rooms);
+    const roomId = creature.roomId ?? resolved.get(creature.id)?.room?.id ?? ehRoom?.id;
     pushNotice(
       state,
       notifications,
       `trouble-${creature.id}-${state.reviewIndex}`,
-      `${creature.nickname}: ${def.troubleDescription}`
+      `${creature.nickname}: ${def.troubleDescription}`,
+      {
+        roomId,
+        creatureId: creature.id,
+        incidentId: 'creature_trouble'
+      },
+      'creature'
     );
   }
   return depth === 0 ? follow : [];
@@ -509,17 +542,27 @@ export function recaptureCreature(state: FullGameState, creature: CreatureInstan
     store[resource] = (store[resource] || 0) + amount;
     logResourceChange(state, resource, amount, `Recaptured ${creature.nickname}`);
   }
+  const catcherId = creature.captureTamerId;
   creature.status = back;
   creature.stashed = undefined;
   creature.captureReviewsLeft = undefined;
   creature.captureTamerId = undefined;
   creature.returnStatus = undefined;
   const def = CREATURE_DEFINITIONS[creature.defId];
+  const ehRoom = state.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || state.rooms[0];
+  const resolved = resolveAllCreatureRooms(state.creatures, state.rooms);
+  const roomId = creature.roomId ?? resolved.get(creature.id)?.room?.id ?? ehRoom?.id;
   pushNotice(
     state,
     notifications,
     `recapture-${creature.id}-${state.reviewIndex}`,
-    `${how} ${creature.nickname} (${def?.name || 'creature'}) is home.`
+    `${how} ${creature.nickname} (${def?.name || 'creature'}) is home.`,
+    {
+      roomId,
+      creatureId: creature.id,
+      characterIds: catcherId ? [catcherId] : undefined
+    },
+    'creature'
   );
 }
 

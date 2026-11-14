@@ -659,5 +659,19 @@ export function getFacultySummary(state: FullGameState, excludeCharId?: number) 
   return { activeFaculty, maxAllowed: limit, breakdown };
 }
 
+export type VeilBand = 'strong' | 'thinning' | 'thin' | 'torn';
 
-
+/**
+ * Veil band thresholds (VOA §8.2):
+ * - Strong: 80–100
+ * - Thinning: 50–79
+ * - Thin: 20–49
+ * - Torn: 0–19
+ */
+export function getVeilBand(strength: number): VeilBand {
+  const s = Number.isFinite(strength) ? strength : 100;
+  if (s >= 80) return 'strong';
+  if (s >= 50) return 'thinning';
+  if (s >= 20) return 'thin';
+  return 'torn';
+}

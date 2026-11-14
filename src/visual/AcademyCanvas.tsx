@@ -56,6 +56,7 @@ interface AcademyCanvasProps {
   state: FullGameState;
   onSelectRoom: (room: PlacedRoom) => void;
   onSelectCreature?: (creature: CreatureInstance) => void;
+  onSelectEvent?: (eventId: string) => void;
   selectedRoomId?: number;
   onResolveHazard?: (roomId: number, method: 'warder' | 'spell') => void;
   placement?: PlacementMode | null;
@@ -90,6 +91,7 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   state,
   onSelectRoom,
   onSelectCreature,
+  onSelectEvent,
   selectedRoomId,
   onResolveHazard,
   placement,
@@ -165,6 +167,8 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     appRef.current = app;
     let tick: (() => void) | null = null;
     let onVis: (() => void) | null = null;
+    let onWinFocus: (() => void) | null = null;
+    let clockInterval: ReturnType<typeof setInterval> | null = null;
 
     async function initPixi() {
       if (!container) return;
@@ -206,8 +210,16 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
         lastNow = now;
         world.consumeTime(0, now);
         world.choreographer.consumeTime(0, now);
+        world.refreshClock(new Date());
+      };
+      onWinFocus = () => {
+        world.refreshClock(new Date());
       };
       document.addEventListener('visibilitychange', onVis);
+      window.addEventListener('focus', onWinFocus);
+      clockInterval = setInterval(() => {
+        world.refreshClock(new Date());
+      }, 60_000);
       tick = () => {
         const now = performance.now();
         let delta = now - lastNow;
@@ -252,6 +264,8 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
         tick = null;
       }
       if (onVis) document.removeEventListener('visibilitychange', onVis);
+      if (onWinFocus) window.removeEventListener('focus', onWinFocus);
+      if (clockInterval) clearInterval(clockInterval);
       try { app.destroy(true); } catch { /* not initialised yet */ }
       appRef.current = null;
       worldRef.current = null;
@@ -346,19 +360,24 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    // Hover on a creature or construction site (Addendum 5.6 & 8.1/8.3)
+    // Hover on Messenger Owl, creature, or construction site (Addendum 5.6 & 8.1/8.3)
     if (!placementRef.current && !isDraggingRef.current && containerRef.current && worldRef.current) {
       const rect = containerRef.current.getBoundingClientRect();
       const px = e.clientX - rect.left;
       const py = e.clientY - rect.top;
-      const cHit = worldRef.current.hitTestCreature(px, py);
-      if (cHit) {
-        const text = creatureHoverText(cHit);
-        setHoverTip({ x: px, y: py, text });
+      const owlHit = worldRef.current.hitTestMessengerOwl(px, py);
+      if (owlHit) {
+        setHoverTip({ x: px, y: py, text: 'Messenger Owl · Click to view event' });
       } else {
-        const hit = worldRef.current.hitTestRoom(px, py);
-        const text = hit && hit.state === 'site' ? (hit.buildPaused ? `Paused · ${reviewsToGoText(hit)}` : reviewsToGoText(hit)) : null;
-        setHoverTip(prev => (text ? { x: px, y: py, text } : prev ? null : prev));
+        const cHit = worldRef.current.hitTestCreature(px, py);
+        if (cHit) {
+          const text = creatureHoverText(cHit);
+          setHoverTip({ x: px, y: py, text });
+        } else {
+          const hit = worldRef.current.hitTestRoom(px, py);
+          const text = hit && hit.state === 'site' ? (hit.buildPaused ? `Paused · ${reviewsToGoText(hit)}` : reviewsToGoText(hit)) : null;
+          setHoverTip(prev => (text ? { x: px, y: py, text } : prev ? null : prev));
+        }
       }
     } else if (hoverTip) {
       setHoverTip(null);
@@ -403,6 +422,12 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     const rect = container.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
+
+    const owlHit = world.hitTestMessengerOwl(clickX, clickY);
+    if (owlHit && onSelectEvent) {
+      onSelectEvent(owlHit.eventId);
+      return;
+    }
 
     const clickedCreature = world.hitTestCreature(clickX, clickY);
     const clickedRoom = world.hitTestRoom(clickX, clickY);

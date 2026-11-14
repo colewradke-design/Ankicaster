@@ -5,12 +5,50 @@
  * AnkicasterEngine.applyHonestReview. Rooms use the engine's placement checks,
  * then are marked built without charging materials (this save is tagged debugUsed).
  */
-import { CREATURE_DEFINITIONS, RIFT_DESTINATIONS, ROOM_DEFINITIONS } from '../data/content';
-import type { Character, CreatureInstance, FullGameState, HabitatType, PlacedRoom } from '../types/ankicaster';
+import {
+  CREATURE_DEFINITIONS,
+  FURNITURE_DEFINITIONS,
+  POTION_RECIPES,
+  RIFT_DESTINATIONS,
+  ROOM_DEFINITIONS,
+  SCHOOL_EVENTS,
+  SPELL_DEFINITIONS
+} from '../data/content';
+import type {
+  CareerType,
+  Character,
+  CreatureInstance,
+  FullGameState,
+  HabitatType,
+  InjuryType,
+  PlacedRoom,
+  SchoolType
+} from '../types/ankicaster';
 import { AnkicasterEngine } from '../utils/engine';
 import { findAutoPlacement, getGridSize, validatePlacement } from '../utils/placement';
 import { allFurnitureIds, fillRequiredFixtures } from '../utils/requiredFurniture';
 import { ONE_BY_ONE_PEN_CAP, penCreatureCapacity, syncDiscoveredCreatures } from '../utils/creatures';
+import { SKIN_TONES, HAIR_COLOURS, HAIR_STYLES } from '../utils/appearance';
+import { VisualEventType, VISUAL_EVENT_CATALOGUE } from '../visual/events/visualEvents';
+import type { VisualWorld } from '../visual/world/VisualWorld';
+
+export const SCHOOL_HEX: Record<SchoolType, string> = {
+  arcane: '#6B4FBB',
+  nature: '#4E8B3A',
+  light: '#E8C547',
+  shadow: '#2F3A73',
+  alchemy: '#B5651D'
+};
+
+function randomStudentAppearance(school: SchoolType, rng: () => number = Math.random): Character['appearance'] {
+  return {
+    skin: SKIN_TONES[Math.floor(rng() * SKIN_TONES.length)] || SKIN_TONES[0],
+    hair: HAIR_STYLES[Math.floor(rng() * HAIR_STYLES.length)]?.id || 'short',
+    hairColor: HAIR_COLOURS[Math.floor(rng() * HAIR_COLOURS.length)]?.color || '#4A2E1E',
+    robeColor: SCHOOL_HEX[school] || '#6B4FBB',
+    hat: 'cap'
+  };
+}
 
 export type DebugCreatureStatus = CreatureInstance['status'] | 'unhomed';
 
@@ -20,6 +58,7 @@ export interface DebugResult {
   state: FullGameState;
   message: string;
   creatureId?: number;
+  characterId?: number;
 }
 
 export const HABITAT_SAMPLES: Array<{ habitat: HabitatType; defId: string; roomDef: string; label: string }> = [
@@ -31,13 +70,24 @@ export const HABITAT_SAMPLES: Array<{ habitat: HabitatType; defId: string; roomD
   { habitat: 'crystal', defId: 'inkling_wisp', roomDef: 'crystal_vivarium', label: 'Crystal' }
 ];
 
+export const ALL_SCHOOLS: SchoolType[] = ['arcane', 'nature', 'light', 'shadow', 'alchemy'];
+export const ALL_CAREERS: CareerType[] = ['teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist', 'builder', 'adventurer'];
+export const ALL_INJURIES: InjuryType[] = ['bruised', 'sprained', 'hexed', 'broken_bone', 'rift_touched'];
+export const ALL_HAZARD_TYPES: Array<NonNullable<PlacedRoom['hazard']>['type']> = [
+  'spill_of_night',
+  'hex_fog',
+  'echo_loop',
+  'cold_snap',
+  'breach'
+];
+
 function touch(state: FullGameState): FullGameState {
   const next = structuredClone(state);
   next.debugUsed = true;
   next.debugCreatureIds = [...(next.debugCreatureIds || [])];
-  next.debugRoomIds = [...(next.debugRoomIds || [])];
-  next.debugCharacterIds = [...(next.debugCharacterIds || [])];
-  next.debugExpeditionIds = [...(next.debugExpeditionIds || [])];
+  next.debugRoomIds = [...(state.debugRoomIds || [])];
+  next.debugCharacterIds = [...(state.debugCharacterIds || [])];
+  next.debugExpeditionIds = [...(state.debugExpeditionIds || [])];
   return next;
 }
 
@@ -487,3 +537,655 @@ export function clearDebugCreatures(state: FullGameState): DebugResult {
   next.debugRiftLock = false;
   return { state: next, message: 'Cleared debug creatures, pens, and rift stand-ins. This save stays marked.' };
 }
+
+// ============================================================================
+// PART C.2 — PEOPLE DEBUG TOOLS
+// ============================================================================
+
+const DEBUG_NAMES = [
+  'Aurelia Vance', 'Caspian Thorne', 'Lyra Sterling', 'SorenAshford',
+  'Mireille Dusk', 'Orion Finch', 'Tamsin Vale', 'Rowan Kestrel',
+  'Evander Voss', 'Sylvie Lark', 'Gideon Frost', 'Briar Solis'
+];
+
+/**
+ * Force-enroll a student bypassing mana, bed, and free-card requirements
+ * (creates/links fake card ids if needed).
+ */
+export function debugForceEnrollStudent(
+  state: FullGameState,
+  school: SchoolType = 'arcane',
+  customName?: string
+): DebugResult {
+  const next = touch(state);
+  const charId = allocId(next);
+  const setId = charId * 10 + 1;
+  const fakeCards: number[] = [];
+  const baseCardId = 900_000 + charId * 50;
+  for (let i = 0; i < 30; i++) {
+    const cid = baseCardId + i;
+    fakeCards.push(cid);
+    next.allCards[cid] = {
+      id: cid,
+      nid: cid,
+      deckName: 'Debug',
+      front: `Debug Card ${cid}`,
+      back: `Answer ${cid}`,
+      ivl: 10,
+      lastAnswerIvl: 10,
+      honestIvl: 10,
+      type: 2,
+      queue: 2,
+      due: 0,
+      lastStudiedMs: Date.now()
+    };
+  }
+  next.cardSets.push({
+    id: setId,
+    characterId: charId,
+    kind: 'study',
+    school,
+    size: 30,
+    createdDay: next.day,
+    released: false,
+    cardIds: fakeCards
+  });
+
+  const classroom = next.rooms.find(r => r.state === 'built' && r.defId.startsWith('classroom_'));
+  const dorm = next.rooms.find(r => r.state === 'built' && (r.defId === 'dormitory' || r.defId === 'grand_dormitory'));
+  const hall = next.rooms.find(r => r.state === 'built' && r.defId === 'entrance_hall');
+
+  const name = customName?.trim() || DEBUG_NAMES[next.characters.length % DEBUG_NAMES.length];
+  const student: Character = {
+    id: charId,
+    name,
+    pronouns: 'they/them',
+    appearance: randomStudentAppearance(school, Math.random),
+    personality: 'Curious',
+    traits: ['Focused'],
+    status: 'student',
+    currentSchool: school,
+    masteredSchools: [],
+    needs: { hunger: 90, rest: 90, leisure: 85, composure: 90, health: 100 },
+    morale: 85,
+    readyDays: { [school]: 0 },
+    enrolledDay: next.day,
+    chronicle: [{ day: next.day, text: `Force-enrolled in ${school.toUpperCase()} via Debug Tools.` }],
+    studySetId: setId,
+    careerSetIds: [],
+    seatRoomId: classroom?.id,
+    bedRoomId: dorm?.id
+  };
+
+  next.characters.push(student);
+  next.debugCharacterIds = [...(next.debugCharacterIds || []), charId];
+  next.notices.push({
+    id: `enroll-debug-${charId}-${Date.now()}`,
+    time: Date.now(),
+    type: 'enroll',
+    text: `🎓 ${student.name} enrolled in ${school.toUpperCase()} (Debug)!`,
+    data: {
+      characterIds: [charId],
+      roomId: hall?.id ?? classroom?.id,
+      school,
+      visualEventType: 'student_enrolled'
+    }
+  });
+
+  return {
+    state: next,
+    characterId: charId,
+    message: `Enrolled ${student.name} in ${school}.`
+  };
+}
+
+export function debugForceEnrollFiveStudents(state: FullGameState, school: SchoolType = 'arcane'): DebugResult {
+  let cur = state;
+  let lastId: number | undefined;
+  for (let i = 0; i < 5; i++) {
+    const sch = i === 0 ? school : ALL_SCHOOLS[(ALL_SCHOOLS.indexOf(school) + i) % ALL_SCHOOLS.length];
+    const res = debugForceEnrollStudent(cur, sch);
+    cur = res.state;
+    lastId = res.characterId;
+  }
+  return {
+    state: cur,
+    characterId: lastId,
+    message: 'Force-enrolled +5 students across schools.'
+  };
+}
+
+export function debugUpdateCharacter(
+  state: FullGameState,
+  charId: number,
+  patch: {
+    status?: Character['status'];
+    currentSchool?: SchoolType;
+    toggleMasteredSchool?: SchoolType;
+    career?: CareerType | 'none';
+    workplaceRoomId?: number | null;
+    readySchool?: SchoolType;
+    readyDays?: number;
+    injuryType?: InjuryType | 'none';
+    injuryPoints?: number;
+    injuryRequired?: number;
+    morale?: number;
+    needs?: Partial<Character['needs']>;
+    needsPreset?: 'all_100' | 'all_20';
+  }
+): DebugResult {
+  const next = touch(state);
+  const char = next.characters.find(c => c.id === charId);
+  if (!char) return { state, message: 'Character not found.' };
+
+  if (patch.status !== undefined) {
+    char.status = patch.status;
+  }
+  if (patch.currentSchool !== undefined) {
+    char.currentSchool = patch.currentSchool;
+  }
+  if (patch.toggleMasteredSchool !== undefined) {
+    const s = patch.toggleMasteredSchool;
+    if (char.masteredSchools.includes(s)) {
+      char.masteredSchools = char.masteredSchools.filter(m => m !== s);
+    } else {
+      char.masteredSchools = [...char.masteredSchools, s];
+      char.appearance.robeColor = SCHOOL_HEX[s] || char.appearance.robeColor;
+    }
+  }
+  if (patch.career !== undefined) {
+    if (patch.career === 'none') {
+      delete char.career;
+      delete char.careerState;
+      delete char.workplaceRoomId;
+    } else {
+      char.career = patch.career;
+      char.careerState = 'active';
+      char.status = patch.career === 'adventurer' ? 'resident' : 'faculty';
+    }
+  }
+  if (patch.workplaceRoomId !== undefined) {
+    if (patch.workplaceRoomId === null) delete char.workplaceRoomId;
+    else char.workplaceRoomId = patch.workplaceRoomId;
+  }
+  if (patch.readySchool !== undefined && patch.readyDays !== undefined) {
+    char.readyDays = { ...(char.readyDays || {}), [patch.readySchool]: Math.max(0, Math.min(60, patch.readyDays)) };
+  }
+  if (patch.injuryType !== undefined) {
+    if (patch.injuryType === 'none') {
+      delete char.injury;
+      char.needs.health = 100;
+    } else {
+      char.injury = {
+        type: patch.injuryType,
+        points: patch.injuryPoints ?? 0,
+        required: patch.injuryRequired ?? 100
+      };
+    }
+  }
+  if (patch.morale !== undefined) {
+    char.morale = Math.max(0, Math.min(100, patch.morale));
+  }
+  if (patch.needs) {
+    char.needs = { ...char.needs, ...patch.needs };
+  }
+  if (patch.needsPreset === 'all_100') {
+    char.morale = 100;
+    char.needs = { hunger: 100, rest: 100, leisure: 100, composure: 100, health: 100 };
+  } else if (patch.needsPreset === 'all_20') {
+    char.morale = 20;
+    char.needs = { hunger: 20, rest: 20, leisure: 20, composure: 20, health: 20 };
+  }
+
+  return { state: next, characterId: charId, message: `Updated ${char.name}.` };
+}
+
+export function debugMakeMasteryReady(state: FullGameState, charId: number): DebugResult {
+  const next = touch(state);
+  const char = next.characters.find(c => c.id === charId);
+  if (!char) return { state, message: 'Character not found.' };
+  const sch = char.currentSchool || 'arcane';
+  char.currentSchool = sch;
+  char.status = 'student';
+  char.readyDays = { ...(char.readyDays || {}), [sch]: 30 };
+  // Also make their study card set mastery-ready (ivl >= 21) so isMasteryReady returns true
+  if (char.studySetId) {
+    const set = next.cardSets.find(s => s.id === char.studySetId);
+    if (set) {
+      for (const cid of set.cardIds) {
+        if (next.allCards[cid]) {
+          next.allCards[cid].honestIvl = 25;
+          next.allCards[cid].ivl = 25;
+        }
+      }
+    }
+  }
+  next.notices.push({
+    id: `mastery-ready-${char.id}-${Date.now()}`,
+    time: Date.now(),
+    type: 'mastery',
+    text: `🌟 ${char.name} has reached 30 Ready Days in ${sch.toUpperCase()}! Ready for Mastery Graduation.`,
+    data: {
+      characterIds: [char.id],
+      roomId: char.seatRoomId ?? char.bedRoomId,
+      school: sch,
+      visualEventType: 'mastery_ready'
+    }
+  });
+  return { state: next, characterId: charId, message: `${char.name} is now mastery-ready in ${sch} (30/30 days).` };
+}
+
+export function debugGrantMasteryNow(state: FullGameState, charId: number): DebugResult {
+  const next = touch(state);
+  const char = next.characters.find(c => c.id === charId);
+  if (!char) return { state, message: 'Character not found.' };
+  const sch = char.currentSchool || ALL_SCHOOLS.find(s => !char.masteredSchools.includes(s)) || 'arcane';
+  if (!char.masteredSchools.includes(sch)) {
+    char.masteredSchools = [...char.masteredSchools, sch];
+  }
+  char.status = 'resident';
+  char.currentSchool = undefined;
+  char.appearance.robeColor = SCHOOL_HEX[sch] || char.appearance.robeColor;
+  char.appearance.hat = 'pointed';
+  next.renown += 25;
+  const hall = next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built');
+  next.notices.push({
+    id: `grad-${char.id}-${Date.now()}`,
+    time: Date.now(),
+    type: 'graduation',
+    text: `🎓 ${char.name} graduated as a Master of ${sch.toUpperCase()}!`,
+    data: {
+      characterIds: [char.id],
+      roomId: hall?.id ?? char.seatRoomId,
+      school: sch,
+      visualEventType: 'mastery_granted'
+    }
+  });
+  return { state: next, characterId: charId, message: `Granted ${sch} mastery to ${char.name}!` };
+}
+
+export function debugRetireCharacterNow(state: FullGameState, charId: number): DebugResult {
+  const touched = touch(state);
+  const char = touched.characters.find(c => c.id === charId);
+  if (!char) return { state, message: 'Character not found.' };
+  if (char.status === 'student') {
+    char.status = 'resident';
+  }
+  if (char.masteredSchools.length === 0) {
+    char.masteredSchools = [char.currentSchool || 'arcane'];
+  }
+  const threshold = (touched.settings.retirementAgeDays || 90) + 10;
+  let charSets = touched.cardSets.filter(s => s.characterId === charId);
+  if (charSets.length === 0) {
+    const fakeCid = 980_000 + charId;
+    touched.allCards[fakeCid] = {
+      id: fakeCid,
+      nid: fakeCid,
+      deckName: 'Debug',
+      front: 'Debug Card',
+      back: 'Answer',
+      ivl: threshold,
+      lastAnswerIvl: threshold,
+      honestIvl: threshold,
+      type: 2,
+      queue: 2,
+      due: 0,
+      lastStudiedMs: Date.now()
+    };
+    const fakeSet = {
+      id: 980_000 + charId,
+      characterId: charId,
+      kind: 'study' as const,
+      school: char.masteredSchools[0],
+      size: 1,
+      createdDay: touched.day,
+      released: false,
+      cardIds: [fakeCid]
+    };
+    touched.cardSets.push(fakeSet);
+    charSets = [fakeSet];
+  } else {
+    for (const s of charSets) {
+      for (const cid of s.cardIds) {
+        if (touched.allCards[cid]) {
+          touched.allCards[cid].honestIvl = threshold;
+          touched.allCards[cid].ivl = threshold;
+        }
+      }
+    }
+  }
+  const res = AnkicasterEngine.retireCharacter(touched, charId);
+  if (res.success) {
+    return { state: res.state, message: `Retired ${char.name} to the Alumni Gallery.` };
+  }
+  return { state: touched, message: res.error || 'Could not retire character.' };
+}
+
+export function debugDeleteCharacter(state: FullGameState, charId: number): DebugResult {
+  const next = touch(state);
+  const char = next.characters.find(c => c.id === charId);
+  if (!char) return { state, message: 'Character not found.' };
+  next.characters = next.characters.filter(c => c.id !== charId);
+  return { state: next, message: `Deleted ${char.name}.` };
+}
+
+// ============================================================================
+// PART C.3 — EVENTS & HAZARDS DEBUG TOOLS
+// ============================================================================
+
+export function debugTriggerSchoolEvent(state: FullGameState, eventId: string): DebugResult {
+  const next = touch(state);
+  const evt = SCHOOL_EVENTS.find(e => e.id === eventId);
+  const targetId = evt ? evt.id : (eventId || SCHOOL_EVENTS[0]?.id || 'owl_post');
+  const targetName = evt ? evt.name : targetId;
+  if (!next.activeEvents.some(e => e.eventId === targetId)) {
+    next.activeEvents = [...next.activeEvents, { eventId: targetId, dayArrived: next.day }];
+  }
+  const hall = next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built');
+  next.notices.push({
+    id: `debug-evt-spawn-${targetId}-${Date.now()}`,
+    time: Date.now(),
+    type: 'event',
+    text: `🦉 Messenger owl arrived with "${targetName}"!`,
+    data: {
+      eventId: targetId,
+      roomId: hall?.id,
+      visualEventType: 'school_event_spawned'
+    }
+  });
+  return { state: next, message: `Triggered school event: ${targetName}.` };
+}
+
+export function debugClearAllEvents(state: FullGameState): DebugResult {
+  const next = touch(state);
+  next.activeEvents = [];
+  return { state: next, message: 'Cleared all active school events.' };
+}
+
+const HAZARD_LABELS: Record<NonNullable<PlacedRoom['hazard']>['type'], string> = {
+  spill_of_night: 'Spill of Night',
+  hex_fog: 'Hex Fog',
+  echo_loop: 'Echo Loop',
+  cold_snap: 'Cold Snap',
+  breach: 'Veil Breach'
+};
+
+export function debugSetRoomHazard(
+  state: FullGameState,
+  roomId: number,
+  hazardType: NonNullable<PlacedRoom['hazard']>['type'] | 'clear'
+): DebugResult {
+  const next = touch(state);
+  const room = next.rooms.find(r => r.id === roomId);
+  if (!room) return { state, message: 'Room not found.' };
+  if (hazardType === 'clear') {
+    room.hazard = undefined;
+    next.notices.push({
+      id: `debug-haz-clear-${roomId}-${Date.now()}`,
+      time: Date.now(),
+      type: 'hazard',
+      text: `Cleared hazard in ${ROOM_DEFINITIONS[room.defId]?.name || room.defId}.`,
+      data: { roomId, visualEventType: 'hazard_cleared' }
+    });
+    return { state: next, message: `Cleared hazard in room #${roomId}.` };
+  }
+  room.hazard = {
+    type: hazardType,
+    name: HAZARD_LABELS[hazardType] || hazardType,
+    description: `${HAZARD_LABELS[hazardType]} in room`,
+    effect: 'Room output impaired until cleared.'
+  };
+  return { state: next, message: `Set ${HAZARD_LABELS[hazardType]} on ${ROOM_DEFINITIONS[room.defId]?.name || room.defId}.` };
+}
+
+export function debugClearAllHazards(state: FullGameState): DebugResult {
+  const next = touch(state);
+  for (const r of next.rooms) {
+    r.hazard = undefined;
+  }
+  return { state: next, message: 'Cleared all room hazards.' };
+}
+
+export function debugTriggerExpeditionOutcome(
+  state: FullGameState,
+  outcome: 'safe' | 'minor_injury' | 'serious_injury' | 'curse' | 'retreat',
+  expeditionId?: number
+): DebugResult {
+  const next = touch(state);
+  let exp = expeditionId
+    ? next.expeditions.find(e => e.id === expeditionId)
+    : next.expeditions.find(e => e.state === 'active');
+
+  if (!exp) {
+    const teamIds = next.characters.slice(0, 2).map(c => c.id);
+    exp = {
+      id: allocId(next),
+      destinationId: 'crystal_caverns',
+      teamIds,
+      suppliesTaken: [],
+      partySkillDays: 10,
+      chance: 80,
+      fortune: 1,
+      roll: 10,
+      wrongRoll: 50,
+      progressReviews: 100,
+      requiredReviews: 100,
+      state: 'active'
+    };
+    next.expeditions.push(exp);
+  }
+
+  exp.state = 'returned';
+  exp.outcome = outcome;
+
+  const teamChars = next.characters.filter(c => exp!.teamIds.includes(c.id));
+  for (const tc of teamChars) {
+    tc.status = tc.career && tc.career !== 'adventurer' ? 'faculty' : (tc.masteredSchools.length > 0 ? 'resident' : 'student');
+    if (outcome === 'minor_injury') {
+      tc.injury = { type: 'sprained', points: 0, required: 60 };
+    } else if (outcome === 'serious_injury') {
+      tc.injury = { type: 'broken_bone', points: 0, required: 150 };
+    } else if (outcome === 'curse') {
+      tc.injury = { type: 'hexed', points: 0, required: 100 };
+    }
+  }
+
+  const riftRoom = next.rooms.find(r => r.defId === 'rift_gate' && r.state === 'built');
+  const infirmary = next.rooms.find(r => r.defId === 'infirmary' && r.state === 'built');
+  const visualEventType: VisualEventType =
+    outcome === 'safe'
+      ? 'expedition_return_safe'
+      : outcome === 'retreat'
+      ? 'expedition_retreat'
+      : outcome === 'curse'
+      ? 'expedition_return_curse'
+      : 'expedition_return_injury';
+
+  next.notices.push({
+    id: `debug-exp-${exp.id}-${Date.now()}`,
+    time: Date.now(),
+    type: 'expedition',
+    text: `Expedition returned with outcome: ${outcome}.`,
+    data: {
+      roomId: outcome === 'safe' || outcome === 'retreat' ? riftRoom?.id : (infirmary?.id ?? riftRoom?.id),
+      characterIds: exp.teamIds,
+      outcome,
+      visualEventType
+    }
+  });
+
+  return { state: next, message: `Triggered expedition outcome: ${outcome}.` };
+}
+
+/**
+ * Pure visual preview helper: queues/plays a vignette in VisualWorld for any VisualEventType
+ * WITHOUT mutating FullGameState at all (satisfies VR-01 and Test #6).
+ */
+export function previewVisualEventInWorld(
+  world: VisualWorld,
+  state: FullGameState,
+  type: VisualEventType,
+  roomId?: number
+) {
+  const fallbackId = roomId ?? state.rooms.find(r => r.defId === 'entrance_hall')?.id ?? 1;
+  world.eventDispatcher.triggerPreview(type, fallbackId, world.clockMs);
+  world.renderEventVignettes();
+}
+
+export function debugFirePreviewVignette(
+  state: FullGameState,
+  type: VisualEventType,
+  roomId?: number
+): DebugResult {
+  if (!VISUAL_EVENT_CATALOGUE[type]) {
+    return { state, message: `Unknown visual event type: ${type}` };
+  }
+  const next: FullGameState = {
+    ...state,
+    debugPreviewEvent: {
+      type,
+      nonce: Date.now() + Math.random(),
+      roomId
+    }
+  };
+  return { state: next, message: `Fired visual vignette preview: ${type}.` };
+}
+
+// ============================================================================
+// PART C.4 — ATMOSPHERE DEBUG TOOLS
+// ============================================================================
+
+export function debugSetTimeOverride(
+  state: FullGameState,
+  hours: number | null
+): DebugResult {
+  const next = touch(state);
+  next.debugTimeHours = hours === null ? null : Math.max(0, Math.min(24, hours));
+  return {
+    state: next,
+    message: hours === null ? 'Reset to real clock.' : `Time override set to ${hours.toFixed(1)}h.`
+  };
+}
+
+export function debugSetVeilStrength(
+  state: FullGameState,
+  strength: number
+): DebugResult {
+  const next = touch(state);
+  next.veil.strength = Math.max(0, Math.min(100, Math.round(strength)));
+  return {
+    state: next,
+    message: `Veil strength set to ${next.veil.strength}%.`
+  };
+}
+
+export function debugRunDayTick(
+  state: FullGameState,
+  paid: boolean
+): DebugResult {
+  const next = touch(state);
+  const upkeep = next.veil.costToday || 50;
+  if (paid && next.mana < upkeep) {
+    next.mana = upkeep + 100;
+  } else if (!paid) {
+    next.mana = 0;
+  }
+  const ticked = AnkicasterEngine.triggerDayTick(next).state;
+  return {
+    state: ticked,
+    message: `Ran Day Tick (${paid ? 'Paid' : 'Unpaid'}).`
+  };
+}
+
+// ============================================================================
+// PART C.5 — ACADEMY DEBUG TOOLS
+// ============================================================================
+
+export function debugGrantAllResources(state: FullGameState): DebugResult {
+  const next = touch(state);
+  next.mana += 1000;
+  const keys = [
+    'timber', 'stone', 'glass', 'cloth', 'provisions', 'greens', 'fish', 'nectar',
+    'herbs', 'insight', 'radiance', 'umbra', 'reagents', 'crystal', 'starmetal',
+    'sunstone', 'void_pearl', 'ember_salt', 'moonsilk', 'phoenix_ash', 'heartwood', 'golem_core'
+  ] as const;
+  const bag = next.resources as unknown as Record<string, number>;
+  for (const k of keys) {
+    bag[k] = (bag[k] || 0) + 200;
+  }
+  return { state: next, message: 'Granted +1,000 Mana and +200 of all materials.' };
+}
+
+export function debugSetResourceAmount(
+  state: FullGameState,
+  resourceKey: 'mana' | string,
+  amount: number
+): DebugResult {
+  const next = touch(state);
+  const val = Math.max(0, Math.floor(amount));
+  if (resourceKey === 'mana') {
+    next.mana = val;
+  } else {
+    (next.resources as unknown as Record<string, number>)[resourceKey] = val;
+  }
+  return { state: next, message: `Set ${resourceKey} to ${val}.` };
+}
+
+export function debugSetWizardSchoolLevel(
+  state: FullGameState,
+  school: SchoolType,
+  level: number
+): DebugResult {
+  const next = touch(state);
+  next.wizard.levels[school] = Math.max(0, Math.min(10, Math.floor(level)));
+  return { state: next, message: `Set Wizard ${school} level to ${next.wizard.levels[school]}.` };
+}
+
+export function debugLearnAllSpells(state: FullGameState): DebugResult {
+  const next = touch(state);
+  next.wizard.knownSpells = Object.keys(SPELL_DEFINITIONS);
+  next.wizard.spellCooldowns = {};
+  return { state: next, message: `Learned all ${next.wizard.knownSpells.length} spells.` };
+}
+
+export function debugUnlockAllBlueprintsAndRecipes(state: FullGameState): DebugResult {
+  const next = touch(state);
+  next.knownPlans = Object.keys(ROOM_DEFINITIONS);
+  next.roomPlans = { ...(next.roomPlans || {}) };
+  for (const id of Object.keys(ROOM_DEFINITIONS)) {
+    next.roomPlans[id] = Math.max(next.roomPlans[id] || 0, 5);
+  }
+  next.knownPatterns = Object.keys(FURNITURE_DEFINITIONS);
+  next.potions = next.potions.map(p => ({ ...p, discovered: true }));
+  const existingPotionIds = new Set(next.potions.map(p => p.id));
+  for (const rec of POTION_RECIPES) {
+    if (!existingPotionIds.has(rec.id)) {
+      next.potions.push({ ...rec, discovered: true });
+    }
+  }
+  return { state: next, message: 'Unlocked all room blueprints, furniture patterns, and potion recipes.' };
+}
+
+export function debugAdvanceBells(state: FullGameState, count: number): DebugResult {
+  const next = touch(state);
+  const n = Math.max(1, Math.floor(count));
+  for (let i = 0; i < n; i++) {
+    next.bellIndex += 1;
+    AnkicasterEngine.ringBell(next, []);
+  }
+  return { state: next, message: `Advanced +${n} bell(s).` };
+}
+
+export function debugCompleteAllConstruction(state: FullGameState): DebugResult {
+  const next = touch(state);
+  const sites = next.rooms.filter(r => r.state === 'site');
+  for (const site of sites) {
+    site.buildProgress = site.buildRequired;
+    AnkicasterEngine.completeSite(next, site);
+  }
+  return {
+    state: next,
+    message: sites.length > 0 ? `Completed ${sites.length} construction site(s).` : 'No active construction sites.'
+  };
+}
+

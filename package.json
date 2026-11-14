@@ -9,7 +9,7 @@
     "build:addon": "VITE_DEBUG_TOOLS=false NODE_ENV=production vite build --mode production && rm -rf addon/web && mkdir -p addon/web && cp -r dist/* addon/web/ && rm -rf addon/web/assets/aistudio",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "test": "tsx --test tests/engine.test.ts tests/ui-reachability.test.tsx tests/building.test.ts tests/visual-catalog.test.ts tests/visual-v2b.test.tsx tests/visual-v3.test.tsx tests/visual-v4.test.tsx tests/creatures-v5.test.tsx tests/creature-debug.test.ts tests/creature-care.test.ts tests/creature-bugs.test.tsx tests/required-fixtures.test.ts tests/furniture-matters.test.tsx tests/furniture-patterns-effects.test.tsx tests/card-rooms.test.ts tests/targeted-stairs-trims.test.tsx tests/careers-affinity.test.tsx tests/section1-fixes.test.tsx tests/section2-fixes.test.tsx tests/section3-fixes.test.tsx",
+    "test": "tsx --test tests/engine.test.ts tests/ui-reachability.test.tsx tests/building.test.ts tests/visual-catalog.test.ts tests/visual-v2b.test.tsx tests/visual-v3.test.tsx tests/visual-v4.test.tsx tests/creatures-v5.test.tsx tests/creature-debug.test.ts tests/creature-care.test.ts tests/creature-bugs.test.tsx tests/required-fixtures.test.ts tests/furniture-matters.test.tsx tests/furniture-patterns-effects.test.tsx tests/card-rooms.test.ts tests/targeted-stairs-trims.test.tsx tests/careers-affinity.test.tsx tests/section1-fixes.test.tsx tests/section2-fixes.test.tsx tests/section3-fixes.test.tsx tests/v5-atmosphere-events-debug.test.tsx",
     "package:addon": "npm run build:addon && node scripts/package-addon.mjs",
     "lint": "tsc --noEmit"
   },

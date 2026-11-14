@@ -477,6 +477,8 @@ export interface WizardState {
   };
   foundingSchool?: SchoolType;
   foundedAt?: string;
+  /** Room ID visited by the headmaster this bell when no study session is active. */
+  presenceRoomId?: number;
 }
 
 export interface VeilState {
@@ -538,6 +540,26 @@ export interface GameSettings {
   termEndDate?: string;
   examTimer?: boolean;
   devMode?: boolean;
+  visualTime?: 'clock' | 'day' | 'night';
+  celebrationSize?: 'full' | 'small' | 'off';
+  showHazardsLens?: boolean;
+}
+
+export interface NoticeData {
+  roomId?: number;
+  characterIds?: number[];
+  creatureId?: number;
+  hazardId?: string;
+  hazardType?: string;
+  incidentId?: string;
+  outcome?: string;
+  spellId?: string;
+  potionId?: string;
+  eventId?: string;
+  school?: SchoolType;
+  level?: number;
+  career?: CareerType;
+  visualEventType?: string;
 }
 
 export interface TutorialProgress {
@@ -608,7 +630,7 @@ export interface FullGameState {
     recentAll?: Array<{ resource: string; amount: number; label: string }>;
   };
   activeEvents: Array<{ eventId: string; dayArrived: number }>;
-  notices: Array<{ id: string; time: number; text: string; type: string }>;
+  notices: Array<{ id: string; time: number; text: string; type: string; data?: NoticeData }>;
   achievements: string[];
   spellbooks: string[];
   alumniGallery: Array<{
@@ -648,6 +670,10 @@ export interface FullGameState {
   debugExpeditionIds?: number[];
   /** The debug panel locked the Rift Gate to preview the dormant arch. */
   debugRiftLock?: boolean;
+  /** Preview debug time-of-day override (0..24 hours, or null/undefined to follow settings/clock). */
+  debugTimeHours?: number | null;
+  /** Preview debug visual event trigger without state mutation. */
+  debugPreviewEvent?: { type: string; nonce: number; roomId?: number };
   /** Draft reroll tokens granted by Starlight Ink. */
   draftRerollTokens?: number;
   /** Active timed/charge buffs from potions and spells. */

@@ -16,6 +16,7 @@ interface CastleGridProps {
   state: FullGameState;
   onSelectRoom: (room: PlacedRoom) => void;
   onSelectCreature?: (creature: CreatureInstance) => void;
+  onSelectEvent?: (eventId: string) => void;
   selectedRoomId?: number;
   onResolveHazard?: (roomId: number, method: 'warder' | 'spell') => void;
   placement?: PlacementMode | null;

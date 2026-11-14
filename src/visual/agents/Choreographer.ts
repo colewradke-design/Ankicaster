@@ -621,6 +621,12 @@ export class Choreographer {
     if (greenhouse) return { roomId: greenhouse.id, errand: 'garden', activity: 'work' };
 
     // Headmaster's Presence: a different room each bell. Never the Study unless it is the only room.
+    if (state.wizard?.presenceRoomId !== undefined) {
+      const targetPresence = built.find(r => r.id === state.wizard.presenceRoomId);
+      if (targetPresence) {
+        return { roomId: targetPresence.id, errand: 'wander', activity: 'free_time' };
+      }
+    }
     const pool = built.filter(r => r.defId !== 'wizard_study' && r.defId !== 'spiral_stair' && r.defId !== 'support_pillar' && r.defId !== 'corridor');
     const visit = pool.length ? pool[(bell * 17 + (state.day ?? 0)) % pool.length] : built.find(r => r.defId === 'wizard_study') || built[0];
     return { roomId: visit?.id, errand: 'wander', activity: 'free_time' };

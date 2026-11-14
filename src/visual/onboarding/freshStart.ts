@@ -226,7 +226,10 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
       textScale: 1.0,
       mode: c.mode || 'endless',
       termLengthDays: 120,
-      devMode: false
+      devMode: false,
+      visualTime: 'clock',
+      celebrationSize: 'full',
+      showHazardsLens: false
     },
     rooms: initialRooms,
     characters: [],

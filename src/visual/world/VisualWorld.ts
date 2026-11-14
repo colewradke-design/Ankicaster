@@ -45,6 +45,19 @@ import { CreatureChoreographer, CreatureVisualAgent } from '../creatures/creatur
 import { drawCreature, drawCreatureArrival, drawCreatureBubble, creatureSize, tamingRingFraction, tamingRequirement } from '../creatures/creatureArt';
 import { drawRiftGateArch, getRiftGateVisualState, RIFT_RETURN_FLARE_MS } from '../rooms/riftGateArt';
 import { CREATURE_DEFINITIONS } from '../../data/content';
+import {
+  AtmosphereState,
+  computeAtmosphere
+} from './atmosphere';
+import {
+  VisualEventDispatcher,
+  getActiveHazardVignettes,
+  computeMessengerOwlState,
+  drawVisualEventVignette,
+  drawHazardVignette,
+  drawMessengerOwl,
+  MessengerOwlState
+} from '../events/visualEvents';
 
 /** Fixed ambient rate (Addendum 5.5: 2-8 fps, never tied to reviews). 5 fps -> 0.8 s per 4-frame loop. */
 export const AMBIENT_FRAME_MS = 200;
@@ -71,17 +84,37 @@ export class VisualWorld {
   worldContainer = new Container();
 
   skyGraphics = new Graphics();
+  atmosphereGraphics = new Graphics();
   castleGraphics = new Graphics();
   /** Cosmetic room animations (torches, glows, animated furniture); frame 0 under reduce motion. */
   ambientGraphics = new Graphics();
+  /** Night lights (window glows, sconces, lanterns, hearths) + world tint + Veil dome. */
+  lightingGraphics = new Graphics();
   /** Per-room status art above furniture: unreachable dim, selection outline. */
   statusGraphics = new Graphics();
   /** One-shot cosmetic effects (reveal dust, demolish dust, level-up trace). */
   fxGraphics = new Graphics();
+  /** V5 visual event vignettes, persistent hazard vignettes, and Messenger Owl. */
+  eventVignetteGraphics = new Graphics();
   ambientGroups: AmbientGroup[] = [];
   ambientFrame = -1;
   /** Real-time clock for fixed-rate ambience (ms); never advanced by reviews. */
   clockMs = 0;
+  /** Current real Date used for clock-based atmosphere. Re-read once a minute and on focus. */
+  clockDate: Date = new Date();
+  atmosphere?: AtmosphereState;
+  eventDispatcher = new VisualEventDispatcher();
+  messengerOwl: MessengerOwlState = {
+    visible: false,
+    eventId: null,
+    roomId: null,
+    x: 0,
+    y: 0,
+    hitBox: { left: 0, top: 0, right: 0, bottom: 0 }
+  };
+  veilRippleUntilMs = 0;
+  veilDimUntilMs = 0;
+  private prevSchedulePhase: string | null = null;
   effects: VisualEffect[] = [];
   private prevRooms: Map<number, PlacedRoom> | null = null;
   /** Last bellIndex seen. Output pops fire once when it changes, never per review. */
@@ -131,13 +164,16 @@ export class VisualWorld {
     this.rootContainer.addChild(this.overlayContainer);
 
     this.worldContainer.addChild(this.skyGraphics);
+    this.worldContainer.addChild(this.atmosphereGraphics);
     this.worldContainer.addChild(this.castleGraphics);
     this.worldContainer.addChild(this.riftGraphics);
     this.worldContainer.addChild(this.ambientGraphics);
+    this.worldContainer.addChild(this.lightingGraphics);
     this.worldContainer.addChild(this.statusGraphics);
     this.worldContainer.addChild(this.fxGraphics);
     this.worldContainer.addChild(this.agentsGraphics);
     this.worldContainer.addChild(this.roofsGraphics);
+    this.worldContainer.addChild(this.eventVignetteGraphics);
     this.worldContainer.addChild(this.ghostGraphics);
     // Labels sit above the world but are NOT inside the zoomed worldContainer
     this.rootContainer.addChildAt(this.roomLabelsContainer, 1);
@@ -193,6 +229,14 @@ export class VisualWorld {
     }
   }
 
+  /** Re-read the user's real clock (called once a minute and on window focus). */
+  refreshClock(now: Date = new Date()) {
+    this.clockDate = now;
+    if (this.state) {
+      this.renderAtmosphereAndLighting();
+    }
+  }
+
   setSnapshot(state: FullGameState, selectedRoomId?: number) {
     this.state = state;
     this.selectedRoomId = selectedRoomId;
@@ -230,6 +274,17 @@ export class VisualWorld {
     this.choreographer.syncState(state, engineReach);
     this.creatureChoreographer.updateBounds(this.navGraph, this.groundY, this.totalWorldWidth);
     this.creatureChoreographer.syncState(state);
+
+    // V5 Diff-based Visual Event Dispatcher
+    const spawned = this.eventDispatcher.ingestSnapshot(state, this.clockMs);
+    for (const fx of spawned) {
+      if (fx.type === 'day_tick_paid') {
+        this.veilRippleUntilMs = this.clockMs + 1500;
+      } else if (fx.type === 'day_tick_unpaid') {
+        this.veilDimUntilMs = this.clockMs + 1000;
+      }
+    }
+    this.messengerOwl = computeMessengerOwlState(state, this.groundY);
 
     // One-shot effects from state changes (never from review count or speed)
     this.detectEffects(state);
@@ -500,9 +555,228 @@ export class VisualWorld {
     this.ambientFrame = -1;
     this.renderAmbient(0);
 
+    // 4b. Atmosphere & Lighting + Event Vignettes
+    this.renderAtmosphereAndLighting();
+    this.renderEventVignettes();
+
     // 5. Overlays & Unreachable Badges
     this.renderOverlays();
     this.renderGhost();
+  }
+
+  /** Draw V5 sky bands, Veil wash, stars, sun & moon, parallax hills, clouds, Veil dome, night lights, and world tint. */
+  renderAtmosphereAndLighting() {
+    if (!this.state) return;
+    const paidRippleProgress =
+      this.veilRippleUntilMs > this.clockMs
+        ? Math.max(0, Math.min(1, 1 - (this.veilRippleUntilMs - this.clockMs) / 1500))
+        : 0;
+    const unpaidDimProgress =
+      this.veilDimUntilMs > this.clockMs
+        ? Math.max(0, Math.min(1, (this.veilDimUntilMs - this.clockMs) / 1000))
+        : 0;
+
+    const atm = computeAtmosphere(this.state, {
+      now: this.clockDate,
+      clockMs: this.clockMs,
+      cameraX: this.camera.x,
+      worldWidth: this.totalWorldWidth,
+      groundY: this.groundY,
+      paidRippleProgress,
+      unpaidDimProgress
+    });
+    this.atmosphere = atm;
+
+    const ag = this.atmosphereGraphics;
+    ag.clear();
+
+    // 1. Time-of-day sky bands over the sky region (above groundY)
+    const skyTopY = -120;
+    const skyH = Math.max(200, this.groundY - skyTopY);
+    const bandH = skyH / 3;
+    ag.rect(-120, skyTopY, this.totalWorldWidth + 240, bandH + 1).fill({ color: atm.skyTop, alpha: 0.92 });
+    ag.rect(-120, skyTopY + bandH, this.totalWorldWidth + 240, bandH + 1).fill({ color: atm.skyMid, alpha: 0.92 });
+    ag.rect(-120, skyTopY + bandH * 2, this.totalWorldWidth + 240, bandH + 1).fill({ color: atm.skyHorizon, alpha: 0.92 });
+
+    // Veil sky wash when Veil is thin or torn
+    if (atm.veilDome.skyWashAlpha > 0) {
+      ag.rect(-120, skyTopY, this.totalWorldWidth + 240, skyH).fill({
+        color: atm.veilDome.skyWashColor,
+        alpha: atm.veilDome.skyWashAlpha
+      });
+    }
+
+    // 2. Stars at night / twilight
+    if (atm.starAlpha > 0.01) {
+      for (let i = 0; i < 42; i++) {
+        const sx = ((i * 173 + 29) % this.totalWorldWidth);
+        const sy = Math.max(8, ((i * 97 + 13) % Math.max(60, this.groundY - 90)));
+        const twinkle = this.state.settings.reduceMotion ? 1 : 0.65 + 0.35 * Math.sin(this.clockMs / 600 + i);
+        ag.rect(sx, sy, i % 5 === 0 ? 2 : 1, i % 5 === 0 ? 2 : 1).fill({
+          color: i % 7 === 0 ? 0xcfd8ff : 0xf7f3d6,
+          alpha: atm.starAlpha * twinkle
+        });
+      }
+    }
+
+    // 3. Sun & Moon arcs
+    if (atm.celestial.sun.visible && atm.celestial.sun.alpha > 0.02) {
+      const { x, y, alpha } = atm.celestial.sun;
+      ag.circle(x, y, 16).fill({ color: 0xf7d06b, alpha: alpha * 0.25 });
+      ag.circle(x, y, 10).fill({ color: 0xffe484, alpha: alpha * 0.9 });
+      ag.circle(x, y, 7).fill({ color: 0xfff6cc, alpha });
+    }
+    if (atm.celestial.moon.visible && atm.celestial.moon.alpha > 0.02) {
+      const { x, y, alpha, phase } = atm.celestial.moon;
+      ag.circle(x, y, 13).fill({ color: 0xcfd8ff, alpha: alpha * 0.2 });
+      ag.circle(x, y, 8).fill({ color: 0xe6ecff, alpha: alpha * 0.92 });
+      // Crescent/gibbous shadow mask for non-full phases
+      if (Math.abs(phase - 0.5) > 0.08) {
+        const offset = (phase < 0.5 ? 1 : -1) * (3 + Math.abs(0.5 - phase) * 8);
+        ag.circle(x + offset, y - 1, 7).fill({ color: atm.skyTop, alpha: alpha * 0.85 });
+      }
+    }
+
+    // 4. Two parallax hill silhouettes (far 20% and near 40%)
+    for (const hill of [atm.hills.far, atm.hills.near]) {
+      const pts: number[] = [-160 + hill.offsetX, this.groundY];
+      for (const p of hill.points) {
+        pts.push(p.x + hill.offsetX, p.y);
+      }
+      pts.push(this.totalWorldWidth + 160 + hill.offsetX, this.groundY);
+      ag.poly(pts).fill({ color: hill.color, alpha: 0.9 });
+    }
+
+    // 5. Slow drifting clouds (frozen under reduceMotion)
+    for (const c of atm.clouds) {
+      const cloudColor = atm.nightLightStrength > 0.5 ? 0x6b7399 : 0xf6f1e8;
+      ag.roundRect(c.x, c.y, c.w, c.h, 5).fill({ color: cloudColor, alpha: c.alpha });
+      ag.roundRect(c.x + c.w * 0.2, c.y - 4, c.w * 0.55, c.h, 5).fill({ color: cloudColor, alpha: c.alpha * 0.85 });
+    }
+
+    // 6. Lighting layer: Veil dome arc, room night lights, ward circles, and world tint
+    const lg = this.lightingGraphics;
+    lg.clear();
+
+    // World tint overlay
+    if (atm.worldTintAlpha > 0.01) {
+      lg.rect(-120, skyTopY, this.totalWorldWidth + 240, this.groundY - skyTopY + 140).fill({
+        color: atm.worldTintColor,
+        alpha: atm.worldTintAlpha
+      });
+    }
+
+    // Room night lights (window glows, sconces, lanterns, hearths)
+    for (const light of atm.nightLights) {
+      if (light.alpha <= 0.01) continue;
+      if (light.kind === 'window') {
+        lg.roundRect(light.x - 5, light.y - 6, 10, 12, 2).fill({ color: light.color, alpha: light.alpha * 0.85 });
+        lg.circle(light.x, light.y, light.radius).fill({ color: light.color, alpha: light.alpha * 0.28 });
+      } else {
+        lg.circle(light.x, light.y, light.radius).fill({ color: light.color, alpha: light.alpha * 0.32 });
+        lg.circle(light.x, light.y, Math.max(2, light.radius * 0.35)).fill({ color: 0xfff2c2, alpha: light.alpha * 0.75 });
+      }
+    }
+
+    // Veil Dome over the Academy
+    const dome = atm.veilDome;
+    if (dome.domeAlpha > 0.01) {
+      const domeCx = this.totalWorldWidth / 2;
+      const domeCy = this.groundY + 40;
+      const domeRx = this.totalWorldWidth * 0.44;
+      const domeRy = Math.max(220, this.groundY - 20);
+      const segments = 24;
+      for (let s = 0; s < segments; s++) {
+        // When edgeGaps is true (<50 strength), skip periodic segments near the edges
+        if (dome.edgeGaps && (s === 2 || s === 5 || s === 18 || s === 21)) continue;
+        const a0 = Math.PI + (s / segments) * Math.PI;
+        const a1 = Math.PI + ((s + 1) / segments) * Math.PI;
+        const x0 = domeCx + Math.cos(a0) * domeRx;
+        const y0 = domeCy + Math.sin(a0) * domeRy;
+        const x1 = domeCx + Math.cos(a1) * domeRx;
+        const y1 = domeCy + Math.sin(a1) * domeRy;
+        lg.moveTo(x0, y0).lineTo(x1, y1).stroke({
+          color: 0x7de2d1,
+          width: dome.paidRippleActive ? 2.5 : 1.5,
+          alpha: dome.domeAlpha
+        });
+      }
+      if (dome.paidRippleActive) {
+        const rProg = paidRippleProgress;
+        lg.ellipse(domeCx, this.groundY - 80, domeRx * (0.4 + 0.6 * rProg), domeRy * (0.3 + 0.5 * rProg)).stroke({
+          color: 0xaef6e8,
+          width: 2,
+          alpha: (1 - rProg) * 0.6
+        });
+      }
+    }
+
+    // Flickering violet tears along the top of the sky when Veil < 20
+    for (const tear of dome.tears) {
+      lg.poly([
+        tear.x - tear.width / 2, tear.y,
+        tear.x, tear.y - tear.height / 2,
+        tear.x + tear.width / 2, tear.y,
+        tear.x, tear.y + tear.height / 2
+      ]).fill({ color: 0x9c4dcc, alpha: tear.alpha * 0.85 });
+      lg.moveTo(tear.x - tear.width / 2, tear.y)
+        .lineTo(tear.x + tear.width / 2, tear.y)
+        .stroke({ color: 0xe6b8ff, width: 1.5, alpha: tear.alpha });
+    }
+
+    // Faint teal ward circles only when Hazards / Wards lens is on
+    if (dome.showWardCircles) {
+      for (const wc of dome.wardCircles) {
+        lg.circle(wc.x, wc.y, wc.radius).stroke({ color: 0x4dd0e1, width: 1.5, alpha: 0.65 });
+        lg.circle(wc.x, wc.y, wc.radius - 4).stroke({ color: 0x80deea, width: 1, alpha: 0.35 });
+      }
+    }
+  }
+
+  /** Draw persistent hazard vignettes, active visual event vignettes, and the Entrance Hall Messenger Owl. */
+  renderEventVignettes() {
+    const g = this.eventVignetteGraphics;
+    g.clear();
+    if (!this.state) return;
+    const reduceMotion = !!this.state.settings.reduceMotion;
+
+    // 1. Active room hazard vignettes
+    const hazards = getActiveHazardVignettes(this.state);
+    for (const h of hazards) {
+      const room = this.state.rooms.find(r => r.id === h.roomId);
+      if (!room) continue;
+      const box = roomToWorldBox(room, this.groundY);
+      drawHazardVignette(g, h, box, this.clockMs, reduceMotion);
+    }
+
+    // 2. Active one-shot visual event vignettes
+    for (const fx of this.eventDispatcher.getActiveEffects()) {
+      const room = this.state.rooms.find(r => r.id === fx.roomId)
+        || this.state.rooms.find(r => r.defId === 'entrance_hall');
+      if (!room) continue;
+      const box = roomToWorldBox(room, this.groundY);
+      const progress = Math.max(0, Math.min(1, (this.clockMs - fx.startMs) / Math.max(1, fx.durationMs)));
+      drawVisualEventVignette(g, fx, box, progress, reduceMotion);
+    }
+
+    // 3. Messenger Owl perched on the Entrance Hall roof whenever state.activeEvents.length > 0
+    this.messengerOwl = computeMessengerOwlState(this.state, this.groundY);
+    if (this.messengerOwl.visible) {
+      drawMessengerOwl(g, this.messengerOwl, this.clockMs, reduceMotion);
+    }
+  }
+
+  /** Hit-test the Entrance Hall roof Messenger Owl for opening activeEventModal. */
+  hitTestMessengerOwl(screenX: number, screenY: number): { eventId: string } | null {
+    if (!this.state || !this.messengerOwl.visible || !this.messengerOwl.eventId) return null;
+    const worldX = (screenX - this.worldContainer.x) / this.camera.zoom;
+    const worldY = (screenY - this.worldContainer.y) / this.camera.zoom;
+    const ox = this.messengerOwl.x;
+    const oy = this.messengerOwl.y;
+    if (worldX >= ox - 12 && worldX <= ox + 12 && worldY >= oy - 16 && worldY <= oy + 6) {
+      return { eventId: this.messengerOwl.eventId };
+    }
+    return null;
   }
 
   /** Redraw the cosmetic ambient layer for an animation frame (0..3); still groups stay on frame 0. */
@@ -872,6 +1146,16 @@ export class VisualWorld {
     this.choreographer.tick(gap, this.state, reduceMotion, nowMs);
     this.creatureChoreographer.tick(gap, this.state, reduceMotion, this.choreographer.agents, nowMs);
 
+    // Detect meal window transition in Choreographer (debounced in eventDispatcher to 1 per 5 min)
+    const curPhase = this.choreographer.schedulePhase;
+    if (curPhase === 'meal' && this.prevSchedulePhase !== 'meal') {
+      this.eventDispatcher.notifyMealWindow(this.state, this.clockMs);
+    }
+    this.prevSchedulePhase = curPhase;
+
+    // Advance V5 visual event queue
+    this.eventDispatcher.tick(this.clockMs);
+
     // Animated Rift Gate portal surface & 1.5s return flare
     this.riftGraphics.clear();
     const builtRift = this.state.rooms.find(r => r.defId === 'rift_gate' && r.state === 'built');
@@ -893,6 +1177,8 @@ export class VisualWorld {
     // Fixed-rate ambience + one-shot effects (cosmetic only)
     this.renderAmbient(this.ambientFrameFor(reduceMotion));
     this.renderEffects(reduceMotion);
+    this.renderAtmosphereAndLighting();
+    this.renderEventVignettes();
 
     // Draw characters & creatures sorted by baseline y
     this.agentsGraphics.clear();
