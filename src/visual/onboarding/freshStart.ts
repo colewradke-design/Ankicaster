@@ -233,6 +233,7 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
       showHazardsLens: false
     },
     rooms: initialRooms,
+    shelvedRooms: [],
     characters: [],
     cardSets: [],
     allCards: mockCards,

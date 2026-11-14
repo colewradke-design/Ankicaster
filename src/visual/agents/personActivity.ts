@@ -78,6 +78,9 @@ export function describePersonActivity(
 ): string {
   const findRoom = (id: number | undefined): PlacedRoom | undefined =>
     id != null ? state.rooms.find(r => r.id === id) : undefined;
+  const findShelved = (id: number | undefined): PlacedRoom | undefined =>
+    id != null ? (state.shelvedRooms || []).find(r => r.id === id) : undefined;
+  const hasBuiltEH = state.rooms.some(r => r.defId === 'entrance_hall' && r.state === 'built' && r.y === 0);
 
   // 1. Away (e.g. Rift expedition)
   if (person !== 'wizard' && person.status === 'away') {
@@ -115,8 +118,13 @@ export function describePersonActivity(
 
   // 4. Headmaster
   if (person === 'wizard') {
+    const shelvedStudy = (state.shelvedRooms || []).find(r => r.defId === 'wizard_study');
     if (agent) {
       const room = findRoom(agent.currentRoomId ?? agent.targetRoomId);
+      if (!hasBuiltEH && !room) return 'Waiting on the front path while rooms are arranged.';
+      if (shelvedStudy && room?.defId === 'entrance_hall' && (state.wizard.activeSession?.state === 'active' || agent.wizardErrand === 'ponder')) {
+        return `Waiting in the Entrance Hall for the ${roomDisplayName(shelvedStudy)}.`;
+      }
       if (agent.wizardErrand === 'ponder') return 'Pondering the orb.';
       if (agent.activity === 'class' || agent.wizardErrand === 'teach') {
         const period = periodFromBlockKey(agent.lastBlockKey) ?? (block.kind === 'period' ? block.period : undefined);
@@ -135,6 +143,10 @@ export function describePersonActivity(
           : `Chatting in the ${roomDisplayName(room)}.`;
       }
       return describeFreeTime(room, agent.anim);
+    }
+
+    if (!hasBuiltEH && state.rooms.length === 0) {
+      return 'Waiting on the front path while rooms are arranged.';
     }
 
     // Fallback when no VisualAgent is mounted
@@ -157,22 +169,37 @@ export function describePersonActivity(
       return fq ? `Sleeping in the ${roomDisplayName(fq)}.` : 'Sleeping for the night.';
     }
     if (state.wizard.activeSession?.kind === 'orb' && state.wizard.activeSession.state === 'active') {
+      if (shelvedStudy) {
+        return hasBuiltEH
+          ? `Waiting in the Entrance Hall for the ${roomDisplayName(shelvedStudy)}.`
+          : 'Waiting on the front path while rooms are arranged.';
+      }
       return 'Pondering the orb.';
     }
     const study = findRoom(state.wizard.presenceRoomId)
       ?? state.rooms.find(r => r.state === 'built' && r.defId === 'wizard_study');
+    if (!study && !hasBuiltEH) return 'Waiting on the front path while rooms are arranged.';
     return describeFreeTime(study, 'idle');
   }
 
   // 5. Character with live VisualAgent
   if (agent) {
     const room = findRoom(agent.currentRoomId ?? agent.targetRoomId);
+    if (!hasBuiltEH && !room) {
+      return 'Waiting on the front path while rooms are arranged.';
+    }
     if (agent.activity === 'class') {
       const period =
         periodFromBlockKey(agent.lastBlockKey) ??
         (block.kind === 'period' ? block.period : person.period);
       if (person.status === 'student') {
         const cls = room ?? findRoom(person.classRoomId);
+        const shelvedCls = findShelved(person.classRoomId);
+        if (shelvedCls && (!room || room.defId === 'entrance_hall')) {
+          return hasBuiltEH
+            ? `Waiting in the Entrance Hall for the ${roomDisplayName(shelvedCls)}.`
+            : 'Waiting on the front path while rooms are arranged.';
+        }
         if (cls) {
           return `In class${period ? `, period ${period}` : ''}, at a desk in the ${roomDisplayName(cls)}.`;
         }
@@ -180,6 +207,12 @@ export function describePersonActivity(
       }
       if (person.career === 'teacher') {
         const cls = room ?? findRoom(person.workplaceRoomId);
+        const shelvedCls = findShelved(person.workplaceRoomId);
+        if (shelvedCls && (!room || room.defId === 'entrance_hall')) {
+          return hasBuiltEH
+            ? `Waiting in the Entrance Hall for the ${roomDisplayName(shelvedCls)}.`
+            : 'Waiting on the front path while rooms are arranged.';
+        }
         if (cls) {
           return `Teaching the ${roomDisplayName(cls)}${period ? `, period ${period}` : ''}.`;
         }
@@ -188,6 +221,12 @@ export function describePersonActivity(
     }
     if (agent.activity === 'work') {
       const workRoom = room ?? findRoom(person.workplaceRoomId);
+      const shelvedWp = findShelved(person.workplaceRoomId);
+      if (shelvedWp && (!room || room.defId === 'entrance_hall')) {
+        return hasBuiltEH
+          ? `Waiting in the Entrance Hall for the ${roomDisplayName(shelvedWp)}.`
+          : 'Waiting on the front path while rooms are arranged.';
+      }
       if (person.career === 'teacher' && workRoom && classroomSchool(workRoom.defId)) {
         const period =
           periodFromBlockKey(agent.lastBlockKey) ??
@@ -201,6 +240,12 @@ export function describePersonActivity(
     }
     if (agent.activity === 'sleep') {
       const sleepRoom = room ?? findRoom(person.bedRoomId);
+      const shelvedBed = findShelved(person.bedRoomId);
+      if (shelvedBed && (!room || room.defId === 'entrance_hall')) {
+        return hasBuiltEH
+          ? `Waiting in the Entrance Hall for the ${roomDisplayName(shelvedBed)}.`
+          : 'Waiting on the front path while rooms are arranged.';
+      }
       return sleepRoom ? `Sleeping in the ${roomDisplayName(sleepRoom)}.` : 'Sleeping for the night.';
     }
     if ((agent.talkingRemainingMs ?? 0) > 0 && room) {
@@ -220,15 +265,33 @@ export function describePersonActivity(
         const cls = findRoom(stuAssign.classRoomId);
         if (cls) return `In class, period ${block.period}, at a desk in the ${roomDisplayName(cls)}.`;
       }
+      const shelvedCls = findShelved(person.classRoomId);
+      if (shelvedCls) {
+        return hasBuiltEH
+          ? `Waiting in the Entrance Hall for the ${roomDisplayName(shelvedCls)}.`
+          : 'Waiting on the front path while rooms are arranged.';
+      }
     } else if (person.career === 'teacher' && person.careerState === 'active') {
       const tAssign = schedule.teacherAssignments.get(person.id);
       if (tAssign && tAssign.periods.includes(block.period)) {
         const cls = findRoom(tAssign.classRoomId);
         if (cls) return `Teaching the ${roomDisplayName(cls)}, period ${block.period}.`;
       }
+      const shelvedWp = findShelved(person.workplaceRoomId);
+      if (shelvedWp) {
+        return hasBuiltEH
+          ? `Waiting in the Entrance Hall for the ${roomDisplayName(shelvedWp)}.`
+          : 'Waiting on the front path while rooms are arranged.';
+      }
     } else if (person.career && person.careerState === 'active') {
       const wp = findRoom(person.workplaceRoomId);
       if (wp && wp.state === 'built') return `Working in the ${roomDisplayName(wp)}.`;
+      const shelvedWp = findShelved(person.workplaceRoomId);
+      if (shelvedWp) {
+        return hasBuiltEH
+          ? `Waiting in the Entrance Hall for the ${roomDisplayName(shelvedWp)}.`
+          : 'Waiting on the front path while rooms are arranged.';
+      }
     }
   }
   if (block.kind === 'meal') {
@@ -238,11 +301,19 @@ export function describePersonActivity(
   }
   if (block.kind === 'night') {
     const bedRoom = findRoom(person.bedRoomId);
-    return bedRoom ? `Sleeping in the ${roomDisplayName(bedRoom)}.` : 'Sleeping for the night.';
+    if (bedRoom) return `Sleeping in the ${roomDisplayName(bedRoom)}.`;
+    const shelvedBed = findShelved(person.bedRoomId);
+    if (shelvedBed) {
+      return hasBuiltEH
+        ? `Waiting in the Entrance Hall for the ${roomDisplayName(shelvedBed)}.`
+        : 'Waiting on the front path while rooms are arranged.';
+    }
+    return 'Sleeping for the night.';
   }
   const idleRoom =
     findRoom(person.bedRoomId) ??
     state.rooms.find(r => r.state === 'built' && r.defId === 'common_room') ??
     state.rooms.find(r => r.state === 'built' && r.defId === 'entrance_hall');
+  if (!idleRoom && !hasBuiltEH) return 'Waiting on the front path while rooms are arranged.';
   return describeFreeTime(idleRoom, 'idle');
 }

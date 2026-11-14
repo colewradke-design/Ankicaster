@@ -383,6 +383,8 @@ export interface CreatureInstance {
   returnStatus?: 'wary' | 'tamed';
   /** Resources hidden by escape trouble. Returned on recapture. */
   stashed?: Record<string, number>;
+  /** Adventurer character id this tamed creature is paired with for Rift expeditions. */
+  adventurerId?: number;
 }
 
 export interface PotionRecipe {
@@ -622,6 +624,8 @@ export interface FullGameState {
   resources: ResourceInventory;
   settings: GameSettings;
   rooms: PlacedRoom[];
+  /** Rooms currently held on the Build mode shelf (pause simulation/support, keep identity & occupants). */
+  shelvedRooms?: PlacedRoom[];
   characters: Character[];
   cardSets: CardSet[];
   allCards: Record<number, AnkiCardSnapshot>;

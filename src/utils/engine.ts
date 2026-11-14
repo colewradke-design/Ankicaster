@@ -36,6 +36,7 @@ import {
   countRoomsOfType,
   newlyCutOffRooms,
   newlyUnsupportedRooms,
+  stairMoveWarnings,
   placementCharge,
   defaultSpent,
   demolishRefund,
@@ -80,7 +81,7 @@ import {
   BellNote, commitBell, ensureLedger, glassworksConversion, logResourceChange, logResourceDiff,
   resourceSnapshot, storageCap as storageCapOf, weavingOutput
 } from './resourceReport';
-import { penAcceptedHabitats, resolveAllCreatureRooms, syncDiscoveredCreatures } from './creatures';
+import { getPenOccupants, penAcceptedHabitats, resolveAllCreatureRooms, syncDiscoveredCreatures } from './creatures';
 import {
   bestBuffScale,
   billCreatureMeals,
@@ -88,6 +89,7 @@ import {
   outputMalusFactor,
   processEscapes,
   recaptureCreature,
+  startCapture,
   tickCaptures,
   MANUAL_FEED_BOND
 } from './creatureCare';
@@ -277,7 +279,7 @@ export class AnkicasterEngine {
 
     // Recalculate skill for students/faculty linked to this card
     const ehRoom = next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || next.rooms[0];
-    const studyRoom = next.rooms.find(r => r.defId === 'wizard_study' && r.state === 'built') || ehRoom;
+    const studyRoom = next.rooms.find(r => r.defId === 'wizard_study' && r.state === 'built');
     for (const char of next.characters) {
       if (char.studySetId) {
         const studySet = next.cardSets.find(s => s.id === char.studySetId);
@@ -308,9 +310,9 @@ export class AnkicasterEngine {
       }
     }
 
-    // 3. Advance Wizard Active Training Session (BR-06, BR-07)
-    if (next.wizard.activeSession && next.wizard.activeSession.state === 'active') {
-      const ponderPct = studyRoom && !isRoomUnfinished(studyRoom)
+    // 3. Advance Wizard Active Training Session (BR-06, BR-07) — paused if Wizard's Study is shelved
+    if (next.wizard.activeSession && next.wizard.activeSession.state === 'active' && studyRoom) {
+      const ponderPct = !isRoomUnfinished(studyRoom)
         ? academyFurnitureEffect(next.rooms, 'ponder_pct', studyRoom)
         : 0;
       const ponderStep = ponderPct > 0 ? Math.round((1 + ponderPct / 100) * 100) / 100 : 1;
@@ -686,6 +688,7 @@ export class AnkicasterEngine {
    */
   static syncWorkplaces(state: FullGameState, avoidRoomByCharId?: Map<number, number>): void {
     if (!state.characters || !state.rooms) return;
+    const shelvedIds = new Set((state.shelvedRooms || []).map(r => r.id));
     for (const c of state.characters) {
       if (!c.career) {
         c.workplaceRoomId = undefined;
@@ -694,6 +697,7 @@ export class AnkicasterEngine {
       if (c.careerState === 'sabbatical') continue;
       // Teacher workplaces are managed by applyAcademyScheduleToState below
       if (c.career === 'teacher') continue;
+      if (c.workplaceRoomId != null && shelvedIds.has(c.workplaceRoomId)) continue;
       const avoidId = avoidRoomByCharId?.get(c.id);
       const current = c.workplaceRoomId != null ? state.rooms.find(r => r.id === c.workplaceRoomId) : undefined;
       const wp = current ? ROOM_DEFINITIONS[current.defId]?.workplace : undefined;
@@ -727,6 +731,7 @@ export class AnkicasterEngine {
       };
       for (const c of state.characters) {
         if (c.status === 'away') continue;
+        if (c.bedRoomId != null && shelvedIds.has(c.bedRoomId)) continue;
         const currentBed = c.bedRoomId != null ? state.rooms.find(r => r.id === c.bedRoomId && r.state === 'built') : undefined;
         if (c.bedRoomId != null && currentBed) continue;
         const allowedDefs = c.status === 'faculty'
@@ -1822,6 +1827,7 @@ export class AnkicasterEngine {
     next.characters.splice(charIndex, 1);
     for (const cr of next.creatures) {
       if (cr.tamerId === char.id) cr.tamerId = undefined;
+      if (cr.adventurerId === char.id) cr.adventurerId = undefined;
     }
     AnkicasterEngine.grantRiftGate(next);
 
@@ -2653,8 +2659,8 @@ export class AnkicasterEngine {
     }
     const placeArea = area ?? def.area;
 
-    // Per-room limits (content maxCount; sites count)
-    const limit = roomLimitStatus(state.rooms, defId);
+    // Per-room limits (content maxCount; sites and shelved rooms count)
+    const limit = roomLimitStatus(state.rooms, defId, undefined, state.shelvedRooms || []);
     if (limit.capped) return { state, success: false, error: `${limit.reason}.` };
 
     // Materials only. Mana is not a build cost.
@@ -2695,7 +2701,11 @@ export class AnkicasterEngine {
     }
     logResourceDiff(next, beforeRes, `Built ${def.name}`);
 
-    const roomId = Math.max(Date.now(), ...next.rooms.map(r => r.id + 1));
+    const roomId = Math.max(
+      Date.now(),
+      ...next.rooms.map(r => r.id + 1),
+      ...(next.shelvedRooms || []).map(r => r.id + 1)
+    );
     const buildReq = def.buildReviews;
     const isInstant = buildReq === 0;
 
@@ -2758,14 +2768,19 @@ export class AnkicasterEngine {
     return { state: next, success: true, roomId, warnings };
   }
 
-  /** Why a room can't be moved or demolished right now (undefined = allowed). */
-  static roomActionBlock(state: FullGameState, roomId: number, action: 'move' | 'demolish'): string | undefined {
+  /** Why a room can't be moved, shelved, or demolished right now (undefined = allowed). */
+  static roomActionBlock(state: FullGameState, roomId: number, action: 'move' | 'demolish' | 'shelve'): string | undefined {
     const room = state.rooms.find(r => r.id === roomId);
     if (!room) return 'Room not found.';
     const def = ROOM_DEFINITIONS[room.defId];
     if (room.hazard) return `Dispel the ${room.hazard.name || 'hazard'} first`;
     if (action === 'demolish' && def?.noDemolish && countRoomsOfType(state.rooms, room.defId, room.id) === 0) {
       return `The ${def.name} can't be demolished`;
+    }
+    if (action === 'shelve') {
+      const after = state.rooms.filter(r => r.id !== roomId);
+      const unsupported = newlyUnsupportedRooms(state.rooms, after);
+      if (unsupported.length) return `${roomDisplayName(unsupported[0])} above needs it for support`;
     }
     if (action === 'demolish') {
       const after = state.rooms.filter(r => r.id !== roomId);
@@ -2777,7 +2792,7 @@ export class AnkicasterEngine {
     return undefined;
   }
 
-  /** Validate moving a room to (x, y): same rules as placement, plus nothing else may lose support or connection. */
+  /** Validate moving a room to (x, y): same rules as placement, nothing may lose support; cut-offs & unstacked stairs warn instead of blocking. */
   static validateMove(state: FullGameState, roomId: number, x: number, y: number): PlacementCheck {
     const room = state.rooms.find(r => r.id === roomId);
     if (!room) return { valid: false, errors: ['Room not found.'], warnings: [] };
@@ -2785,18 +2800,21 @@ export class AnkicasterEngine {
     if (block) return { valid: false, errors: [block], warnings: [] };
     const ny = room.area === 'grounds' ? 0 : y;
     if (room.x === x && room.y === ny) return { valid: false, errors: ['Already here'], warnings: [] };
-    const check = validatePlacement(state, room.defId, room.area, x, ny, roomId);
+    const check = validatePlacement(state, room.defId, room.area, x, ny, roomId, room.level || 1);
     if (!check.valid) return check;
     const after = state.rooms.map(r => (r.id === roomId ? { ...r, x, y: ny } : r));
     const unsupported = newlyUnsupportedRooms(state.rooms, after);
     if (unsupported.length) {
       return { valid: false, errors: [`${roomDisplayName(unsupported[0])} above needs it for support`], warnings: [] };
     }
+    const warnings = [...check.warnings];
     const cut = newlyCutOffRooms(state.rooms, after).filter(r => r.id !== roomId);
     if (cut.length) {
-      return { valid: false, errors: [`It would cut ${roomDisplayName(cut[0])} off from the Entrance Hall`], warnings: [] };
+      const names = cut.map(r => roomDisplayName(r)).join(', ');
+      warnings.push(`Cuts off ${names}: Unreachable, runs at 0% until linked.`);
     }
-    return check;
+    warnings.push(...stairMoveWarnings(state.rooms, after, room));
+    return { valid: true, errors: [], warnings };
   }
 
   /**
@@ -2823,6 +2841,96 @@ export class AnkicasterEngine {
       data: { roomId }
     });
     return { state: next, success: true, warnings: check.warnings };
+  }
+
+  /** Pick up a built room or construction site onto the Build mode shelf (no refund; preserves state & occupants). */
+  static shelveRoom(
+    state: FullGameState,
+    roomId: number
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const block = AnkicasterEngine.roomActionBlock(state, roomId, 'shelve');
+    if (block) return { state, success: false, error: block };
+
+    const next = structuredClone(state);
+    const idx = next.rooms.findIndex(r => r.id === roomId);
+    if (idx === -1) return { state, success: false, error: 'Room not found.' };
+    const room = next.rooms[idx];
+
+    // Anchor auto-resolved non-roaming pen creatures to this room before lifting it off the map
+    const penOccupants = getPenOccupants({ creatures: next.creatures, rooms: next.rooms }, room);
+    for (const occ of penOccupants) {
+      occ.roomId = room.id;
+    }
+
+    next.rooms.splice(idx, 1);
+    next.shelvedRooms = [...(next.shelvedRooms || []), room];
+    AnkicasterEngine.syncWorkplaces(next);
+    return { state: next, success: true };
+  }
+
+  /** Validate placing a room back from the Build mode shelf at (x, y). */
+  static validateShelvedDrop(state: FullGameState, roomId: number, x: number, y: number): PlacementCheck {
+    const room = (state.shelvedRooms || []).find(r => r.id === roomId);
+    if (!room) return { valid: false, errors: ['Room not on shelf.'], warnings: [] };
+    const ny = room.area === 'grounds' ? 0 : y;
+    return validatePlacement(state, room.defId, room.area, x, ny, roomId, room.level || 1);
+  }
+
+  /** Place a room from the Build mode shelf back onto the castle or grounds. */
+  static placeShelvedRoom(
+    state: FullGameState,
+    roomId: number,
+    x: number,
+    y: number
+  ): { state: FullGameState; success: boolean; error?: string; warnings?: string[] } {
+    const check = AnkicasterEngine.validateShelvedDrop(state, roomId, x, y);
+    if (!check.valid) return { state, success: false, error: check.errors[0] };
+
+    const next = structuredClone(state);
+    const shelf = next.shelvedRooms || [];
+    const idx = shelf.findIndex(r => r.id === roomId);
+    if (idx === -1) return { state, success: false, error: 'Room not on shelf.' };
+    const [room] = shelf.splice(idx, 1);
+    next.shelvedRooms = shelf;
+    room.x = x;
+    room.y = room.area === 'grounds' ? 0 : y;
+    next.rooms.push(room);
+    AnkicasterEngine.syncWorkplaces(next);
+    next.notices.push({
+      id: `unshelve-${roomId}-${Date.now()}`,
+      time: Date.now(),
+      type: 'construction',
+      text: `Placed ${roomDisplayName(room)} at ${room.area === 'castle' ? `Floor ${room.y}, column ${room.x}` : `plot ${room.x}`}.`,
+      data: { roomId }
+    });
+    return { state: next, success: true, warnings: check.warnings };
+  }
+
+  /**
+   * Called when leaving Build mode. Any non-roaming wary/tamed creatures whose pen is still on
+   * the shelf break loose into the academy and trigger recapture.
+   */
+  static closeBuildMode(state: FullGameState): { state: FullGameState; releasedCount: number } {
+    const shelvedPens = (state.shelvedRooms || []).filter(r => penAcceptedHabitats(r.defId).length > 0);
+    if (shelvedPens.length === 0) return { state, releasedCount: 0 };
+    const penIds = new Set(shelvedPens.map(r => r.id));
+
+    const next = structuredClone(state);
+    const notifications: string[] = [];
+    let releasedCount = 0;
+
+    for (const c of next.creatures || []) {
+      if (c.roomId === undefined || !penIds.has(c.roomId)) continue;
+      if (c.status !== 'wary' && c.status !== 'tamed') continue;
+      if (CREATURE_DEFINITIONS[c.defId]?.roamsFreely) continue;
+      c.returnStatus = c.status;
+      c.status = 'loose';
+      startCapture(next, c, notifications);
+      releasedCount += 1;
+    }
+
+    if (releasedCount === 0) return { state, releasedCount: 0 };
+    return { state: next, releasedCount };
   }
 
   /** Preview of what demolishing returns (for the confirm dialog). */
@@ -2955,6 +3063,11 @@ export class AnkicasterEngine {
     }
     if (Array.isArray(out.rooms)) {
       out.rooms = out.rooms.map((r: PlacedRoom) => (r && !r.spent ? { ...r, spent: defaultSpent(r) } : r));
+    }
+    if (!Array.isArray(out.shelvedRooms)) {
+      out.shelvedRooms = [];
+    } else {
+      out.shelvedRooms = out.shelvedRooms.map((r: PlacedRoom) => (r && !r.spent ? { ...r, spent: defaultSpent(r) } : r));
     }
     if (out.furnitureInventory === undefined && out.rooms) out.furnitureInventory = {};
     // One-time migration for saves from before required fixtures were enforced: fill any empty
@@ -3577,6 +3690,11 @@ export class AnkicasterEngine {
     } else if (previousCareer !== career) {
       char.workplaceRoomId = undefined;
     }
+    if (previousCareer === 'adventurer' && career !== 'adventurer') {
+      for (const cr of next.creatures) {
+        if (cr.adventurerId === char.id) cr.adventurerId = undefined;
+      }
+    }
     AnkicasterEngine.syncWorkplaces(next);
     char.chronicle.push({
       day: next.day,
@@ -4090,6 +4208,27 @@ export class AnkicasterEngine {
     if (!creature) return { state, success: false };
 
     creature.tamerId = tamerId;
+    return { state: next, success: true };
+  }
+
+  /**
+   * Pair (or unpair) a creature with an adventurer for Rift expeditions.
+   */
+  static assignCreatureToAdventurer(
+    state: FullGameState,
+    creatureId: number,
+    adventurerId?: number
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const next = structuredClone(state);
+    const creature = next.creatures.find(c => c.id === creatureId);
+    if (!creature) return { state, success: false, error: 'Creature not found.' };
+    if (adventurerId === undefined) {
+      creature.adventurerId = undefined;
+      return { state: next, success: true };
+    }
+    const adv = next.characters.find(c => c.id === adventurerId && c.career === 'adventurer');
+    if (!adv) return { state, success: false, error: 'Adventurer not found.' };
+    creature.adventurerId = adv.id;
     return { state: next, success: true };
   }
 

@@ -246,6 +246,8 @@ export interface RoomWindowProps {
   onRemoveFurniture: (roomId: number, furnitureId: number) => void;
   /** Open the PersonCard for a resident, staff member, or Headmaster. */
   onOpenPerson?: (personId: 'wizard' | number) => void;
+  /** Open the CreatureCard for a pen occupant. */
+  onOpenCreature?: (creatureId: number) => void;
   /** Assign or replace a staff member in this room's workplace. */
   onAssignStaff?: (roomId: number, charId: number, replaceCharId?: number) => void;
   /** Clear a staff member from this room (returns them to auto placement). */
@@ -284,6 +286,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
   onAddFurniture,
   onRemoveFurniture,
   onOpenPerson,
+  onOpenCreature,
   onAssignStaff,
   onClearStaff,
   onMove,
@@ -1015,22 +1018,54 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                             data-testid="pen-occupant-card"
                             className="flex items-start gap-2.5 bg-slate-900/90 border border-slate-800 rounded-lg p-2.5 text-[12px]"
                           >
-                            <CreaturePortrait
-                              defId={c.defId}
-                              variant={c.status === 'egg' ? 'egg' : 'adult'}
-                              hatchProgress={c.hatchProgress}
-                              status={c.status}
-                              bondLevel={c.bondLevel}
-                              size={40}
-                            />
+                            {onOpenCreature ? (
+                              <button
+                                type="button"
+                                onClick={() => onOpenCreature(c.id)}
+                                data-testid={`pen-open-creature-${c.id}`}
+                                title={`Inspect ${c.nickname || cDef?.name || 'Creature'}`}
+                                className="shrink-0 rounded-lg border border-transparent hover:border-emerald-400/70 transition cursor-pointer"
+                              >
+                                <CreaturePortrait
+                                  defId={c.defId}
+                                  variant={c.status === 'egg' ? 'egg' : 'adult'}
+                                  hatchProgress={c.hatchProgress}
+                                  status={c.status}
+                                  bondLevel={c.bondLevel}
+                                  size={40}
+                                />
+                              </button>
+                            ) : (
+                              <CreaturePortrait
+                                defId={c.defId}
+                                variant={c.status === 'egg' ? 'egg' : 'adult'}
+                                hatchProgress={c.hatchProgress}
+                                status={c.status}
+                                bondLevel={c.bondLevel}
+                                size={40}
+                              />
+                            )}
                             <div className="flex-1 min-w-0 space-y-1">
                               <div className="flex items-center justify-between gap-2 flex-wrap">
-                                <span className="font-bold text-slate-100 truncate">
-                                  {c.nickname || cDef?.name || 'Creature'}
-                                  {cDef?.name && c.nickname !== cDef.name && (
-                                    <span className="font-normal text-slate-400"> ({cDef.name})</span>
-                                  )}
-                                </span>
+                                {onOpenCreature ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => onOpenCreature(c.id)}
+                                    className="font-bold text-slate-100 hover:text-amber-200 truncate text-left transition cursor-pointer"
+                                  >
+                                    {c.nickname || cDef?.name || 'Creature'}
+                                    {cDef?.name && c.nickname !== cDef.name && (
+                                      <span className="font-normal text-slate-400"> ({cDef.name})</span>
+                                    )}
+                                  </button>
+                                ) : (
+                                  <span className="font-bold text-slate-100 truncate">
+                                    {c.nickname || cDef?.name || 'Creature'}
+                                    {cDef?.name && c.nickname !== cDef.name && (
+                                      <span className="font-normal text-slate-400"> ({cDef.name})</span>
+                                    )}
+                                  </span>
+                                )}
                                 <div className="flex items-center gap-1">
                                   {c.hungry && (
                                     <span className="px-1.5 py-0.5 rounded bg-rose-500/20 border border-rose-500/40 text-rose-300 font-bold text-[11px]">

@@ -16,10 +16,13 @@ import type { DropTargetInput } from '../visual/layout/furniturePlacement';
 interface CastleGridProps {
   state: FullGameState;
   onSelectRoom: (room: PlacedRoom) => void;
+  onPickupRoom?: (roomId: number) => void;
   onSelectPerson?: (personId: 'wizard' | number) => void;
   onSelectCreature?: (creature: CreatureInstance) => void;
   onSelectEvent?: (eventId: string) => void;
   personActivityRef?: React.MutableRefObject<((personId: 'wizard' | number) => string) | null>;
+  creatureActivityRef?: React.MutableRefObject<((creatureId: number) => string) | null>;
+  buildModeOpen?: boolean;
   selectedRoomId?: number;
   onResolveHazard?: (roomId: number, method: 'warder' | 'spell') => void;
   placement?: PlacementMode | null;

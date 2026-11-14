@@ -293,18 +293,31 @@ export class CreatureChoreographer {
    * - Pen visibility caps: <= 3 in 1x1 pens, <= 5 in larger pens, <= 40 globally (never hiding egg or loose)
    * - Emits hatch / bond / recapture transitions
    */
-  syncState(state: FullGameState): void {
+  syncState(state: FullGameState, buildModeOpen = false): void {
     this.hiddenCounts.clear();
     this.wizardPawRooms.clear();
 
     const creatures = state.creatures || [];
     const rooms = state.rooms || [];
+    const shelvedIds = new Set((state.shelvedRooms || []).map(r => r.id));
     const topBound = this.topWorldBound(state);
     const resolutionMap = resolveAllCreatureRooms(creatures, rooms);
 
     // Priority sort: loose & eggs ALWAYS drawn first
     const prioritized = [...creatures]
-      .filter(c => c.status !== 'away')
+      .filter(c => {
+        if (c.status === 'away') return false;
+        if (
+          buildModeOpen &&
+          c.status !== 'loose' &&
+          !isRoamingCompanion(c) &&
+          c.roomId !== undefined &&
+          shelvedIds.has(c.roomId)
+        ) {
+          return false;
+        }
+        return true;
+      })
       .sort((a, b) => {
         const rank = (s: CreatureInstance['status']) => (s === 'loose' ? 0 : s === 'egg' ? 1 : 2);
         return rank(a.status) - rank(b.status) || a.id - b.id;

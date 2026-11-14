@@ -21,6 +21,8 @@ interface TopBarProps {
   state: FullGameState;
   onOpenScreen: (id: ScreenId) => void;
   onOpenRoom: (roomId: number) => void;
+  buildModeOpen?: boolean;
+  onToggleBuildMode?: () => void;
   /** Optional dev-only controls (never shown in Anki). */
   devControls?: React.ReactNode;
   forceAcademy?: boolean;
@@ -142,7 +144,15 @@ export const AcademyMenu: React.FC<{
   );
 };
 
-export const TopBar: React.FC<TopBarProps> = ({ state, onOpenScreen, onOpenRoom, devControls, forceAcademy }) => {
+export const TopBar: React.FC<TopBarProps> = ({
+  state,
+  onOpenScreen,
+  onOpenRoom,
+  buildModeOpen = false,
+  onToggleBuildMode,
+  devControls,
+  forceAcademy
+}) => {
   const { mana, veil } = state;
 
   const veilColor =
@@ -156,6 +166,7 @@ export const TopBar: React.FC<TopBarProps> = ({ state, onOpenScreen, onOpenRoom,
 
   const hazards = hazardRooms(state);
   const term = termLabel(state);
+  const shelvedCount = state.shelvedRooms?.length || 0;
 
   return (
     <header className="bg-slate-950/95 backdrop-blur border-b border-amber-900/30 text-amber-100 px-3 py-2 flex items-center justify-between gap-2 shadow-md select-none">
@@ -221,12 +232,26 @@ export const TopBar: React.FC<TopBarProps> = ({ state, onOpenScreen, onOpenRoom,
       <div className="flex items-center gap-2 shrink-0">
         {devControls}
         <button
-          onClick={() => onOpenScreen('build')}
-          className="flex items-center gap-1.5 px-3 py-1.5 min-h-[32px] rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 text-[13px] font-bold shadow border-b-2 border-amber-800 transition"
-          title="Plan a new room"
+          onClick={() => (onToggleBuildMode ? onToggleBuildMode() : onOpenScreen('build'))}
+          data-testid="top-build-btn"
+          aria-pressed={buildModeOpen}
+          className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[32px] rounded-lg text-[13px] font-bold shadow border-b-2 transition ${
+            buildModeOpen
+              ? 'bg-amber-400 text-slate-950 border-amber-600 ring-2 ring-amber-300/60'
+              : 'bg-amber-600 hover:bg-amber-500 text-slate-950 border-amber-800'
+          }`}
+          title={buildModeOpen ? 'Close Build mode' : 'Open Build mode & shelf'}
         >
           <Hammer className="w-4 h-4" />
-          Build
+          <span>Build</span>
+          {shelvedCount > 0 && (
+            <span
+              data-testid="build-shelf-count"
+              className="px-1.5 py-0.2 rounded bg-slate-950/85 text-amber-300 text-[11px] font-bold"
+            >
+              {shelvedCount}
+            </span>
+          )}
         </button>
         <AcademyMenu state={state} onOpenScreen={onOpenScreen} onOpenRoom={onOpenRoom} forceOpen={forceAcademy} />
         <button

@@ -43,6 +43,7 @@ import { hexToNum } from '../../utils/appearance';
 import { chooseBubble, drawBubble, bubbleLabel, BubbleKind, appearanceToLayers, drawPortraitSource, zoomAbout } from '../agents/doll';
 import { CAPPED_RESOURCES, resourceLabel, storageCap } from '../../utils/resourceReport';
 import { CreatureChoreographer, CreatureVisualAgent } from '../creatures/creatureChoreographer';
+import { describeCreatureActivity } from '../creatures/creatureActivity';
 import { drawCreature, drawCreatureArrival, drawCreatureBubble, creatureSize, tamingRingFraction, tamingRequirement } from '../creatures/creatureArt';
 import { drawRiftGateArch, getRiftGateVisualState, RIFT_RETURN_FLARE_MS } from '../rooms/riftGateArt';
 import { CREATURE_DEFINITIONS } from '../../data/content';
@@ -266,7 +267,7 @@ export class VisualWorld {
     }
   }
 
-  setSnapshot(state: FullGameState, selectedRoomId?: number) {
+  setSnapshot(state: FullGameState, selectedRoomId?: number, buildModeOpen = false) {
     this.state = state;
     this.selectedRoomId = selectedRoomId;
 
@@ -302,7 +303,7 @@ export class VisualWorld {
     this.choreographer.updateNavGraph(this.navGraph, this.groundY);
     this.choreographer.syncState(state, engineReach);
     this.creatureChoreographer.updateBounds(this.navGraph, this.groundY, this.totalWorldWidth);
-    this.creatureChoreographer.syncState(state);
+    this.creatureChoreographer.syncState(state, buildModeOpen);
 
     // V5 Diff-based Visual Event Dispatcher
     const spawned = this.eventDispatcher.ingestSnapshot(state, this.clockMs);
@@ -1509,6 +1510,13 @@ export class VisualWorld {
     return describePersonActivity(this.choreographer.agents.get(`char-${personId}`), char, this.state, nowMs);
   }
 
+  getCreatureActivity(creatureId: number): string {
+    if (!this.state) return '';
+    const creature = this.state.creatures.find(c => c.id === creatureId);
+    if (!creature) return '';
+    return describeCreatureActivity(this.creatureChoreographer.agents.get(creatureId), creature, this.state);
+  }
+
   hitTestCreature(screenX: number, screenY: number): CreatureVisualAgent | null {
     if (!this.state) return null;
     const worldX = (screenX - this.worldContainer.x) / this.camera.zoom;
@@ -1518,12 +1526,13 @@ export class VisualWorld {
     for (const cAgent of list) {
       if (cAgent.status === 'away') continue;
       const { w, h } = creatureSize(cAgent.defId);
+      const cy = cAgent.y + (cAgent.drawOffsetY ?? 0);
       const pad = 4;
       if (
         worldX >= cAgent.x - w / 2 - pad &&
         worldX <= cAgent.x + w / 2 + pad &&
-        worldY >= cAgent.y - h - pad &&
-        worldY <= cAgent.y + pad
+        worldY >= cy - h - pad &&
+        worldY <= cy + pad
       ) {
         return cAgent;
       }

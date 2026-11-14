@@ -18,7 +18,7 @@ export type FurnitureFootprintKind = 'bulk' | 'background';
 
 export const FURNITURE_SNAP_GRID = 4;
 export const WALL_BORDER_PX = 2;
-export const DOOR_GAP_PX = 10;
+export const DOOR_GAP_PX = 5;
 export const WIZARD_STAIR_KEEP_OUT = 18;
 export const PEN_EDGE_KEEP_OUT = 6;
 export const BULK_GAP_PX = 2;

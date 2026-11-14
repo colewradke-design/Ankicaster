@@ -423,7 +423,7 @@ function applyTrouble(
   return follow;
 }
 
-function startCapture(state: FullGameState, creature: CreatureInstance, notifications: string[]): void {
+export function startCapture(state: FullGameState, creature: CreatureInstance, notifications: string[]): void {
   const def = CREATURE_DEFINITIONS[creature.defId];
   const school = def?.school || 'nature';
   const catcher = pickCatcher(state, creature, school);

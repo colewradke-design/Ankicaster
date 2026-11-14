@@ -14,7 +14,7 @@
 import { FullGameState, Character, PlacedRoom, SchoolType } from '../../types/ankicaster';
 import { ROOM_DEFINITIONS } from '../../data/content';
 import { NavGraph, NavNode } from '../layout/navGraph';
-import { roomToWorldBox, getFloorLineY } from '../layout/gridToWorld';
+import { roomToWorldBox, getFloorLineY, castleCellToWorldX } from '../layout/gridToWorld';
 import {
   buildRoomAnchors,
   findBuilderSiteEdgeAnchor,
@@ -200,6 +200,13 @@ export class Choreographer {
     return this.roomAnchorsCache.get(roomId);
   }
 
+  private frontPathSpot(agentId: string): { x: number; y: number } {
+    const front = this.navGraph?.nodes?.get('path-front');
+    const baseX = front ? front.x : castleCellToWorldX(3) + 64;
+    const offset = ((hashAgentId(agentId) % 7) - 3) * 14;
+    return { x: baseX + offset, y: (Number.isFinite(this.groundY) ? this.groundY : 400) - 4 };
+  }
+
   private resettleAgentsForLayoutChange(state: FullGameState) {
     const sigs = new Map<number, string>();
     for (const r of state.rooms) sigs.set(r.id, `${r.area}:${r.x}:${r.y}`);
@@ -209,9 +216,13 @@ export class Choreographer {
     }
     this.roomSignatures = sigs;
     if (changed.size === 0) return;
-    const fallback = state.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || state.rooms[0];
+    const fallback =
+      state.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built' && this.isRoomReachable(r.id)) ||
+      state.rooms.find(r => r.state === 'built' && this.isRoomReachable(r.id));
     for (const agent of this.agents.values()) {
+      const missingCur = agent.currentRoomId !== undefined && !state.rooms.some(r => r.id === agent.currentRoomId);
       const hit =
+        missingCur ||
         (agent.currentRoomId !== undefined && changed.has(agent.currentRoomId)) ||
         (agent.targetRoomId !== undefined && changed.has(agent.targetRoomId));
       if (!hit) continue;
@@ -222,7 +233,15 @@ export class Choreographer {
       agent.targetAnchorId = undefined;
       agent.talkingRemainingMs = 0;
       agent.talkingWithId = undefined;
-      if (!room) continue;
+      if (!room) {
+        const spot = this.frontPathSpot(agent.id);
+        agent.x = agent.targetX = spot.x;
+        agent.y = agent.targetY = spot.y;
+        agent.currentFloor = agent.targetFloor = 0;
+        agent.currentRoomId = agent.targetRoomId = undefined;
+        agent.anim = 'idle';
+        continue;
+      }
       const set = this.anchorsFor(room.id, state);
       const anchor = set?.all[0];
       const box = roomToWorldBox(room, this.groundY);
@@ -243,9 +262,11 @@ export class Choreographer {
 
     // 1. Sync Wizard
     if (!this.agents.has('wizard')) {
-      const studyRoom = state.rooms.find(r => r.defId === 'wizard_study' && r.state === 'built');
-      let wx = 500;
-      let wy = this.groundY - 4;
+      const studyRoom = state.rooms.find(r => r.defId === 'wizard_study' && r.state === 'built')
+        || state.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built');
+      const frontSpot = this.frontPathSpot('wizard');
+      let wx = frontSpot.x;
+      let wy = frontSpot.y;
       let floor = 0;
       if (studyRoom) {
         const set = this.anchorsFor(studyRoom.id, state);
@@ -331,10 +352,11 @@ export class Choreographer {
       if (!this.agents.has(id)) {
         const ehRoom = state.rooms.find(r => r.state === 'built' && r.defId === 'entrance_hall');
         const spawnRoomId =
-          char.bedRoomId || char.seatRoomId || char.workplaceRoomId || ehRoom?.id || state.rooms[0]?.id;
-        const room = state.rooms.find(r => r.id === spawnRoomId && r.state === 'built') || ehRoom || state.rooms[0];
-        let sx = 400;
-        let sy = this.groundY - 4;
+          char.bedRoomId || char.seatRoomId || char.workplaceRoomId || ehRoom?.id;
+        const room = state.rooms.find(r => r.id === spawnRoomId && r.state === 'built') || ehRoom;
+        const frontSpot = this.frontPathSpot(id);
+        let sx = frontSpot.x;
+        let sy = frontSpot.y;
         let fl = 0;
         if (room) {
           const box = roomToWorldBox(room, this.groundY);
@@ -828,9 +850,11 @@ export class Choreographer {
     }
 
     // Final safety fallback to any built reachable room (e.g., entrance_hall)
-    if (!chosenRoomId || !this.isRoomReachable(chosenRoomId)) {
+    if (chosenRoomId === undefined || !this.isRoomReachable(chosenRoomId)) {
+      chosenRoomId = undefined;
+      chosenAnchor = undefined;
       const eh = state.rooms.find(r => r.state === 'built' && r.defId === 'entrance_hall' && this.isRoomReachable(r.id));
-      const any = eh || state.rooms.find(r => r.state === 'built' && this.isRoomReachable(r.id)) || state.rooms[0];
+      const any = eh || state.rooms.find(r => r.state === 'built' && this.isRoomReachable(r.id));
       if (any) {
         chosenRoomId = any.id;
         const set = this.anchorsFor(any.id, state);
@@ -861,8 +885,19 @@ export class Choreographer {
       agent.wizardErrand = desired.wizardErrand ?? (desired.activity === 'meal' ? 'meal' : desired.activity === 'class' ? 'teach' : 'wander');
     }
 
+    if (chosenRoomId === undefined) {
+      const spot = this.frontPathSpot(agent.id);
+      agent.currentRoomId = undefined;
+      agent.path = [];
+      agent.pathIndex = 0;
+      agent.x = agent.targetX = spot.x;
+      agent.y = agent.targetY = spot.y;
+      agent.currentFloor = agent.targetFloor = 0;
+      agent.anim = 'idle';
+      return prevTargetRoomId !== undefined || prevAnchorId !== undefined;
+    }
+
     if (
-      chosenRoomId !== undefined &&
       agent.currentRoomId === chosenRoomId &&
       prevAnchorId === chosenAnchor?.id &&
       agent.path.length === 0
@@ -871,21 +906,19 @@ export class Choreographer {
       return false;
     }
 
-    if (chosenRoomId !== undefined) {
-      if (reduceMotion) {
-        if (chosenAnchor) {
-          agent.x = chosenAnchor.x;
-          agent.y = chosenAnchor.y;
-          agent.currentFloor = chosenAnchor.floor;
-          agent.currentRoomId = chosenRoomId;
-          agent.path = [];
-          agent.pathIndex = 0;
-        } else {
-          this.routeToRoom(agent, state, chosenRoomId, chosenAnchor);
-        }
+    if (reduceMotion) {
+      if (chosenAnchor) {
+        agent.x = chosenAnchor.x;
+        agent.y = chosenAnchor.y;
+        agent.currentFloor = chosenAnchor.floor;
+        agent.currentRoomId = chosenRoomId;
+        agent.path = [];
+        agent.pathIndex = 0;
       } else {
         this.routeToRoom(agent, state, chosenRoomId, chosenAnchor);
       }
+    } else {
+      this.routeToRoom(agent, state, chosenRoomId, chosenAnchor);
     }
     return prevTargetRoomId !== chosenRoomId || prevAnchorId !== chosenAnchor?.id;
   }

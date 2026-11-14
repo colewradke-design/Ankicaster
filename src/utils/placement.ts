@@ -69,11 +69,16 @@ export function countRoomsOfType(rooms: PlacedRoom[], defId: string, ignoreRoomI
   return rooms.filter(r => r.defId === defId && r.id !== ignoreRoomId).length;
 }
 
-/** Per-room limit (content `maxCount`). Construction sites count. */
-export function roomLimitStatus(rooms: PlacedRoom[], defId: string, ignoreRoomId?: number) {
+/** Per-room limit (content `maxCount`). Construction sites and shelved rooms count. */
+export function roomLimitStatus(
+  rooms: PlacedRoom[],
+  defId: string,
+  ignoreRoomId?: number,
+  shelvedRooms: PlacedRoom[] = []
+) {
   const def = ROOM_DEFINITIONS[defId];
   const max = def?.maxCount;
-  const count = countRoomsOfType(rooms, defId, ignoreRoomId);
+  const count = countRoomsOfType(rooms, defId, ignoreRoomId) + countRoomsOfType(shelvedRooms, defId, ignoreRoomId);
   const capped = max !== undefined && count >= max;
   return {
     count,
@@ -93,7 +98,8 @@ export function validatePlacement(
   area: 'castle' | 'grounds',
   x: number,
   y: number,
-  ignoreRoomId?: number
+  ignoreRoomId?: number,
+  level: number = 1
 ): PlacementCheck {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -152,8 +158,9 @@ export function validatePlacement(
 
   // P4 connection: allowed, but the room shows Unreachable and runs at 0% until connected
   if (errors.length === 0 && area === 'castle') {
+    const probeLevel: 1 | 2 | 3 = level >= 3 ? 3 : level === 2 ? 2 : 1;
     const probe: PlacedRoom = {
-      id: -1, defId, x: fp.x, y: fp.y, w, h, area, level: 1, state: 'built',
+      id: -1, defId, x: fp.x, y: fp.y, w, h, area, level: probeLevel, state: 'built',
       buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {}, furniture: []
     };
     const reach = computeReachability([...others.map(o => (o.state === 'built' ? o : { ...o, state: 'built' as const })), probe]);
@@ -168,6 +175,29 @@ export function newlyCutOffRooms(before: PlacedRoom[], after: PlacedRoom[]): Pla
   const rb = computeReachability(before);
   const ra = computeReachability(after);
   return after.filter(r => rb.get(r.id)?.reachable && !ra.get(r.id)?.reachable);
+}
+
+/** Warn if moving a Level 1/2 stair/elevator off its vertical stack breaks links to stacked floors. */
+export function stairMoveWarnings(before: PlacedRoom[], after: PlacedRoom[], movedRoom: PlacedRoom): string[] {
+  if (movedRoom.defId !== 'spiral_stair' || (movedRoom.level || 1) >= 3) return [];
+  const prev = before.find(r => r.id === movedRoom.id);
+  const next = after.find(r => r.id === movedRoom.id);
+  if (!prev || !next) return [];
+  const isStacked = (a: PlacedRoom, b: PlacedRoom) =>
+    a.area === 'castle' && b.area === 'castle' && a.x === b.x && (a.y + a.h === b.y || b.y + b.h === a.y);
+  const lostFloors: number[] = [];
+  for (const other of before) {
+    if (other.id === movedRoom.id || other.defId !== 'spiral_stair') continue;
+    const afterOther = after.find(r => r.id === other.id);
+    if (!afterOther) continue;
+    if (isStacked(prev, other) && !isStacked(next, afterOther)) {
+      lostFloors.push(other.y);
+    }
+  }
+  if (lostFloors.length === 0) return [];
+  const floorList = [...new Set(lostFloors)].sort((a, b) => a - b).map(f => `Floor ${f}`).join(', ');
+  const label = (movedRoom.level || 1) >= 2 ? 'Magical Elevator' : 'Spiral Stair';
+  return [`${label} left its vertical stack and no longer links ${floorList}.`];
 }
 
 /** Rooms that are supported now but would lose support in `after` (P3). */

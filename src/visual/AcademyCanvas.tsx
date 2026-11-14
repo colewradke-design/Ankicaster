@@ -36,10 +36,11 @@ import {
 
 TextureStyle.defaultOptions.scaleMode = 'nearest';
 
-/** Build a new room, move an existing one, or place/move furniture with the ghost placement tool. */
+/** Build a new room, move an existing one, place from Build shelf, or place/move furniture with the ghost placement tool. */
 export type PlacementMode =
   | { kind: 'build'; defId: string }
   | { kind: 'move'; roomId: number }
+  | { kind: 'shelved'; roomId: number }
   | { kind: 'furniture_place'; roomId: number; furnitureId: number }
   | { kind: 'furniture_move'; roomId: number; furnitureId: number };
 
@@ -73,7 +74,10 @@ interface AcademyCanvasProps {
   onSelectCreature?: (creature: CreatureInstance) => void;
   onSelectEvent?: (eventId: string) => void;
   personActivityRef?: React.MutableRefObject<((personId: 'wizard' | number) => string) | null>;
+  creatureActivityRef?: React.MutableRefObject<((creatureId: number) => string) | null>;
   selectedRoomId?: number;
+  buildModeOpen?: boolean;
+  onPickupRoom?: (roomId: number) => void;
   onResolveHazard?: (roomId: number, method: 'warder' | 'spell') => void;
   placement?: PlacementMode | null;
   onPlacementConfirm?: (x: number, y: number) => void;
@@ -92,9 +96,10 @@ export function checkPlacementCandidate(state: FullGameState, mode: PlacementMod
     return { valid: false, errors: ['Point inside the room to place furniture'], warnings: [] };
   }
   if (mode.kind === 'move') return AnkicasterEngine.validateMove(state, mode.roomId, x, y);
+  if (mode.kind === 'shelved') return AnkicasterEngine.validateShelvedDrop(state, mode.roomId, x, y);
   const def = ROOM_DEFINITIONS[mode.defId];
   if (!def) return { valid: false, errors: ['Unknown room'], warnings: [] };
-  const limit = roomLimitStatus(state.rooms, mode.defId);
+  const limit = roomLimitStatus(state.rooms, mode.defId, undefined, state.shelvedRooms || []);
   if (limit.capped) return { valid: false, errors: [limit.reason || 'Limit reached'], warnings: [] };
   return validatePlacement(state, mode.defId, def.area, x, y);
 }
@@ -103,6 +108,10 @@ function placementFootprint(state: FullGameState, mode: PlacementMode) {
   if (mode.kind === 'furniture_place' || mode.kind === 'furniture_move') return null;
   if (mode.kind === 'move') {
     const r = state.rooms.find(rr => rr.id === mode.roomId);
+    return r ? { area: r.area, w: r.w, h: r.h, defId: r.defId, level: r.level } : null;
+  }
+  if (mode.kind === 'shelved') {
+    const r = (state.shelvedRooms || []).find(rr => rr.id === mode.roomId);
     return r ? { area: r.area, w: r.w, h: r.h, defId: r.defId, level: r.level } : null;
   }
   const def = ROOM_DEFINITIONS[mode.defId];
@@ -128,7 +137,10 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   onSelectCreature,
   onSelectEvent,
   personActivityRef,
+  creatureActivityRef,
   selectedRoomId,
+  buildModeOpen = false,
+  onPickupRoom,
   onResolveHazard,
   placement,
   onPlacementConfirm,
@@ -156,8 +168,8 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   placementRef.current = placement;
 
   // Latest props for the async Pixi init (the add-on hydrates the save while Pixi is starting)
-  const latestRef = useRef({ state, selectedRoomId });
-  latestRef.current = { state, selectedRoomId };
+  const latestRef = useRef({ state, selectedRoomId, buildModeOpen });
+  latestRef.current = { state, selectedRoomId, buildModeOpen };
   const focusRef = useRef<string | null>(null);
   focusRef.current = focusRoomDefId || null;
   const boxCbRef = useRef(onRoomScreenBox);
@@ -203,6 +215,9 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     worldRef.current = world;
     if (personActivityRef) {
       personActivityRef.current = id => worldRef.current?.getPersonActivity(id) ?? '';
+    }
+    if (creatureActivityRef) {
+      creatureActivityRef.current = id => worldRef.current?.getCreatureActivity(id) ?? '';
     }
     const unsubPreview = registerVisualPreviewListener((type, roomId) => {
       const targetId = roomId ?? latestRef.current.state.rooms.find(r => r.defId === 'entrance_hall')?.id ?? 1;
@@ -251,7 +266,7 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
       setCurrentZoom(world.camera.zoom);
 
       // Use the LATEST state: an add-on save may have loaded while Pixi was initialising
-      world.setSnapshot(latestRef.current.state, latestRef.current.selectedRoomId);
+      world.setSnapshot(latestRef.current.state, latestRef.current.selectedRoomId, !!latestRef.current.buildModeOpen);
 
       // One ticker. The listener is removed on unmount so a re-mount cannot stack another.
       // The frame is derived from performance.now() inside VisualWorld, and a focus return is clamped.
@@ -322,17 +337,18 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
       if (clockInterval) clearInterval(clockInterval);
       try { app.destroy(true); } catch { /* not initialised yet */ }
       if (personActivityRef) personActivityRef.current = null;
+      if (creatureActivityRef) creatureActivityRef.current = null;
       appRef.current = null;
       worldRef.current = null;
     };
   }, []);
 
-  // Update snapshot when state or selection changes
+  // Update snapshot when state, selection, or Build mode changes
   useEffect(() => {
     if (worldRef.current) {
-      worldRef.current.setSnapshot(state, selectedRoomId);
+      worldRef.current.setSnapshot(state, selectedRoomId, !!buildModeOpen);
     }
-  }, [state, selectedRoomId]);
+  }, [state, selectedRoomId, buildModeOpen]);
 
   // Placement mode: seed the ghost (auto spot for Build, target room/spot for Furniture), clear it when the mode ends
   const placementKey = placement
@@ -340,6 +356,8 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
       ? `b:${placement.defId}`
       : placement.kind === 'move'
       ? `m:${placement.roomId}`
+      : placement.kind === 'shelved'
+      ? `s:${placement.roomId}`
       : placement.kind === 'furniture_place'
       ? `fp:${placement.roomId}:${placement.furnitureId}`
       : `fm:${placement.roomId}:${placement.furnitureId}`
@@ -507,22 +525,28 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
       const rect = containerRef.current.getBoundingClientRect();
       const px = e.clientX - rect.left;
       const py = e.clientY - rect.top;
-      const owlHit = worldRef.current.hitTestMessengerOwl(px, py);
-      if (owlHit) {
-        setHoverTip({ x: px, y: py, text: 'Messenger Owl · Click to view event' });
+      if (latestRef.current.buildModeOpen) {
+        const hit = worldRef.current.hitTestRoom(px, py);
+        const text = hit ? `${roomDisplayName(hit)} · Click to move to shelf` : null;
+        setHoverTip(prev => (text ? { x: px, y: py, text } : prev ? null : prev));
       } else {
-        const pHit = worldRef.current.hitTestPerson(px, py);
-        if (pHit) {
-          setHoverTip({ x: px, y: py, text: pHit.name });
+        const owlHit = worldRef.current.hitTestMessengerOwl(px, py);
+        if (owlHit) {
+          setHoverTip({ x: px, y: py, text: 'Messenger Owl · Click to view event' });
         } else {
-          const cHit = worldRef.current.hitTestCreature(px, py);
-          if (cHit) {
-            const text = creatureHoverText(cHit);
-            setHoverTip({ x: px, y: py, text });
+          const pHit = worldRef.current.hitTestPerson(px, py);
+          if (pHit) {
+            setHoverTip({ x: px, y: py, text: pHit.name });
           } else {
-            const hit = worldRef.current.hitTestRoom(px, py);
-            const text = hit && hit.state === 'site' ? (hit.buildPaused ? `Paused · ${reviewsToGoText(hit)}` : reviewsToGoText(hit)) : null;
-            setHoverTip(prev => (text ? { x: px, y: py, text } : prev ? null : prev));
+            const cHit = worldRef.current.hitTestCreature(px, py);
+            if (cHit) {
+              const text = creatureHoverText(cHit);
+              setHoverTip({ x: px, y: py, text });
+            } else {
+              const hit = worldRef.current.hitTestRoom(px, py);
+              const text = hit && hit.state === 'site' ? (hit.buildPaused ? `Paused · ${reviewsToGoText(hit)}` : reviewsToGoText(hit)) : null;
+              setHoverTip(prev => (text ? { x: px, y: py, text } : prev ? null : prev));
+            }
           }
         }
       }
@@ -595,6 +619,15 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
 
+    // In Build mode (with no active placement ghost), clicking a room lifts it onto the shelf immediately
+    if (latestRef.current.buildModeOpen) {
+      const clickedRoom = world.hitTestRoom(clickX, clickY);
+      if (clickedRoom) {
+        onPickupRoom?.(clickedRoom.id);
+      }
+      return;
+    }
+
     const owlHit = world.hitTestMessengerOwl(clickX, clickY);
     if (owlHit && onSelectEvent) {
       onSelectEvent(owlHit.eventId);
@@ -614,8 +647,7 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     }
 
     const clickedCreature = world.hitTestCreature(clickX, clickY);
-    const clickedRoom = world.hitTestRoom(clickX, clickY);
-    if (clickedCreature && onSelectCreature && (clickedCreature.status === 'loose' || clickedCreature.unhomed || !clickedRoom)) {
+    if (clickedCreature && onSelectCreature) {
       const inst = latestRef.current.state.creatures.find(cr => cr.id === clickedCreature.creatureId);
       if (inst) {
         onSelectCreature(inst);
@@ -623,6 +655,7 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
       }
     }
 
+    const clickedRoom = world.hitTestRoom(clickX, clickY);
     if (clickedRoom) {
       onSelectRoom(clickedRoom);
     }
@@ -729,12 +762,16 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
         );
       })()}
 
-      {placement && (placement.kind === 'build' || placement.kind === 'move') && (() => {
+      {placement && (placement.kind === 'build' || placement.kind === 'move' || placement.kind === 'shelved') && (() => {
         const fp = placementFootprint(state, placement);
         const def = fp ? ROOM_DEFINITIONS[fp.defId] : undefined;
         const ok = !!candidate?.check.valid;
         const msg = !candidate
-          ? (placement.kind === 'move' ? 'Point at a new spot' : 'No free valid space: move or demolish something first')
+          ? (placement.kind === 'move'
+              ? 'Point at a new spot'
+              : placement.kind === 'shelved'
+              ? 'Point at a spot to place'
+              : 'No free valid space: move or demolish something first')
           : ok
             ? (candidate.check.warnings[0] || 'Valid spot')
             : candidate.check.errors[0];
@@ -753,7 +790,11 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
               <div className={ok ? (candidate?.check.warnings.length ? 'text-amber-300' : 'text-emerald-300') : 'text-rose-300'} data-testid="placement-status">
                 {ok ? '✓ ' : '✕ '}{msg}
               </div>
-              <div className="text-slate-500 text-[11px]">Click to confirm · Esc or right-click to cancel · drag to pan</div>
+              <div className="text-slate-500 text-[11px]">
+                {placement.kind === 'shelved'
+                  ? 'From Build shelf · Click to confirm · Esc or right-click returns to shelf'
+                  : 'Click to confirm · Esc or right-click to cancel · drag to pan'}
+              </div>
             </div>
             {placement.kind === 'build' && onPlacementAuto && (
               <button onClick={onPlacementAuto} className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-700 text-slate-200 hover:bg-slate-800" title="Let the engine pick the first free valid spot">

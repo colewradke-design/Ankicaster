@@ -178,6 +178,7 @@ export function buildAcademySchedule(
 ): AcademySchedule {
   const reach = reachMap ?? computeReachability(state.rooms || []);
   const reviewIndex = state.reviewIndex || 0;
+  const shelvedIds = new Set((state.shelvedRooms || []).map(r => r.id));
 
   const studentAssignments = new Map<number, StudentClassAssignment>();
   const overenrolledStudentIds = new Set<number>();
@@ -243,7 +244,12 @@ export function buildAcademySchedule(
     }
 
     const students = (state.characters || [])
-      .filter(c => c.status === 'student' && c.currentSchool === school)
+      .filter(
+        c =>
+          c.status === 'student' &&
+          c.currentSchool === school &&
+          !(c.classRoomId != null && shelvedIds.has(c.classRoomId))
+      )
       .slice()
       .sort((a, b) => a.id - b.id);
 
@@ -285,6 +291,7 @@ export function buildAcademySchedule(
         c.careerState === 'active' &&
         c.status !== 'away' &&
         !c.injury &&
+        !(c.workplaceRoomId != null && shelvedIds.has(c.workplaceRoomId)) &&
         Array.isArray(c.masteredSchools) &&
         c.masteredSchools.length > 0
     )
@@ -530,6 +537,7 @@ export function applyAcademyScheduleToState(
   reachMap?: Map<number, ReachabilityInfo>,
   avoidRoomByCharId?: Map<number, number>
 ): AcademySchedule {
+  const shelvedIds = new Set((state.shelvedRooms || []).map(r => r.id));
   const schedule = buildAcademySchedule(state, reachMap, avoidRoomByCharId);
   for (const c of state.characters || []) {
     if (c.status === 'student') {
@@ -538,6 +546,8 @@ export function applyAcademyScheduleToState(
         c.classRoomId = assign.classRoomId;
         c.period = assign.period;
         c.seatRoomId = assign.classRoomId;
+      } else if (c.classRoomId != null && shelvedIds.has(c.classRoomId)) {
+        // Keep shelved classroom/period/seat while classroom sits on Build shelf
       } else {
         c.classRoomId = undefined;
         c.period = undefined;
@@ -548,7 +558,13 @@ export function applyAcademyScheduleToState(
       c.period = undefined;
       if (c.career === 'teacher') {
         const tAssign = schedule.teacherAssignments.get(c.id);
-        c.workplaceRoomId = tAssign ? tAssign.classRoomId : undefined;
+        if (tAssign) {
+          c.workplaceRoomId = tAssign.classRoomId;
+        } else if (c.workplaceRoomId != null && shelvedIds.has(c.workplaceRoomId)) {
+          // Keep shelved classroom workplace assignment
+        } else {
+          c.workplaceRoomId = undefined;
+        }
       }
     }
   }

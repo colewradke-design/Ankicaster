@@ -29,6 +29,8 @@ import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS, SCHOOL_EVENTS } from './data/c
 import { TopBar } from './components/TopBar';
 import { RoomWindow } from './components/RoomWindow';
 import { PersonCard } from './components/PersonCard';
+import { CreatureCard } from './components/CreatureCard';
+import { BuildModePanel } from './components/BuildModePanel';
 import { ScreenWindow } from './components/ScreenWindow';
 import { PonderOrbPicker, GrimoireBook } from './components/StudyModals';
 import { StoresPanel, JournalPanel, VisitorsPanel } from './components/AcademyPanels';
@@ -74,12 +76,16 @@ export default function App() {
   // Room-based navigation (UI declutter pass): the castle map is always the main view.
   // A management screen opens in a window over it, from a room window or the Academy menu.
   const [openScreen, setOpenScreen] = useState<ScreenId | null>(null);
+  const [buildModeOpen, setBuildModeOpen] = useState<boolean>(false);
 
   // Modals & Active Inspector State
   const [selectedRoom, setSelectedRoom] = useState<PlacedRoom | null>(null);
   const [selectedPersonId, setSelectedPersonId] = useState<'wizard' | number | null>(null);
   const [, setPersonActivityTick] = useState(0);
   const personActivityRef = useRef<((personId: 'wizard' | number) => string) | null>(null);
+  const [selectedCreatureId, setSelectedCreatureId] = useState<number | null>(null);
+  const [, setCreatureActivityTick] = useState(0);
+  const creatureActivityRef = useRef<((creatureId: number) => string) | null>(null);
   const [isDraftModalOpen, setIsDraftModalOpen] = useState(false);
 
   useEffect(() => {
@@ -98,6 +104,23 @@ export default function App() {
       window.removeEventListener('keydown', onKey);
     };
   }, [selectedPersonId, state.characters]);
+
+  useEffect(() => {
+    if (selectedCreatureId === null) return;
+    if (!(state.creatures || []).some(c => c.id === selectedCreatureId)) {
+      setSelectedCreatureId(null);
+      return;
+    }
+    const timer = setInterval(() => setCreatureActivityTick(t => t + 1), 500);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSelectedCreatureId(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [selectedCreatureId, state.creatures]);
   const [draftDeck, setDraftDeck] = useState<'foundation' | 'grounds' | 'magic'>('foundation');
   const [draftChoices, setDraftChoices] = useState<DraftCard[]>([]);
   const [draftTutorial, setDraftTutorial] = useState<string | undefined>();
@@ -634,6 +657,49 @@ export default function App() {
     return true;
   };
 
+  // Build mode shelf toggle (keeps map mounted; closing releases creatures in shelved pens)
+  const handleToggleBuildMode = () => {
+    if (buildModeOpen) {
+      const res = AnkicasterEngine.closeBuildMode(state);
+      if (res.releasedCount > 0) {
+        setState(res.state);
+        addToast(
+          `${res.releasedCount} creature${res.releasedCount === 1 ? '' : 's'} broke loose from shelved pens!`,
+          'warning'
+        );
+      }
+      setPlacement(prev => (prev && (prev.kind === 'shelved' || prev.kind === 'build') ? null : prev));
+      setBuildModeOpen(false);
+    } else {
+      setOpenScreen(null);
+      setSelectedRoom(null);
+      setSelectedPersonId(null);
+      setSelectedCreatureId(null);
+      setPlacement(prev => (prev && prev.kind !== 'build' && prev.kind !== 'shelved' ? null : prev));
+      setBuildModeOpen(true);
+    }
+  };
+
+  // Handler: pick up a room from the map onto the Build shelf
+  const handlePickupRoom = (roomId: number) => {
+    const res = AnkicasterEngine.shelveRoom(state, roomId);
+    if (!res.success) {
+      addToast(res.error || 'Cannot pick up that room.', 'warning');
+      return;
+    }
+    setState(res.state);
+    if (selectedRoom?.id === roomId) setSelectedRoom(null);
+    playChime('review');
+  };
+
+  const handleSelectShelvedRoom = (roomId: number | null) => {
+    if (roomId === null) {
+      setPlacement(null);
+      return;
+    }
+    setPlacement({ kind: 'shelved', roomId });
+  };
+
   // Handler: choose a room in Build -> enter placement mode
   const handlePlaceRoom = (defId: string, _area?: 'castle' | 'grounds') => {
     setOpenScreen(null);
@@ -665,6 +731,13 @@ export default function App() {
     } else if (placement.kind === 'move') {
       const res = AnkicasterEngine.moveRoom(state, placement.roomId, x, y);
       if (reportPlacement(res, 'Room moved.')) {
+        setState(res.state);
+        playChime('review');
+        setPlacement(null);
+      }
+    } else if (placement.kind === 'shelved') {
+      const res = AnkicasterEngine.placeShelvedRoom(state, placement.roomId, x, y);
+      if (reportPlacement(res, 'Room placed from shelf.')) {
         setState(res.state);
         playChime('review');
         setPlacement(null);
@@ -805,6 +878,29 @@ export default function App() {
     }
   };
 
+  // Handler: Pair / Unpair Creature with Adventurer
+  const handleAssignCreatureAdventurer = (creatureId: number, adventurerId?: number) => {
+    const res = AnkicasterEngine.assignCreatureToAdventurer(state, creatureId, adventurerId);
+    if (!res.success) {
+      addToast(res.error || 'Cannot pair familiar with adventurer.', 'warning');
+    } else {
+      setState(res.state);
+      addToast(adventurerId !== undefined ? 'Familiar paired with adventurer!' : 'Familiar unpaired from adventurer.', 'info');
+    }
+  };
+
+  // Handler: Release Creature
+  const handleReleaseCreature = (creatureId: number) => {
+    const res = AnkicasterEngine.releaseCreature(state, creatureId);
+    if (!res.success) {
+      addToast(res.error || 'Could not release creature.', 'warning');
+    } else {
+      setState(res.state);
+      setSelectedCreatureId(cur => (cur === creatureId ? null : cur));
+      addToast('Creature released back to the wild.', 'info');
+    }
+  };
+
   // Handler: Assign or Clear Room Staff from Room tab
   const handleAssignRoomStaff = (roomId: number, charId: number, replaceCharId?: number) => {
     const res = AnkicasterEngine.assignRoomStaff(state, roomId, charId, replaceCharId);
@@ -898,7 +994,14 @@ export default function App() {
       case 'draft':
         return <CardDraftPanel state={state} onDrawDeck={handleDrawDeck} />;
       case 'bestiary':
-        return <BestiaryPanel state={state} onFeedCreature={handleFeedCreature} onAssignTamer={handleAssignTamer} />;
+        return (
+          <BestiaryPanel
+            state={state}
+            onFeedCreature={handleFeedCreature}
+            onAssignTamer={handleAssignTamer}
+            onSelectCreature={id => setSelectedCreatureId(id)}
+          />
+        );
       case 'alchemy':
         return <AlchemyPanel state={state} onBrewPotion={handleBrewPotion} onUsePotion={handleUsePotion} />;
       case 'rift':
@@ -976,6 +1079,8 @@ export default function App() {
           state={state}
           onOpenScreen={handleOpenScreen}
           onOpenRoom={handleOpenRoomById}
+          buildModeOpen={buildModeOpen}
+          onToggleBuildMode={handleToggleBuildMode}
           forceAcademy={!!view?.forceAcademy}
           devControls={IS_DEV_MODE ? (
             <div className="hidden md:flex items-center gap-1.5">
@@ -990,16 +1095,19 @@ export default function App() {
       </div>
 
       {/* Main view: the castle map. Rooms are the navigation. */}
-      <main className="flex-1 p-3 md:p-5 max-w-7xl mx-auto w-full">
+      <main className={`flex-1 p-3 md:p-5 ${buildModeOpen ? 'md:pl-[332px] ' : ''}max-w-7xl mx-auto w-full transition-[padding]`}>
         <CastleGrid
           state={state}
+          buildModeOpen={buildModeOpen}
           onSelectRoom={room => {
             setSelectedRoom(room);
             setState(prev => ({ ...prev, tutorial: applyTutorialAction(prev.tutorial, room.defId === 'wizard_study' ? 'open-study' : 'open-other') }));
           }}
+          onPickupRoom={handlePickupRoom}
           onSelectPerson={id => setSelectedPersonId(id)}
           personActivityRef={personActivityRef}
-          onSelectCreature={() => handleOpenScreen('bestiary')}
+          onSelectCreature={c => setSelectedCreatureId(c.id)}
+          creatureActivityRef={creatureActivityRef}
           onSelectEvent={evtId => {
             const evt = SCHOOL_EVENTS.find(e => e.id === evtId)
               || (state.activeEvents[0] ? SCHOOL_EVENTS.find(e => e.id === state.activeEvents[0].eventId) : undefined);
@@ -1021,6 +1129,19 @@ export default function App() {
           <div className="mt-3 text-center text-[13px] text-slate-400">No rooms yet. Use <strong className="text-amber-300">Build</strong> to plan one.</div>
         )}
       </main>
+
+      {/* Fixed left-edge Build Mode shelf (keeps live map mounted) */}
+      {buildModeOpen && (
+        <BuildModePanel
+          state={state}
+          placement={placement}
+          onSelectShelved={handleSelectShelvedRoom}
+          onPlaceNewRoom={handlePlaceRoom}
+          onAutoPlaceNewRoom={handleAutoPlaceRoom}
+          onOpenDraft={() => handleOpenScreen('draft')}
+          onClose={handleToggleBuildMode}
+        />
+      )}
 
       {/* Management screen windows (former tabs) */}
       {openScreen && openScreen !== 'ponder' && openScreen !== 'grimoire' && openScreen !== 'codex' && openScreen !== 'settings' && (
@@ -1069,6 +1190,7 @@ export default function App() {
           }}
           onOpenScreen={handleOpenScreen}
           onOpenPerson={id => setSelectedPersonId(id)}
+          onOpenCreature={id => setSelectedCreatureId(id)}
           onAssignStaff={handleAssignRoomStaff}
           onClearStaff={handleClearRoomStaff}
           onResolveHazard={handleResolveHazard}
@@ -1142,6 +1264,20 @@ export default function App() {
           personId={selectedPersonId}
           activityText={personActivityRef.current?.(selectedPersonId)}
           onClose={() => setSelectedPersonId(null)}
+        />
+      )}
+
+      {/* CREATURE CARD (map creature, RoomWindow pen occupant, or Bestiary) */}
+      {selectedCreatureId !== null && (
+        <CreatureCard
+          state={state}
+          creatureId={selectedCreatureId}
+          activityText={creatureActivityRef.current?.(selectedCreatureId)}
+          onFeed={handleFeedCreature}
+          onAssignTamer={handleAssignTamer}
+          onAssignAdventurer={handleAssignCreatureAdventurer}
+          onRelease={handleReleaseCreature}
+          onClose={() => setSelectedCreatureId(null)}
         />
       )}
 

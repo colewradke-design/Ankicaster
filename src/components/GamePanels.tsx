@@ -774,7 +774,8 @@ export const BuildMenuPanel: React.FC<{
   onPlaceRoom: (defId: string, area: 'castle' | 'grounds') => void;
   onAutoPlace?: (defId: string) => void;
   onOpenDraft?: () => void;
-}> = ({ state, onPlaceRoom, onAutoPlace, onOpenDraft }) => {
+  compact?: boolean;
+}> = ({ state, onPlaceRoom, onAutoPlace, onOpenDraft, compact = false }) => {
   const [category, setCategory] = useState<string>('all');
   const roomList = Object.values(ROOM_DEFINITIONS);
   const listed = roomList.filter(r => isStructure(r.id) || (state.roomPlans?.[r.id] || 0) > 0);
@@ -839,11 +840,11 @@ export const BuildMenuPanel: React.FC<{
         ))}
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[520px] overflow-y-auto pr-1">
+      <div className={compact ? 'grid grid-cols-1 gap-2.5' : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[520px] overflow-y-auto pr-1'}>
         {filtered.map(room => {
           const canAfford = canAffordMaterials(state, room.cost);
-          // Per-room limits come from the engine rules (content maxCount), sites included
-          const limit = roomLimitStatus(state.rooms, room.id);
+          // Per-room limits come from the engine rules (content maxCount), sites and shelved rooms included
+          const limit = roomLimitStatus(state.rooms, room.id, undefined, state.shelvedRooms || []);
           const unlocked = isRoomUnlocked(state, room.id);
           const structure = isStructure(room.id);
           const founding = room.id === 'entrance_hall' || room.id === 'wizard_study';
@@ -980,7 +981,8 @@ export const BestiaryPanel: React.FC<{
   state: FullGameState;
   onFeedCreature: (creatureId: number) => void;
   onAssignTamer: (creatureId: number, tamerId: number) => void;
-}> = ({ state, onFeedCreature, onAssignTamer }) => {
+  onSelectCreature?: (creatureId: number) => void;
+}> = ({ state, onFeedCreature, onAssignTamer, onSelectCreature }) => {
   const creatures = state.creatures || [];
   const characters = state.characters || [];
   const [statusFilter, setStatusFilter] = useState<'all' | 'tamed' | 'wary' | 'loose' | 'egg'>('all');
@@ -1062,20 +1064,50 @@ export const BestiaryPanel: React.FC<{
                   <div key={c.id} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow space-y-3">
                     <div className="space-y-2">
                       <div className="flex items-start gap-2.5">
-                        <CreaturePortrait
-                          defId={c.defId}
-                          variant={c.status === 'egg' ? 'egg' : 'adult'}
-                          hatchProgress={c.hatchProgress}
-                          status={c.status}
-                          bondLevel={c.bondLevel}
-                          size={44}
-                        />
+                        {onSelectCreature ? (
+                          <button
+                            type="button"
+                            onClick={() => onSelectCreature(c.id)}
+                            data-testid={`bestiary-open-card-${c.id}`}
+                            title={`Inspect ${c.nickname}`}
+                            className="shrink-0 rounded-lg border border-transparent hover:border-emerald-400/70 transition cursor-pointer"
+                          >
+                            <CreaturePortrait
+                              defId={c.defId}
+                              variant={c.status === 'egg' ? 'egg' : 'adult'}
+                              hatchProgress={c.hatchProgress}
+                              status={c.status}
+                              bondLevel={c.bondLevel}
+                              size={44}
+                            />
+                          </button>
+                        ) : (
+                          <CreaturePortrait
+                            defId={c.defId}
+                            variant={c.status === 'egg' ? 'egg' : 'adult'}
+                            hatchProgress={c.hatchProgress}
+                            status={c.status}
+                            bondLevel={c.bondLevel}
+                            size={44}
+                          />
+                        )}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between gap-1">
-                            <span className="font-bold text-sm text-slate-100 truncate">
-                              {c.nickname}
-                              <span className="text-xs font-normal text-slate-400"> ({def.name})</span>
-                            </span>
+                            {onSelectCreature ? (
+                              <button
+                                type="button"
+                                onClick={() => onSelectCreature(c.id)}
+                                className="font-bold text-sm text-slate-100 hover:text-amber-200 truncate text-left transition cursor-pointer"
+                              >
+                                {c.nickname}
+                                <span className="text-xs font-normal text-slate-400"> ({def.name})</span>
+                              </button>
+                            ) : (
+                              <span className="font-bold text-sm text-slate-100 truncate">
+                                {c.nickname}
+                                <span className="text-xs font-normal text-slate-400"> ({def.name})</span>
+                              </span>
+                            )}
                             <span className={`text-[11px] px-2 py-0.5 rounded font-bold uppercase shrink-0 ${
                               c.status === 'tamed'
                                 ? 'bg-emerald-500/20 text-emerald-300'
@@ -1416,6 +1448,17 @@ export const AlchemyPanel: React.FC<{
 // ==========================================
 // 8. RIFT EXPEDITION PLANNER PANEL (5 DESTINATIONS)
 // ==========================================
+export function defaultCompanionForTeam(
+  creatures: FullGameState['creatures'],
+  teamIds: number[]
+): number | undefined {
+  if (!teamIds.length) return undefined;
+  const match = (creatures || []).find(
+    c => c.status === 'tamed' && c.adventurerId !== undefined && teamIds.includes(c.adventurerId)
+  );
+  return match?.id;
+}
+
 export const RiftPanel: React.FC<{
   state: FullGameState;
   onLaunchExpedition: (destId: string, teamIds: number[], supplies?: string[], companionId?: number) => void;
@@ -1425,6 +1468,7 @@ export const RiftPanel: React.FC<{
   const [selectedHeroIds, setSelectedHeroIds] = useState<number[]>([]);
   const [selectedSupplies, setSelectedSupplies] = useState<string[]>([]);
   const [selectedCompanionId, setSelectedCompanionId] = useState<number | undefined>(undefined);
+  const [companionOverridden, setCompanionOverridden] = useState<boolean>(false);
 
   // 3-Master Seal check (Rule BR-27)
   const totalMasters = characters.filter(c => c.masteredSchools.length > 0).length + alumniGallery.length;
@@ -1466,10 +1510,20 @@ export const RiftPanel: React.FC<{
   const toggleHero = (id: number) => {
     const hero = adventurers.find(a => a.id === id);
     if (!hero || hero.status === 'away' || hero.injury) return;
+    let nextHeroIds: number[];
     if (selectedHeroIds.includes(id)) {
-      setSelectedHeroIds(selectedHeroIds.filter(h => h !== id));
+      nextHeroIds = selectedHeroIds.filter(h => h !== id);
     } else if (selectedHeroIds.length < 3) {
-      setSelectedHeroIds([...selectedHeroIds, id]);
+      nextHeroIds = [...selectedHeroIds, id];
+    } else {
+      return;
+    }
+    setSelectedHeroIds(nextHeroIds);
+    if (nextHeroIds.length === 0) {
+      setCompanionOverridden(false);
+      setSelectedCompanionId(undefined);
+    } else if (!companionOverridden) {
+      setSelectedCompanionId(defaultCompanionForTeam(tamedCreatures, nextHeroIds));
     }
   };
 
@@ -1572,6 +1626,7 @@ export const RiftPanel: React.FC<{
                 adventurers.map(adv => {
                   const isSelected = selectedHeroIds.includes(adv.id);
                   const unavailable = adv.status === 'away' || !!adv.injury;
+                  const paired = tamedCreatures.find(c => c.adventurerId === adv.id);
                   return (
                     <div
                       key={adv.id}
@@ -1584,7 +1639,17 @@ export const RiftPanel: React.FC<{
                           : 'bg-slate-900 border-slate-800 text-slate-300 cursor-pointer'
                       }`}
                     >
-                      <span className="flex items-center gap-2"><CharacterPortrait character={adv} size={36} />{adv.name}</span>
+                      <span className="flex items-center gap-2">
+                        <CharacterPortrait character={adv} size={36} />
+                        <span>
+                          {adv.name}
+                          {paired && (
+                            <span className="block text-[11px] font-normal text-emerald-300/90">
+                              Paired with {paired.nickname}
+                            </span>
+                          )}
+                        </span>
+                      </span>
                       <span className="text-xs text-slate-400 font-mono">
                         {adv.status === 'away' ? 'On Expedition' : adv.injury ? 'Injured' : 'Ready'}
                       </span>
@@ -1599,8 +1664,12 @@ export const RiftPanel: React.FC<{
               <div>
                 <h4 className="text-xs font-bold text-slate-300 uppercase mb-1">Select Familiar Companion:</h4>
                 <select
+                  aria-label="Select Familiar Companion"
                   value={selectedCompanionId || ''}
-                  onChange={e => setSelectedCompanionId(e.target.value ? Number(e.target.value) : undefined)}
+                  onChange={e => {
+                    setCompanionOverridden(true);
+                    setSelectedCompanionId(e.target.value ? Number(e.target.value) : undefined);
+                  }}
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2 text-xs text-slate-200"
                 >
                   <option value="">No Companion</option>
