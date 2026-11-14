@@ -488,6 +488,7 @@ test('Rift Gate draws dormant, open, expedition_out, and returning states cleanl
 
 test('NavGraph connects Entrance Hall to grounds front path and Choreographer steps smoothly', () => {
   const state = createInitialGameState();
+  state.debugTimeHours = 6.2; // Period 1 faculty duty hour regardless of wall clock
   const veg = makeRoom(80, 'vegetable_patch', 1, 0);
   state.rooms.push(veg);
 
