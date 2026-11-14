@@ -278,12 +278,13 @@ export function spawnHabitatSet(state: FullGameState): DebugResult {
   };
 }
 
-/** 1×1 gloom hutch past the 3-cap, plus enough creatures to pass the global 40 cap. */
+/** 1×1 gloom hutch past its capacity, plus enough creatures to pass the global 40 cap. */
 export function fillPensPastCap(state: FullGameState): DebugResult {
   const next = touch(state);
   const err = placeDebugRoom(next, 'gloom_hutch');
   if (err) return { state: next, message: err };
   const room = builtRoom(next, 'gloom_hutch');
+  const cap = room ? penCreatureCapacity(room) : ONE_BY_ONE_PEN_CAP;
   const add = (status: CreatureInstance['status'], n: number, hatch = 100, defId = 'velvet_bat_swarm') => {
     for (let i = 0; i < n; i++) {
       const creature = makeDebugCreature(next, defId, status, {
@@ -299,7 +300,6 @@ export function fillPensPastCap(state: FullGameState): DebugResult {
   add('egg', 1, 40, 'duskmouse');
   add('loose', 1, 100, 'duskmouse');
   add('tamed', 34, 100, 'bramblefox');
-  const cap = room ? penCreatureCapacity(room) : 2;
   return {
     state: next,
     message: `Filled the Gloom Hutch past ${cap} and the map past 40. Eggs and loose stay visible; the rest show +N.`
