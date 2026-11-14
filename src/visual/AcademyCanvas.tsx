@@ -69,8 +69,10 @@ export function creatureHoverText(c: {
 interface AcademyCanvasProps {
   state: FullGameState;
   onSelectRoom: (room: PlacedRoom) => void;
+  onSelectPerson?: (personId: 'wizard' | number) => void;
   onSelectCreature?: (creature: CreatureInstance) => void;
   onSelectEvent?: (eventId: string) => void;
+  personActivityRef?: React.MutableRefObject<((personId: 'wizard' | number) => string) | null>;
   selectedRoomId?: number;
   onResolveHazard?: (roomId: number, method: 'warder' | 'spell') => void;
   placement?: PlacementMode | null;
@@ -122,8 +124,10 @@ function placementTargetFurniture(state: FullGameState, mode: PlacementMode | nu
 export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   state,
   onSelectRoom,
+  onSelectPerson,
   onSelectCreature,
   onSelectEvent,
+  personActivityRef,
   selectedRoomId,
   onResolveHazard,
   placement,
@@ -197,6 +201,9 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
 
     const world = new VisualWorld();
     worldRef.current = world;
+    if (personActivityRef) {
+      personActivityRef.current = id => worldRef.current?.getPersonActivity(id) ?? '';
+    }
     const unsubPreview = registerVisualPreviewListener((type, roomId) => {
       const targetId = roomId ?? latestRef.current.state.rooms.find(r => r.defId === 'entrance_hall')?.id ?? 1;
       world.eventDispatcher.triggerPreview(type, targetId, world.clockMs);
@@ -314,6 +321,7 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
       if (onWinFocus) window.removeEventListener('focus', onWinFocus);
       if (clockInterval) clearInterval(clockInterval);
       try { app.destroy(true); } catch { /* not initialised yet */ }
+      if (personActivityRef) personActivityRef.current = null;
       appRef.current = null;
       worldRef.current = null;
     };
@@ -503,14 +511,19 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
       if (owlHit) {
         setHoverTip({ x: px, y: py, text: 'Messenger Owl · Click to view event' });
       } else {
-        const cHit = worldRef.current.hitTestCreature(px, py);
-        if (cHit) {
-          const text = creatureHoverText(cHit);
-          setHoverTip({ x: px, y: py, text });
+        const pHit = worldRef.current.hitTestPerson(px, py);
+        if (pHit) {
+          setHoverTip({ x: px, y: py, text: pHit.name });
         } else {
-          const hit = worldRef.current.hitTestRoom(px, py);
-          const text = hit && hit.state === 'site' ? (hit.buildPaused ? `Paused · ${reviewsToGoText(hit)}` : reviewsToGoText(hit)) : null;
-          setHoverTip(prev => (text ? { x: px, y: py, text } : prev ? null : prev));
+          const cHit = worldRef.current.hitTestCreature(px, py);
+          if (cHit) {
+            const text = creatureHoverText(cHit);
+            setHoverTip({ x: px, y: py, text });
+          } else {
+            const hit = worldRef.current.hitTestRoom(px, py);
+            const text = hit && hit.state === 'site' ? (hit.buildPaused ? `Paused · ${reviewsToGoText(hit)}` : reviewsToGoText(hit)) : null;
+            setHoverTip(prev => (text ? { x: px, y: py, text } : prev ? null : prev));
+          }
         }
       }
     } else if (hoverTip) {
@@ -586,6 +599,18 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     if (owlHit && onSelectEvent) {
       onSelectEvent(owlHit.eventId);
       return;
+    }
+
+    const clickedPerson = world.hitTestPerson(clickX, clickY);
+    if (clickedPerson && onSelectPerson) {
+      if (clickedPerson.isWizard) {
+        onSelectPerson('wizard');
+        return;
+      }
+      if (clickedPerson.character) {
+        onSelectPerson(clickedPerson.character.id);
+        return;
+      }
     }
 
     const clickedCreature = world.hitTestCreature(clickX, clickY);

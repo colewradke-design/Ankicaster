@@ -170,6 +170,7 @@ test('Section 3: RoomWindow hides Renovate on site rooms and shows full furnitur
     React.createElement(RoomWindow, {
       state: s,
       room: siteRoom,
+      initialTab: 'furnishings',
       onClose: noop,
       onOpenScreen: noop,
       onResolveHazard: noop,
@@ -179,8 +180,25 @@ test('Section 3: RoomWindow hides Renovate on site rooms and shows full furnitur
     })
   );
   assert.ok(!siteHtml.includes('Renovate → Lv'), 'Site rooms should not show Renovate button');
+  assert.ok(siteHtml.includes('Furnishings arrive when the room is built.'), 'Site rooms defer furnishings until built');
+
+  const builtRoom = makeBuiltRoom(71, 'common_room', 4, 0);
+  s.rooms.push(builtRoom);
+  const builtHtml = renderToStaticMarkup(
+    React.createElement(RoomWindow, {
+      state: s,
+      room: builtRoom,
+      initialTab: 'furnishings',
+      onClose: noop,
+      onOpenScreen: noop,
+      onResolveHazard: noop,
+      onUpgrade: noop,
+      onAddFurniture: noop,
+      onRemoveFurniture: noop,
+    })
+  );
   // wizard_chess costs 140m · 10 timber · 2 insight
-  assert.ok(siteHtml.includes('140m') && siteHtml.includes('10 timber') && siteHtml.includes('2 insight'), 'Furnish button shows full costText including Insight');
+  assert.ok(builtHtml.includes('140m') && builtHtml.includes('10 timber') && builtHtml.includes('2 insight'), 'Furnish button shows full costText including Insight');
 });
 
 test('Section 3: stone_lantern and wizard_chess specialEffect align with FURNITURE_EFFECTS', () => {

@@ -288,7 +288,7 @@ export const RosterPanel: React.FC<{
   onEnrollSecondSchool?: (charId: number, school: SchoolType) => void;
   /** Room-based view: dorms show students, Faculty Quarters shows faculty, Trophy Hall alumni. */
   view?: 'all' | 'students' | 'faculty' | 'alumni';
-}> = ({ state, onAssignCareer, onAssignTeacherRoom, onRetireCharacter, onEnrollSecondSchool, view = 'all' }) => {
+}> = ({ state, onAssignCareer, onRetireCharacter, onEnrollSecondSchool, view = 'all' }) => {
   const { cardSets, allCards, alumniGallery } = state;
   const characters =
     view === 'students' ? state.characters.filter(c => !c.career) :
@@ -631,24 +631,6 @@ export const RosterPanel: React.FC<{
                       );
                     })}
                   </div>
-                  {selectedChar.career === 'teacher' && onAssignTeacherRoom && (
-                    <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
-                      <span className="text-xs text-slate-300 font-semibold">Assigned Classroom:</span>
-                      <select
-                        data-testid="teacher-classroom-picker"
-                        value={selectedChar.workplaceRoomId ?? ''}
-                        onChange={e => e.target.value && onAssignTeacherRoom(selectedChar.id, Number(e.target.value))}
-                        className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200"
-                      >
-                        <option value="">Select matching classroom...</option>
-                        {matchingClassrooms.map(r => (
-                          <option key={r.id} value={r.id}>
-                            {ROOM_DEFINITIONS[r.defId]?.name || r.defId}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
                 </div>
                 );
               })()}

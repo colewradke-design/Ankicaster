@@ -173,7 +173,8 @@ function isClassroomActive(
  */
 export function buildAcademySchedule(
   state: FullGameState,
-  reachMap?: Map<number, ReachabilityInfo>
+  reachMap?: Map<number, ReachabilityInfo>,
+  avoidRoomByCharId?: Map<number, number>
 ): AcademySchedule {
   const reach = reachMap ?? computeReachability(state.rooms || []);
   const reviewIndex = state.reviewIndex || 0;
@@ -306,17 +307,27 @@ export function buildAcademySchedule(
     return n;
   };
 
-  // Pass 1: teachers who only mastered 1 school (or whose current workplace is an active classroom of a mastered school)
-  const remainingMultiSchool: Character[] = [];
+  // Pass 1a: preserve teachers with an explicit workplaceRoomId pointing to an active qualifying classroom first
+  const unassignedTeachers: Character[] = [];
   for (const t of qualifiedTeachers) {
-    const currentRoom = t.workplaceRoomId ? classrooms.get(t.workplaceRoomId) : undefined;
-    if (currentRoom && t.masteredSchools.includes(currentRoom.school)) {
+    const currentRoom = t.workplaceRoomId != null ? classrooms.get(t.workplaceRoomId) : undefined;
+    if (
+      currentRoom &&
+      t.masteredSchools.includes(currentRoom.school) &&
+      avoidRoomByCharId?.get(t.id) !== currentRoom.roomId
+    ) {
       const s = currentRoom.school;
       if (teachersBySchool[s].length < maxUsefulTeachersForSchool(s)) {
         teachersBySchool[s].push(t);
         continue;
       }
     }
+    unassignedTeachers.push(t);
+  }
+
+  // Pass 1b: single-school teachers go to their mastered school; multi-school teachers flex below
+  const remainingMultiSchool: Character[] = [];
+  for (const t of unassignedTeachers) {
     if (t.masteredSchools.length === 1) {
       const s = t.masteredSchools[0];
       teachersBySchool[s].push(t);
@@ -325,17 +336,35 @@ export function buildAcademySchedule(
     }
   }
 
-  // Pass 2: multi-school teachers prefer a school where they can fill an uncovered room, then a 2-teacher split, then first mastered school
+  // Pass 2: multi-school teachers prefer a school where they can fill an uncovered room (not avoided), then a 2-teacher split, then first mastered school
   for (const t of remainingMultiSchool) {
+    const avoidId = avoidRoomByCharId?.get(t.id);
+    const hasNonAvoidedRoom = (s: SchoolType) => activeRoomsBySchool[s].some(r => r.id !== avoidId);
     let chosen: SchoolType | undefined;
-    // Prefer school with fewer teachers than rooms (uncovered room)
+    // Prefer school with fewer teachers than rooms (uncovered non-avoided room first)
     for (const s of t.masteredSchools) {
-      if (activeRoomsBySchool[s].length > 0 && teachersBySchool[s].length < activeRoomsBySchool[s].length) {
+      if (hasNonAvoidedRoom(s) && teachersBySchool[s].length < activeRoomsBySchool[s].length) {
         chosen = s;
         break;
       }
     }
+    if (!chosen) {
+      for (const s of t.masteredSchools) {
+        if (activeRoomsBySchool[s].length > 0 && teachersBySchool[s].length < activeRoomsBySchool[s].length) {
+          chosen = s;
+          break;
+        }
+      }
+    }
     // Otherwise prefer school with 1 room and 1 teacher (can split periods 1-2 / 3-4)
+    if (!chosen) {
+      for (const s of t.masteredSchools) {
+        if (hasNonAvoidedRoom(s) && activeRoomsBySchool[s].length === 1 && teachersBySchool[s].length < 2) {
+          chosen = s;
+          break;
+        }
+      }
+    }
     if (!chosen) {
       for (const s of t.masteredSchools) {
         if (activeRoomsBySchool[s].length === 1 && teachersBySchool[s].length < 2) {
@@ -344,9 +373,12 @@ export function buildAcademySchedule(
         }
       }
     }
-    // Otherwise first mastered school with any classroom, or first mastered school
+    // Otherwise first mastered school with any non-avoided classroom, or any classroom, or first mastered school
     if (!chosen) {
-      chosen = t.masteredSchools.find(s => activeRoomsBySchool[s].length > 0) ?? t.masteredSchools[0];
+      chosen =
+        t.masteredSchools.find(s => hasNonAvoidedRoom(s)) ??
+        t.masteredSchools.find(s => activeRoomsBySchool[s].length > 0) ??
+        t.masteredSchools[0];
     }
     teachersBySchool[chosen].push(t);
   }
@@ -364,9 +396,16 @@ export function buildAcademySchedule(
     }
 
     if (rooms.length === 1 && pool.length >= 2) {
-      const roomInfo = classrooms.get(rooms[0].id)!;
-      const tA = pool[0];
-      const tB = pool[1];
+      const singleRoomId = rooms[0].id;
+      const tierOf = (t: Character) => {
+        if (t.workplaceRoomId === singleRoomId) return 0;
+        if (avoidRoomByCharId?.get(t.id) === singleRoomId) return 2;
+        return 1;
+      };
+      const sortedPool = pool.slice().sort((a, b) => tierOf(a) - tierOf(b) || a.id - b.id);
+      const roomInfo = classrooms.get(singleRoomId)!;
+      const tA = sortedPool[0];
+      const tB = sortedPool[1];
       roomInfo.isStaffed = true;
       roomInfo.teacherIds = [tA.id, tB.id];
       roomInfo.periods[1].instructor = tA.id;
@@ -377,17 +416,17 @@ export function buildAcademySchedule(
       teacherAssignments.set(tA.id, {
         teacherId: tA.id,
         school,
-        classRoomId: rooms[0].id,
+        classRoomId: singleRoomId,
         periods: [1, 2]
       });
       teacherAssignments.set(tB.id, {
         teacherId: tB.id,
         school,
-        classRoomId: rooms[0].id,
+        classRoomId: singleRoomId,
         periods: [3, 4]
       });
-      for (let i = 2; i < pool.length; i++) {
-        spareTeacherIds.add(pool[i].id);
+      for (let i = 2; i < sortedPool.length; i++) {
+        spareTeacherIds.add(sortedPool[i].id);
       }
     } else {
       const remainingRooms = rooms.slice();
@@ -413,7 +452,7 @@ export function buildAcademySchedule(
       // Preserve existing explicit workplaceRoomId if it points to an available active classroom of this school
       for (const t of pool) {
         if (remainingRooms.length === 0) break;
-        if (t.workplaceRoomId != null) {
+        if (t.workplaceRoomId != null && avoidRoomByCharId?.get(t.id) !== t.workplaceRoomId) {
           const preferred = remainingRooms.find(r => r.id === t.workplaceRoomId);
           if (preferred) {
             takeRoomForTeacher(t, preferred);
@@ -421,11 +460,13 @@ export function buildAcademySchedule(
         }
       }
 
-      // Assign remaining teachers in id order to remaining rooms in id order
+      // Assign remaining teachers in id order, preferring rooms other than avoidRoomByCharId
       for (const t of pool) {
         if (assignedTeachers.has(t.id)) continue;
         if (remainingRooms.length > 0) {
-          takeRoomForTeacher(t, remainingRooms[0]);
+          const avoidId = avoidRoomByCharId?.get(t.id);
+          const pick = (avoidId != null ? remainingRooms.find(r => r.id !== avoidId) : undefined) ?? remainingRooms[0];
+          takeRoomForTeacher(t, pick);
         } else {
           spareTeacherIds.add(t.id);
         }
@@ -486,9 +527,10 @@ export function buildAcademySchedule(
  */
 export function applyAcademyScheduleToState(
   state: FullGameState,
-  reachMap?: Map<number, ReachabilityInfo>
+  reachMap?: Map<number, ReachabilityInfo>,
+  avoidRoomByCharId?: Map<number, number>
 ): AcademySchedule {
-  const schedule = buildAcademySchedule(state, reachMap);
+  const schedule = buildAcademySchedule(state, reachMap, avoidRoomByCharId);
   for (const c of state.characters || []) {
     if (c.status === 'student') {
       const assign = schedule.studentAssignments.get(c.id);

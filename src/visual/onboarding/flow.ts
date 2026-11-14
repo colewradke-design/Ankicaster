@@ -27,7 +27,7 @@ export const STUDY_PARTS: Array<{ id: string; title: string; body: string; selec
   { id: 'draft', title: 'Card Draft', body: 'Card Draft is where you draw room cards.', selector: '[data-room-window="wizard_study"] [data-screen="draft"]' },
   { id: 'move', title: 'Move', body: 'Move keeps the room’s level, furniture and progress, and lets you pick a new spot.', selector: '[data-tour="room-move"]' },
   { id: 'demolish', title: 'Demolish', body: 'Demolish returns half the materials. It never gives mana back.', selector: '[data-tour="room-demolish"]' },
-  { id: 'details', title: 'Room details', body: 'Room details hides the description, what is already installed, and furniture you can add.', selector: '[data-tour="room-details"]' },
+  { id: 'details', title: 'Room tabs', body: 'Switch to Furnishings to see installed pieces, add more, or renovate this room.', selector: '[data-tour="room-tabs"]' },
   { id: 'installed', title: 'Installed', body: 'Everything in the room is listed here. Required fixtures stay. Optional ones can be removed.', selector: '[data-tour="room-installed"]' },
   { id: 'furnish', title: 'Furnish', body: 'Furnish buys an optional piece for this room. It spends materials, not mana.', selector: '[data-tour="room-furnish"]' },
   { id: 'renovate', title: 'Renovate', body: 'Renovate raises the room one level. It costs mana. Level 3 unlocks the room’s perk.', selector: '[data-tour="room-renovate"]' }
@@ -49,10 +49,10 @@ export interface TourView {
   forceAcademy: boolean;
 }
 
-export function tourOpensDetails(t: Pick<TutorialProgress, 'step' | 'part'> | undefined): boolean {
+export function tourUsesFurnishingsTab(t: Pick<TutorialProgress, 'step' | 'part'> | undefined): boolean {
   if (tourStepId(t) !== 'study-parts') return false;
   const id = STUDY_PARTS[Math.max(0, t?.part || 0)]?.id;
-  return id === 'details' || id === 'installed' || id === 'furnish' || id === 'renovate';
+  return id === 'installed' || id === 'furnish' || id === 'renovate';
 }
 
 export function tourStepId(t: Pick<TutorialProgress, 'step'> | undefined): TourStepId {

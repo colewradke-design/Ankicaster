@@ -332,12 +332,31 @@ test('MF-5: Two-step UI flow (acquire -> unplacedFurniture -> drop/cancel) and R
   curCls = state.rooms.find(r => r.id === cls.id)!;
   assert.equal((curCls.unplacedFurniture || []).length, 2);
 
-  // Verify RoomWindow renders To Place tray, Place buttons, Cancel unplaced, Slots usage
+  // Verify RoomWindow renders Required fixtures on Room tab and To place tray, Place buttons, Cancel unplaced, Slots usage on Furnishings tab
+  const roomTabHtml = renderToStaticMarkup(
+    <RoomWindow
+      state={state}
+      room={curCls}
+      initialTab="room"
+      onClose={() => {}}
+      onOpenScreen={() => {}}
+      onResolveHazard={() => {}}
+      onUpgrade={() => {}}
+      onAddFurniture={() => {}}
+      onRemoveFurniture={() => {}}
+      onInstallRequired={() => {}}
+      onPlaceFurniture={() => {}}
+      onMoveFurniture={() => {}}
+      onCancelUnplacedFurniture={() => {}}
+    />
+  );
+  assert.ok(roomTabHtml.includes('data-action="place-required"'), 'Required slot shows Place button');
+
   const html = renderToStaticMarkup(
     <RoomWindow
       state={state}
       room={curCls}
-      detailsOpen={true}
+      initialTab="furnishings"
       onClose={() => {}}
       onOpenScreen={() => {}}
       onResolveHazard={() => {}}
@@ -351,7 +370,6 @@ test('MF-5: Two-step UI flow (acquire -> unplacedFurniture -> drop/cancel) and R
     />
   );
   assert.ok(html.includes('data-testid="to-place-furniture"'), 'To place section rendered');
-  assert.ok(html.includes('data-action="place-required"'), 'Required slot shows Place button');
   assert.ok(html.includes('data-action="place-furniture"'), 'Unplaced queue shows Place button');
   assert.ok(html.includes('data-action="cancel-unplaced"'), 'Optional unplaced item can return to storage');
   assert.ok(html.includes('data-testid="room-slots-usage"'), 'Slot usage displayed');
@@ -391,7 +409,7 @@ test('MF-5: Two-step UI flow (acquire -> unplacedFurniture -> drop/cancel) and R
     <RoomWindow
       state={mvReq.state}
       room={mvReq.state.rooms.find(r => r.id === cls.id)!}
-      detailsOpen={true}
+      initialTab="furnishings"
       onClose={() => {}}
       onOpenScreen={() => {}}
       onResolveHazard={() => {}}

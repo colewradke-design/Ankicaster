@@ -20,7 +20,7 @@ import { createInitialGameState } from './data/initialState';
 import { createNewAcademy } from './visual/onboarding/freshStart';
 import { CharacterCreationModal } from './visual/onboarding/CharacterCreationModal';
 import { FoundingDay, GuidedTour, GoalBanner } from './visual/onboarding/FoundingTour';
-import { applyTutorialAction, phaseAfterCreate, STUDY_PARTS, tourOpensDetails, tourStepId, tourView } from './visual/onboarding/flow';
+import { applyTutorialAction, phaseAfterCreate, STUDY_PARTS, tourUsesFurnishingsTab, tourStepId, tourView } from './visual/onboarding/flow';
 import { AnkicasterEngine } from './utils/engine';
 import type { DraftDeckId } from './utils/decks';
 import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS, SCHOOL_EVENTS } from './data/content';
@@ -28,6 +28,7 @@ import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS, SCHOOL_EVENTS } from './data/c
 // Components
 import { TopBar } from './components/TopBar';
 import { RoomWindow } from './components/RoomWindow';
+import { PersonCard } from './components/PersonCard';
 import { ScreenWindow } from './components/ScreenWindow';
 import { PonderOrbPicker, GrimoireBook } from './components/StudyModals';
 import { StoresPanel, JournalPanel, VisitorsPanel } from './components/AcademyPanels';
@@ -76,7 +77,27 @@ export default function App() {
 
   // Modals & Active Inspector State
   const [selectedRoom, setSelectedRoom] = useState<PlacedRoom | null>(null);
+  const [selectedPersonId, setSelectedPersonId] = useState<'wizard' | number | null>(null);
+  const [, setPersonActivityTick] = useState(0);
+  const personActivityRef = useRef<((personId: 'wizard' | number) => string) | null>(null);
   const [isDraftModalOpen, setIsDraftModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (selectedPersonId === null) return;
+    if (typeof selectedPersonId === 'number' && !state.characters.some(c => c.id === selectedPersonId)) {
+      setSelectedPersonId(null);
+      return;
+    }
+    const timer = setInterval(() => setPersonActivityTick(t => t + 1), 500);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSelectedPersonId(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [selectedPersonId, state.characters]);
   const [draftDeck, setDraftDeck] = useState<'foundation' | 'grounds' | 'magic'>('foundation');
   const [draftChoices, setDraftChoices] = useState<DraftCard[]>([]);
   const [draftTutorial, setDraftTutorial] = useState<string | undefined>();
@@ -784,14 +805,25 @@ export default function App() {
     }
   };
 
-  // Handler: Assign Teacher Classroom
-  const handleAssignTeacherRoom = (charId: number, roomId: number) => {
-    const res = AnkicasterEngine.assignTeacherToClassroom(state, charId, roomId);
+  // Handler: Assign or Clear Room Staff from Room tab
+  const handleAssignRoomStaff = (roomId: number, charId: number, replaceCharId?: number) => {
+    const res = AnkicasterEngine.assignRoomStaff(state, roomId, charId, replaceCharId);
     if (!res.success) {
-      addToast(res.error || 'Cannot assign classroom.', 'warning');
+      addToast(res.error || 'Cannot assign staff.', 'warning');
     } else {
       setState(res.state);
-      addToast('Teacher assigned to classroom!', 'success');
+      addToast('Staff assigned to room!', 'success');
+    }
+  };
+
+  const handleClearRoomStaff = (roomId: number, charId: number) => {
+    const res = AnkicasterEngine.clearRoomStaff(state, roomId, charId);
+    if (!res.success) {
+      addToast(res.error || 'Cannot clear staff.', 'warning');
+    } else {
+      setState(res.state);
+      const stillAssigned = res.state.characters.find(c => c.id === charId)?.workplaceRoomId === roomId;
+      addToast(stillAssigned ? 'Remains here — this is the only open qualifying room.' : 'Staff cleared from room.', 'info');
     }
   };
 
@@ -855,7 +887,6 @@ export default function App() {
             state={state}
             view={id}
             onAssignCareer={handleAssignCareer}
-            onAssignTeacherRoom={handleAssignTeacherRoom}
             onRetireCharacter={handleRetireCharacter}
             onEnrollSecondSchool={handleEnrollSecondSchool}
           />
@@ -966,6 +997,8 @@ export default function App() {
             setSelectedRoom(room);
             setState(prev => ({ ...prev, tutorial: applyTutorialAction(prev.tutorial, room.defId === 'wizard_study' ? 'open-study' : 'open-other') }));
           }}
+          onSelectPerson={id => setSelectedPersonId(id)}
+          personActivityRef={personActivityRef}
           onSelectCreature={() => handleOpenScreen('bestiary')}
           onSelectEvent={evtId => {
             const evt = SCHOOL_EVENTS.find(e => e.id === evtId)
@@ -1024,7 +1057,7 @@ export default function App() {
         ))}
       </div>
 
-      {/* MODAL 1: ROOM WINDOW (header, stats, hazard, 1-3 actions, collapsed details) */}
+      {/* MODAL 1: ROOM WINDOW (Room + Furnishings tabs) */}
       {currentSelectedRoom && (
         <RoomWindow
           state={state}
@@ -1035,6 +1068,9 @@ export default function App() {
             if (wasStudy) setState(prev => ({ ...prev, tutorial: applyTutorialAction(prev.tutorial, 'close-study') }));
           }}
           onOpenScreen={handleOpenScreen}
+          onOpenPerson={id => setSelectedPersonId(id)}
+          onAssignStaff={handleAssignRoomStaff}
+          onClearStaff={handleClearRoomStaff}
           onResolveHazard={handleResolveHazard}
           onUpgrade={roomId => {
             const res = AnkicasterEngine.upgradeRoom(state, roomId);
@@ -1095,7 +1131,17 @@ export default function App() {
             if (!res.success) addToast(res.error || 'Cannot remove furniture.', 'warning');
             else setState(res.state);
           }}
-          detailsOpen={!!tutorial && tutorial.phase === 'tour' && studyOpen && tourOpensDetails(tutorial)}
+          forcedTab={tutorial?.phase === 'tour' && studyOpen && tourUsesFurnishingsTab(tutorial) ? 'furnishings' : undefined}
+        />
+      )}
+
+      {/* PERSON CARD (map doll or RoomWindow portrait) */}
+      {selectedPersonId !== null && (
+        <PersonCard
+          state={state}
+          personId={selectedPersonId}
+          activityText={personActivityRef.current?.(selectedPersonId)}
+          onClose={() => setSelectedPersonId(null)}
         />
       )}
 

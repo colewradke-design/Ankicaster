@@ -43,10 +43,10 @@ function allReachable(state: FullGameState): Set<ScreenId> {
   return out;
 }
 
-const renderRoom = (state: FullGameState, room: PlacedRoom, detailsOpen = false) =>
+const renderRoom = (state: FullGameState, room: PlacedRoom, initialTab: 'room' | 'furnishings' = 'room') =>
   renderToStaticMarkup(
     <RoomWindow state={state} room={room} onClose={noop} onOpenScreen={noop} onResolveHazard={noop}
-      onUpgrade={noop} onAddFurniture={noop} onRemoveFurniture={noop} detailsOpen={detailsOpen} />
+      onUpgrade={noop} onAddFurniture={noop} onRemoveFurniture={noop} initialTab={initialTab} />
   );
 
 test('UI-1: the mapping table covers all 10 former tabs and only known screens', () => {
@@ -172,15 +172,20 @@ test('UI-7: hazards stay reachable: top bar chip, Academy menu entry, room windo
   assert.ok(win.includes('Dispel (Warder)'));
 });
 
-test('UI-8: Wizard\'s Study window: one Ponder Orb + one Grimoire button (no per-school buttons), details collapsed', () => {
+test('UI-8: Wizard\'s Study window: one Ponder Orb + one Grimoire button (no per-school buttons), Room and Furnishings tabs', () => {
   const s = fresh();
   const study = s.rooms.find(r => r.defId === 'wizard_study')!;
   const html = renderRoom(s, study);
   assert.equal((html.match(/data-screen="ponder"/g) || []).length, 1);
   assert.equal((html.match(/data-screen="grimoire"/g) || []).length, 1);
   assert.ok(!/Ponder Level|Queue Level/.test(html), 'no five study buttons');
-  assert.ok(!/<details[^>]* open/.test(html), 'secondary section collapsed by default');
+  assert.ok(!/<details[\s>]/.test(html), 'no details drawer');
+  assert.match(html, /data-tour="room-tabs"/);
+  assert.ok(!/data-tour="room-installed"/.test(html), 'furnishings list stays on Furnishings tab');
   assert.match(html, /data-testid="room-stats"/);
+  const furnHtml = renderRoom(s, study, 'furnishings');
+  assert.match(furnHtml, /data-tour="room-installed"/);
+  assert.match(furnHtml, /data-tour="room-furnish"/);
   // 1-3 primary actions in every room window
   for (const defId of Object.keys(ROOM_DEFINITIONS)) assert.ok(getRoomScreens(defId).length <= 3, defId);
 });
@@ -215,7 +220,7 @@ test('UI-11: navigation helpers never mutate state', () => {
   const deepFreeze = (o: any) => { if (o && typeof o === 'object' && !Object.isFrozen(o)) { Object.freeze(o); for (const k of Object.keys(o)) deepFreeze(o[k]); } return o; };
   deepFreeze(s);
   getAcademyMenuScreens(s);
-  for (const r of s.rooms) { getRoomScreens(r.defId, s); renderRoom(s, r, true); }
+  for (const r of s.rooms) { getRoomScreens(r.defId, s); renderRoom(s, r, 'room'); renderRoom(s, r, 'furnishings'); }
   renderToStaticMarkup(<TopBar state={s} onOpenScreen={noop} onOpenRoom={noop} />);
   renderToStaticMarkup(<AcademyMenu state={s} onOpenScreen={noop} onOpenRoom={noop} defaultOpen />);
   renderToStaticMarkup(<PonderOrbPicker state={s} onPick={noop} onClose={noop} />);

@@ -388,11 +388,6 @@ export function drawCharacter(g: Painter, look: DollLook, pose: DollPose): { mar
     g.rect(x + 3 * sign, hip - 2, 4, 1.2).fill({ color: 0xf6f1e8 });
   }
 
-  // Mastery pips, 3×3, under the feet
-  look.mastered.slice(0, 5).forEach((sch, i) => {
-    const px = x - (Math.min(5, look.mastered.length) * 4) / 2 + i * 4;
-    g.rect(px, footY + 2, 3, 3).fill({ color: num(SCHOOL_HEX[sch] || '#DDB843', 0xddb843) });
-  });
   return { mark: look.mark, anchors };
 }
 

@@ -312,7 +312,7 @@ test('bookshelf rooms and context-aware effects; wooden_chair removed from libra
       onUpgrade={() => {}}
       onAddFurniture={() => {}}
       onRemoveFurniture={() => {}}
-      detailsOpen
+      initialTab="furnishings"
     />
   );
   assert.ok(dormHtml.includes('Composure +2'), 'Dormitory shows context-aware Composure +2 on Bookshelf');
@@ -327,7 +327,7 @@ test('bookshelf rooms and context-aware effects; wooden_chair removed from libra
       onUpgrade={() => {}}
       onAddFurniture={() => {}}
       onRemoveFurniture={() => {}}
-      detailsOpen
+      initialTab="furnishings"
     />
   );
   assert.ok(studyHtml.includes('Pondering +10%'), 'Wizard Study shows Pondering +10% for Bookshelf/Quill');
@@ -504,7 +504,7 @@ test('spiral_stair & support_pillar allow 0 furniture slots and show no-furnitur
       onUpgrade={() => {}}
       onAddFurniture={() => {}}
       onRemoveFurniture={() => {}}
-      detailsOpen
+      initialTab="furnishings"
     />
   );
   assert.ok(htmlLv1.includes('This room holds no furniture.'), 'Spiral Stair Lv 1 renders no-furniture notice');
@@ -520,7 +520,7 @@ test('spiral_stair & support_pillar allow 0 furniture slots and show no-furnitur
       onUpgrade={() => {}}
       onAddFurniture={() => {}}
       onRemoveFurniture={() => {}}
-      detailsOpen
+      initialTab="furnishings"
     />
   );
   assert.ok(htmlLv2.includes('Teleportation Portal (Lv 3)'), 'Spiral Stair Lv 2 upgrade mentions Teleportation Portal');

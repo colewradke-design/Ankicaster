@@ -19,7 +19,8 @@ import { FullGameState, FurniturePlane, PlacedRoom } from '../../types/ankicaste
 import { ROOM_DEFINITIONS, roomDisplayName } from '../../data/content';
 import { Camera } from './Camera';
 import { NavGraph } from '../layout/navGraph';
-import { Choreographer } from '../agents/Choreographer';
+import { Choreographer, VisualAgent } from '../agents/Choreographer';
+import { describePersonActivity } from '../agents/personActivity';
 import { ForgeRenderer } from '../sprites/forge/ForgeRenderer';
 import { computeReachability, ReachabilityInfo } from '../../utils/reachability';
 import {
@@ -1192,12 +1193,8 @@ export class VisualWorld {
     for (const item of loose) paint(item.x, item.y, item.b);
 
     for (const agent of this.choreographer.agents.values()) {
-      const schools = agent.isWizard ? [] : (agent.character?.masteredSchools || []);
-      if (this.camera.zoom >= 2 && schools.length) {
-        labels.push({ key: `pips:${agent.id}`, text: schools.map(s => s.slice(0, 1).toUpperCase()).join(''), wx: agent.x, wy: agent.y + 8, color: 0xf7e39a, size: 10, align: 'center' });
-      }
       if (this.camera.zoom >= 3 && agent.character?.career) {
-        labels.push({ key: `career:${agent.id}`, text: agent.character.career, wx: agent.x, wy: agent.y + 16, color: 0xf6f1e8, size: 10, align: 'center' });
+        labels.push({ key: `career:${agent.id}`, text: agent.character.career, wx: agent.x, wy: agent.y + 10, color: 0xf6f1e8, size: 10, align: 'center' });
       }
     }
 
@@ -1476,6 +1473,40 @@ export class VisualWorld {
 
     // Update overlay position sync
     this.renderOverlays();
+  }
+
+  hitTestPerson(screenX: number, screenY: number): VisualAgent | null {
+    if (!this.state) return null;
+    const worldX = (screenX - this.worldContainer.x) / this.camera.zoom;
+    const worldY = (screenY - this.worldContainer.y) / this.camera.zoom;
+
+    // Reverse draw order (highest baseline Y is drawn on top)
+    const list = Array.from(this.choreographer.agents.values()).sort((a, b) => b.y - a.y);
+    for (const agent of list) {
+      const sleeping = agent.anim === 'sleep';
+      const halfW = sleeping ? 12 : 10;
+      const top = sleeping ? agent.y - 14 : agent.y - 32;
+      const bottom = agent.y + 4;
+      if (
+        worldX >= agent.x - halfW &&
+        worldX <= agent.x + halfW &&
+        worldY >= top &&
+        worldY <= bottom
+      ) {
+        return agent;
+      }
+    }
+    return null;
+  }
+
+  getPersonActivity(personId: 'wizard' | number, nowMs?: number): string {
+    if (!this.state) return '';
+    if (personId === 'wizard') {
+      return describePersonActivity(this.choreographer.agents.get('wizard'), 'wizard', this.state, nowMs);
+    }
+    const char = this.state.characters.find(c => c.id === personId);
+    if (!char) return '';
+    return describePersonActivity(this.choreographer.agents.get(`char-${personId}`), char, this.state, nowMs);
   }
 
   hitTestCreature(screenX: number, screenY: number): CreatureVisualAgent | null {

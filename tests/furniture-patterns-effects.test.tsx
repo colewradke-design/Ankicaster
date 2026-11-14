@@ -170,7 +170,7 @@ test('Pattern gating: unlearned item blocked in engine & locked in RoomWindow; d
       onAddFurniture={() => {}}
       onInstallRequired={() => {}}
       onRemoveFurniture={() => {}}
-      detailsOpen
+      initialTab="furnishings"
     />
   );
   assert.match(htmlLocked, /data-testid="locked-pattern-canopy_bed"/);

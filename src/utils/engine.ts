@@ -657,8 +657,14 @@ export class AnkicasterEngine {
     ).length;
   }
 
-  private static findOpenWorkplace(state: FullGameState, career: string, exceptId?: number, char?: Character): PlacedRoom | undefined {
-    return state.rooms.find(r => {
+  private static findOpenWorkplace(
+    state: FullGameState,
+    career: string,
+    exceptId?: number,
+    char?: Character,
+    avoidRoomId?: number
+  ): PlacedRoom | undefined {
+    const matches = state.rooms.filter(r => {
       const wp = ROOM_DEFINITIONS[r.defId]?.workplace;
       if (!wp || wp.career !== career || !AnkicasterEngine.roomWorkable(r)) return false;
       if (career === 'teacher' && char) {
@@ -667,13 +673,18 @@ export class AnkicasterEngine {
       }
       return AnkicasterEngine.slotsUsed(state, r, exceptId) < wp.slots;
     });
+    if (avoidRoomId != null) {
+      const other = matches.find(r => r.id !== avoidRoomId);
+      if (other) return other;
+    }
+    return matches[0];
   }
 
   /**
    * Point each working faculty member at a built, finished room of their career with a free slot.
    * Keeps a still-valid assignment. Clears the post when they have no career.
    */
-  static syncWorkplaces(state: FullGameState): void {
+  static syncWorkplaces(state: FullGameState, avoidRoomByCharId?: Map<number, number>): void {
     if (!state.characters || !state.rooms) return;
     for (const c of state.characters) {
       if (!c.career) {
@@ -683,17 +694,19 @@ export class AnkicasterEngine {
       if (c.careerState === 'sabbatical') continue;
       // Teacher workplaces are managed by applyAcademyScheduleToState below
       if (c.career === 'teacher') continue;
+      const avoidId = avoidRoomByCharId?.get(c.id);
       const current = c.workplaceRoomId != null ? state.rooms.find(r => r.id === c.workplaceRoomId) : undefined;
       const wp = current ? ROOM_DEFINITIONS[current.defId]?.workplace : undefined;
       const still = !!current && !!wp && wp.career === c.career && AnkicasterEngine.roomWorkable(current)
-        && AnkicasterEngine.slotsUsed(state, current, c.id) < wp.slots;
+        && AnkicasterEngine.slotsUsed(state, current, c.id) < wp.slots
+        && current.id !== avoidId;
       if (still) continue;
-      c.workplaceRoomId = AnkicasterEngine.findOpenWorkplace(state, c.career, c.id, c)?.id;
+      c.workplaceRoomId = AnkicasterEngine.findOpenWorkplace(state, c.career, c.id, c, avoidId)?.id;
     }
 
     // Rebuild student classroom periods/desks, teacher period splits, and headmaster room coverage
     const reach = computeReachability(state.rooms);
-    applyAcademyScheduleToState(state, reach);
+    applyAcademyScheduleToState(state, reach, avoidRoomByCharId);
 
     // Sync character beds when bedRoomId is unset or points to a non-existent/unbuilt room
     const builtBedRooms = state.rooms.filter(
@@ -3615,6 +3628,83 @@ export class AnkicasterEngine {
     }
     char.workplaceRoomId = room.id;
     AnkicasterEngine.syncWorkplaces(next);
+    return { state: next, success: true };
+  }
+
+  /**
+   * Assign an active faculty member of a room's career to work in `roomId`.
+   * If all workplace slots are full, `replaceCharId` must identify who they replace (no silent bump).
+   */
+  static assignRoomStaff(
+    state: FullGameState,
+    roomId: number,
+    charId: number,
+    replaceCharId?: number
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const next = structuredClone(state);
+    const room = next.rooms.find(r => r.id === roomId && r.state === 'built');
+    if (!room) return { state, success: false, error: 'Room not found.' };
+    const wp = ROOM_DEFINITIONS[room.defId]?.workplace;
+    if (!wp) return { state, success: false, error: 'This room has no staff post.' };
+    if (!AnkicasterEngine.roomWorkable(room)) {
+      return { state, success: false, error: 'Finish installing required fixtures before assigning staff.' };
+    }
+
+    const char = next.characters.find(c => c.id === charId);
+    if (!char || char.career !== wp.career || char.careerState === 'sabbatical' || char.status === 'away') {
+      return { state, success: false, error: `Character is not an active ${wp.career}.` };
+    }
+    if (wp.career === 'teacher') {
+      const sch = classroomSchool(room.defId);
+      if (!sch || !char.masteredSchools.includes(sch)) {
+        return { state, success: false, error: 'Teacher has not mastered that classroom’s school.' };
+      }
+    }
+
+    if (char.workplaceRoomId === room.id) {
+      return { state: next, success: true };
+    }
+
+    const occupants = next.characters.filter(
+      c => c.id !== char.id && c.workplaceRoomId === room.id && c.career === wp.career && c.careerState !== 'sabbatical'
+    );
+
+    const avoid = new Map<number, number>();
+    if (occupants.length >= wp.slots) {
+      if (replaceCharId == null) {
+        return { state, success: false, error: 'All slots are full; pick who to replace.' };
+      }
+      const replaced = occupants.find(c => c.id === replaceCharId);
+      if (!replaced) {
+        return { state, success: false, error: 'Staff member to replace was not found in this room.' };
+      }
+      replaced.workplaceRoomId = undefined;
+      avoid.set(replaced.id, room.id);
+    }
+
+    char.workplaceRoomId = room.id;
+    AnkicasterEngine.syncWorkplaces(next, avoid.size > 0 ? avoid : undefined);
+    return { state: next, success: true };
+  }
+
+  /**
+   * Clear a staff member's assignment to `roomId` and let auto-placement place them
+   * in the next open room of their career (or back here if it is the only one).
+   */
+  static clearRoomStaff(
+    state: FullGameState,
+    roomId: number,
+    charId: number
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const next = structuredClone(state);
+    const room = next.rooms.find(r => r.id === roomId && r.state === 'built');
+    if (!room) return { state, success: false, error: 'Room not found.' };
+    const char = next.characters.find(c => c.id === charId);
+    if (!char || char.workplaceRoomId !== room.id) {
+      return { state, success: false, error: 'Staff member is not assigned to this room.' };
+    }
+    char.workplaceRoomId = undefined;
+    AnkicasterEngine.syncWorkplaces(next, new Map([[char.id, room.id]]));
     return { state: next, success: true };
   }
 
