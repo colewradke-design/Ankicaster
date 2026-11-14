@@ -377,12 +377,12 @@ test('extra ticker callbacks do not advance animation faster than the fixed rate
   assert.equal(ch.clockMs, clock, '100 callbacks at one timestamp must not add time');
   assert.equal(wiz!.animFrame, frame);
   assert.equal(wiz!.x, x, 'walking speed is not driven by callback count');
-  assert.equal(wiz!.animFrame, dollFrame('idle', ch.clockMs - (wiz!.animBaseMs ?? ch.clockMs)));
+  assert.equal(wiz!.animFrame, dollFrame(wiz!.anim, ch.clockMs - (wiz!.animBaseMs ?? ch.clockMs)));
 
   for (let i = 1; i <= 100; i++) world.update(16, t0 + i * 10);
   const gained = ch.clockMs - clock;
   assert.ok(gained <= 1000 + 1 && gained >= 900, `gained ${gained}`);
-  assert.equal(wiz!.animFrame, dollFrame('idle', ch.clockMs - (wiz!.animBaseMs ?? ch.clockMs)));
+  assert.equal(wiz!.animFrame, dollFrame(wiz!.anim, ch.clockMs - (wiz!.animBaseMs ?? ch.clockMs)));
   const steps = Math.floor(gained / (1000 / DOLL_ANIMS.idle.fps));
   assert.ok(steps <= DOLL_ANIMS.idle.fps, `idle advanced ${steps} frames in one second`);
 

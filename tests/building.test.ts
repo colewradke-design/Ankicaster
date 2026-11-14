@@ -12,6 +12,7 @@ import { computeReachability } from '../src/utils/reachability.ts';
 import { normalizeAppearance, DEFAULT_APPEARANCE } from '../src/utils/appearance.ts';
 import { Choreographer } from '../src/visual/agents/Choreographer.ts';
 import { NavGraph } from '../src/visual/layout/navGraph.ts';
+import { getGroundY, roomToWorldBox } from '../src/visual/layout/gridToWorld.ts';
 import { FullGameState, PlacedRoom } from '../src/types/ankicaster.ts';
 import { ROOM_DEFINITIONS } from '../src/data/content.ts';
 
@@ -370,4 +371,70 @@ test('B10 the castle wizard is drawn with the saved look and follows changes', (
   assert.equal(w.robeColor, '#9E2A3A');
   assert.equal(w.hat, 'crown');
   assert.equal(w.staff, 'moon');
+});
+
+function visualGroundY(rooms: PlacedRoom[]): number {
+  const maxFloor = Math.max(2, ...rooms.filter(r => r.area === 'castle').map(r => r.y + r.h - 1));
+  return getGroundY(maxFloor + 1);
+}
+
+test('B11 the headmaster walks the school, and only the orb keeps them in the study', () => {
+  const s = createNewAcademy();
+  const study = s.rooms.find(r => r.defId === 'wizard_study')!;
+  const ground0 = visualGroundY(s.rooms);
+  const ch = new Choreographer(new NavGraph(s.rooms, ground0), ground0);
+  ch.syncState(s);
+  const wiz = ch.agents.get('wizard')!;
+  assert.equal(wiz.y, roomToWorldBox(study, ground0).floorLineY);
+  const yAtSpawn = wiz.y;
+
+  const tall = structuredClone(s);
+  tall.rooms.push({
+    id: 50,
+    defId: 'corridor',
+    x: 1,
+    y: 4,
+    w: 1,
+    h: 1,
+    area: 'castle',
+    level: 1,
+    state: 'built',
+    buildRequired: 0,
+    buildProgress: 0,
+    cleanliness: 100,
+    settings: {},
+    furniture: []
+  });
+  const ground1 = visualGroundY(tall.rooms);
+  assert.ok(ground1 > ground0);
+  ch.updateNavGraph(new NavGraph(tall.rooms, ground1), ground1);
+  ch.syncState(tall);
+  assert.equal(wiz.y, yAtSpawn + (ground1 - ground0), 'growing the castle does not leave the headmaster behind');
+  assert.ok(wiz.y < ground1, 'feet stay above the earth');
+
+  ch.updateNavGraph(new NavGraph(s.rooms, ground0), ground0);
+  ch.syncState(s);
+  assert.equal(wiz.y, yAtSpawn, 'shrinking the castle does not bury the headmaster');
+
+  const patch = s.rooms.find(r => r.defId === 'vegetable_patch')!;
+  for (let i = 0; i < 200; i++) ch.tick(100, s, false);
+  assert.equal(wiz.currentRoomId, patch.id, 'with no orb session the headmaster leaves the study for a job or a visit');
+  assert.equal(wiz.wizardErrand, 'wander');
+  assert.ok(Math.abs(wiz.y - roomToWorldBox(patch, ground0).floorLineY) < 2, 'they arrive on the plot floor, not under the ground');
+
+  s.wizard.activeSession = {
+    id: 1,
+    kind: 'orb',
+    school: 'nature',
+    targetLevel: 1,
+    progress: 0,
+    required: 25,
+    costPaid: 0,
+    state: 'active'
+  };
+  for (let i = 0; i < 200; i++) ch.tick(100, s, false);
+  assert.equal(wiz.currentRoomId, study.id, 'pondering the orb sends them back to the study');
+  assert.equal(wiz.wizardErrand, 'ponder');
+  assert.equal(wiz.anim, 'cast');
+  assert.equal(wiz.y, roomToWorldBox(study, ground0).floorLineY);
 });

@@ -17,7 +17,8 @@
  * - reduceMotion places agents once per phase change only
  */
 
-import { FullGameState, Character, PlacedRoom } from '../../types/ankicaster';
+import { FullGameState, Character, PlacedRoom, SchoolType } from '../../types/ankicaster';
+import { ROOM_DEFINITIONS } from '../../data/content';
 import { NavGraph, NavNode } from '../layout/navGraph';
 import { roomToWorldBox, getFloorLineY } from '../layout/gridToWorld';
 import { ReachabilityInfo } from '../../utils/reachability';
@@ -44,6 +45,10 @@ export interface VisualAgent {
   animBaseMs?: number;
   animPlaying?: string;
   activity: 'class' | 'work' | 'meal' | 'sleep' | 'free_time';
+  /** What the headmaster is doing: ponder, teach, heal, tend, garden, build, meal, wander. */
+  wizardErrand?: string;
+  /** Changes when the errand should be chosen again (ponder, or phase + bell). */
+  wizardErrandKey?: string;
   currentRoomId?: number;
   targetRoomId?: number;
   freeTimeTargetRoomId?: number;
@@ -90,8 +95,17 @@ export class Choreographer {
   }
 
   updateNavGraph(navGraph: NavGraph, groundY: number) {
+    const delta = groundY - this.groundY;
     this.navGraph = navGraph;
     this.groundY = groundY;
+    // The whole castle is redrawn from the new ground line. Anyone already
+    // standing still has to move with it, or they are left in the earth.
+    if (!delta || !Number.isFinite(delta)) return;
+    for (const agent of this.agents.values()) {
+      agent.y += delta;
+      agent.targetY += delta;
+      for (const node of agent.path) node.y += delta;
+    }
   }
 
   /** Last seen position of each room, to detect Move / Demolish. */
@@ -414,53 +428,39 @@ export class Choreographer {
   private updateAgent(agent: VisualAgent, deltaMs: number, state: FullGameState, reduceMotion: boolean) {
     if (reduceMotion) {
       agent.animFrame = 0;
-      // With reduceMotion, place agents once per phase change only
-      if (agent.lastReducedMotionPhase !== this.schedulePhase) {
+      // With reduceMotion, place agents once per phase change only.
+      // The headmaster also replans when their errand changes (a new bell, or the orb).
+      const errandChanged = agent.isWizard && agent.wizardErrandKey !== this.wizardErrandKey(state);
+      if (agent.lastReducedMotionPhase !== this.schedulePhase || errandChanged) {
         agent.lastReducedMotionPhase = this.schedulePhase;
-        if (!agent.isWizard) {
-          this.planAgentNextGoal(agent, state);
-          if (agent.path.length > 0) {
-            const finalNode = agent.path[agent.path.length - 1];
-            agent.x = finalNode.x;
-            agent.y = finalNode.y;
-            agent.currentFloor = finalNode.floor;
-            agent.currentRoomId = finalNode.roomId ?? agent.targetRoomId;
-            agent.path = [];
-            agent.pathIndex = 0;
-          }
-          this.setArrivedAnim(agent);
-        } else {
-          const studyRoom = state.rooms.find(r => r.defId === 'wizard_study' && r.state === 'built');
-          if (studyRoom) {
-            const box = roomToWorldBox(studyRoom, this.groundY);
-            agent.x = box.left + box.width / 2;
-            agent.y = box.floorLineY;
-            agent.currentFloor = studyRoom.y;
-          }
-          agent.anim = 'idle';
+        if (agent.isWizard) this.planWizardGoal(agent, state);
+        else this.planAgentNextGoal(agent, state);
+        if (agent.path.length > 0) {
+          const finalNode = agent.path[agent.path.length - 1];
+          agent.x = finalNode.x;
+          agent.y = finalNode.y;
+          agent.currentFloor = finalNode.floor;
+          agent.currentRoomId = finalNode.roomId ?? agent.targetRoomId;
+          agent.path = [];
+          agent.pathIndex = 0;
         }
+        this.setArrivedAnim(agent);
       }
       agent.animFrame = 0;
       return;
     }
 
-    // Wizard stays near Study. The frame comes from elapsed time, after the anim is chosen.
-    if (agent.isWizard) {
-      const studyRoom = state.rooms.find(r => r.defId === 'wizard_study' && r.state === 'built');
-      if (studyRoom) {
-        const box = roomToWorldBox(studyRoom, this.groundY);
-        agent.targetX = box.left + box.width / 2;
-        agent.targetY = box.floorLineY;
-      }
-      agent.anim = 'idle';
-      this.applyFrame(agent);
-      return;
+    // The headmaster walks the school. Drop the current path when the errand changes
+    // (orb started or stopped, a new bell, meal time) so they turn around immediately.
+    if (agent.isWizard && agent.wizardErrandKey !== this.wizardErrandKey(state)) {
+      agent.path = [];
+      agent.pathIndex = 0;
     }
 
-    // Character behavior:
-    // If no path, decide destination based on schedule phase
+    // If no path, decide destination based on schedule phase (or the headmaster's errand)
     if (agent.path.length === 0) {
-      this.planAgentNextGoal(agent, state);
+      if (agent.isWizard) this.planWizardGoal(agent, state);
+      else this.planAgentNextGoal(agent, state);
     }
 
     // Follow path along the nav graph (never through floors)
@@ -545,6 +545,87 @@ export class Choreographer {
     this.applyFrame(agent);
   }
 
+  /** Feet on the Wizard's Study floor. No-op if the study is not built yet. */
+  private wizardErrandKey(state: FullGameState): string {
+    const session = state.wizard.activeSession;
+    if (session?.kind === 'orb' && session.state === 'active') return 'ponder';
+    return `${this.schedulePhase}:${state.bellIndex ?? 0}`;
+  }
+
+  /** Orb session: stay in the Study. Otherwise cover an open job, then walk the school. */
+  private planWizardGoal(agent: VisualAgent, state: FullGameState) {
+    const key = this.wizardErrandKey(state);
+    if (agent.wizardErrandKey === key && agent.path.length === 0 && agent.currentRoomId !== undefined && agent.currentRoomId === agent.targetRoomId) {
+      this.setArrivedAnim(agent);
+      return;
+    }
+    const task = this.chooseWizardTask(state);
+    agent.wizardErrandKey = key;
+    agent.wizardErrand = task.errand;
+    agent.activity = task.activity;
+    agent.targetRoomId = task.roomId;
+    if (task.roomId !== undefined && agent.currentRoomId === task.roomId && agent.path.length === 0) {
+      this.setArrivedAnim(agent);
+      return;
+    }
+    if (task.roomId !== undefined) this.routeToRoom(agent, state, task.roomId);
+  }
+
+  private chooseWizardTask(state: FullGameState): { roomId?: number; errand: string; activity: VisualAgent['activity'] } {
+    const built = state.rooms.filter(r => r.state === 'built' && this.isRoomReachable(r.id));
+    const session = state.wizard.activeSession;
+    if (session?.kind === 'orb' && session.state === 'active') {
+      const study = built.find(r => r.defId === 'wizard_study');
+      return { roomId: study?.id, errand: 'ponder', activity: 'work' };
+    }
+    if (this.schedulePhase === 'meal') {
+      const refectory = built.find(r => r.defId === 'refectory');
+      if (refectory) return { roomId: refectory.id, errand: 'meal', activity: 'meal' };
+    }
+
+    const bell = state.bellIndex ?? 0;
+    const onDuty = (career: string, roomId?: number) => state.characters.some(c =>
+      c.career === career && c.careerState !== 'sabbatical' && c.status !== 'away' &&
+      (roomId === undefined || c.workplaceRoomId === roomId)
+    );
+
+    const classrooms = built.filter(r => r.defId.startsWith('class_') && !onDuty('teacher', r.id));
+    if (classrooms.length) {
+      const levels = state.wizard.levels || {};
+      classrooms.sort((a, b) => {
+        const la = levels[a.defId.slice('class_'.length) as SchoolType] || 0;
+        const lb = levels[b.defId.slice('class_'.length) as SchoolType] || 0;
+        return lb - la || a.id - b.id;
+      });
+      return { roomId: classrooms[0].id, errand: 'teach', activity: 'class' };
+    }
+
+    const hurt = state.characters.some(c => c.injury && c.status !== 'away');
+    const infirmary = built.find(r => r.defId === 'infirmary');
+    if (hurt && infirmary && !onDuty('healer')) return { roomId: infirmary.id, errand: 'heal', activity: 'work' };
+
+    const wary = (state.creatures || []).some(c => c.status === 'wary');
+    if (wary && !onDuty('tamer')) {
+      const pen = built.find(r => (ROOM_DEFINITIONS[r.defId]?.capacity?.creatures ?? 0) > 0 || ROOM_DEFINITIONS[r.defId]?.workplace?.career === 'tamer');
+      if (pen) return { roomId: pen.id, errand: 'tend', activity: 'work' };
+    }
+
+    const sites = state.rooms.filter(r => r.state === 'site');
+    if (sites.length && !onDuty('builder')) {
+      const beside = built.filter(r => r.defId !== 'wizard_study' && sites.some(site => roomsTouch(r, site)));
+      const spot = beside.length ? beside[bell % beside.length] : built.find(r => sites.some(site => roomsTouch(r, site)));
+      if (spot) return { roomId: spot.id, errand: 'build', activity: 'work' };
+    }
+
+    const greenhouse = built.find(r => ROOM_DEFINITIONS[r.defId]?.workplace?.career === 'gardener' && !onDuty('gardener', r.id));
+    if (greenhouse) return { roomId: greenhouse.id, errand: 'garden', activity: 'work' };
+
+    // Headmaster's Presence: a different room each bell. Never the Study unless it is the only room.
+    const pool = built.filter(r => r.defId !== 'wizard_study' && r.defId !== 'spiral_stair' && r.defId !== 'support_pillar' && r.defId !== 'corridor');
+    const visit = pool.length ? pool[(bell * 17 + (state.day ?? 0)) % pool.length] : built.find(r => r.defId === 'wizard_study') || built[0];
+    return { roomId: visit?.id, errand: 'wander', activity: 'free_time' };
+  }
+
   /** Frame = floor(elapsed / frameMs) % frames. Changing anim restarts the phase; extra ticks do not. */
   private applyFrame(agent: VisualAgent) {
     if (agent.animPlaying !== agent.anim) {
@@ -557,6 +638,14 @@ export class Choreographer {
   }
 
   private setArrivedAnim(agent: VisualAgent) {
+    if (agent.isWizard) {
+      if (agent.wizardErrand === 'ponder') agent.anim = 'cast';
+      else if (agent.wizardErrand === 'teach') agent.anim = 'teach';
+      else if (agent.wizardErrand === 'meal') agent.anim = 'eat';
+      else if (agent.wizardErrand === 'heal' || agent.wizardErrand === 'tend' || agent.wizardErrand === 'garden' || agent.wizardErrand === 'build') agent.anim = 'work';
+      else agent.anim = 'idle';
+      return;
+    }
     if (agent.activity === 'class') {
       agent.anim = 'sit_study';
     } else if (agent.activity === 'meal') {
@@ -651,7 +740,12 @@ export class Choreographer {
       return;
     }
 
-    // Find destination node(s) in NavGraph (prefer floor/plot nodes over stair nodes)
+    this.routeToRoom(agent, state, targetRoomId);
+  }
+
+  /** Walk the nav graph to a room and stop on a slot of the floor the path arrives on. */
+  private routeToRoom(agent: VisualAgent, state: FullGameState, targetRoomId: number) {
+    // Prefer a floor or plot node over the stair column.
     const destCandidates = Array.from(this.navGraph.nodes.values())
       .filter(n => n.roomId === targetRoomId)
       .sort((a, b) => (a.kind === 'stair' ? 1 : 0) - (b.kind === 'stair' ? 1 : 0) || a.floor - b.floor);
@@ -717,4 +811,17 @@ export class Choreographer {
       }
     }
   }
+}
+
+/** Share an edge on the castle grid, or sit on neighbouring grounds plots. */
+function roomsTouch(a: PlacedRoom, b: PlacedRoom): boolean {
+  if (a.area !== b.area) return false;
+  if (a.area === 'grounds') {
+    return a.x + a.w === b.x || b.x + b.w === a.x;
+  }
+  const xOverlap = a.x < b.x + b.w && b.x < a.x + a.w;
+  const yOverlap = a.y < b.y + b.h && b.y < a.y + a.h;
+  const xTouch = a.x + a.w === b.x || b.x + b.w === a.x;
+  const yTouch = a.y + a.h === b.y || b.y + b.h === a.y;
+  return (xTouch && yOverlap) || (yTouch && xOverlap);
 }
