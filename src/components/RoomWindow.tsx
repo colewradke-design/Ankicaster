@@ -30,6 +30,7 @@ import {
   careerAffinityMultiplier, classroomSchool, getFacultySummary
 } from '../utils/formulas';
 import { isPatternKnown } from '../utils/decks';
+import { buildAcademySchedule } from '../utils/schedule';
 import { HAZARD_DISPEL_MANA_COST } from '../utils/engine';
 import { ScreenId, SCREEN_DEFS, getRoomScreens } from '../ui/screens';
 import { ScreenIcon } from './ScreenIcon';
@@ -380,20 +381,41 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
 
           {(() => {
             const classSch = !isSite ? classroomSchool(room.defId) : undefined;
-            const hasQualifyingTeacher = !classSch || state.characters.some(c =>
-              c.workplaceRoomId === room.id &&
-              c.career === 'teacher' &&
-              c.careerState !== 'sabbatical' &&
-              c.masteredSchools.includes(classSch)
-            );
+            const schedule = classSch ? buildAcademySchedule(state) : undefined;
+            const roomSched = schedule?.classrooms.get(room.id);
+            const hasQualifyingTeacher =
+              !classSch ||
+              !!roomSched?.isStaffed ||
+              state.characters.some(c =>
+                c.workplaceRoomId === room.id &&
+                c.career === 'teacher' &&
+                c.careerState !== 'sabbatical' &&
+                c.masteredSchools.includes(classSch)
+              );
             const people = state.characters.filter(c => c.bedRoomId === room.id || c.seatRoomId === room.id || c.workplaceRoomId === room.id);
-            if (!people.length && hasQualifyingTeacher) return null;
+            if (!people.length && hasQualifyingTeacher && !roomSched?.coveredByHeadmaster && !roomSched) return null;
             const capSch = classSch ? classSch[0].toUpperCase() + classSch.slice(1) : '';
             return (
               <div className="space-y-2">
                 {!hasQualifyingTeacher && (
                   <div className="bg-amber-950/40 border border-amber-600/50 rounded-xl px-3 py-2 text-[12px] text-amber-200 font-semibold" data-testid="classroom-needs-teacher">
                     Needs a {capSch} master teacher
+                  </div>
+                )}
+                {roomSched?.coveredByHeadmaster && (
+                  <div className="bg-indigo-950/50 border border-indigo-500/50 rounded-xl px-3 py-2 text-[12px] text-indigo-200 font-semibold flex items-center justify-between" data-testid="classroom-headmaster-covered">
+                    <span>Covered by Headmaster (All 4 Periods)</span>
+                    <span className="text-[11px] font-mono text-indigo-300">Desks: {roomSched.deskCount} · Cap {roomSched.deskCount * 4}</span>
+                  </div>
+                )}
+                {roomSched && !roomSched.coveredByHeadmaster && roomSched.teacherIds.length > 0 && (
+                  <div className="bg-emerald-950/30 border border-emerald-700/40 rounded-xl px-3 py-1.5 text-[12px] text-emerald-200 flex items-center justify-between" data-testid="classroom-schedule-info">
+                    <span>
+                      {roomSched.teacherIds.length === 2
+                        ? 'Staffed by 2 teachers (Periods 1–2 / 3–4)'
+                        : 'Staffed (Periods 1–4)'}
+                    </span>
+                    <span className="text-[11px] font-mono text-emerald-300">Desks: {roomSched.deskCount} · Cap {roomSched.deskCount * 4}</span>
                   </div>
                 )}
                 {people.length > 0 && (

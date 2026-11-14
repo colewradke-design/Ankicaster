@@ -58,7 +58,8 @@ function student(id: number, seatRoomId: number, bedRoomId?: number): Character 
 function classFurniture(splendid: boolean): PlacedFurniture[] {
   const base = [
     item('teachers_lectern', 'required:teachers_lectern'),
-    item('orrery_globe', 'required:orrery_globe')
+    item('orrery_globe', 'required:orrery_globe'),
+    item('student_desk', 'required:student_desk')
   ];
   if (!splendid) return base;
   // Each bookshelf is +3.5 quality in a classroom (Focus primary, Order secondary). 19 of them clear Splendid (Q >= 70).
@@ -159,7 +160,8 @@ test('a classroom with an appointed teacher is staffed at x1.0, and x0.5 without
   const state = createNewAcademy();
   const room = place(state, 'class_arcane', 80, 6, 0, [
     item('teachers_lectern', 'required:teachers_lectern'),
-    item('orrery_globe', 'required:orrery_globe')
+    item('orrery_globe', 'required:orrery_globe'),
+    item('student_desk', 'required:student_desk')
   ]);
   assert.equal(AnkicasterEngine.roomEfficiencyDetail(state, room).staff, 0.5);
   const t = teacher(9);
@@ -170,25 +172,30 @@ test('a classroom with an appointed teacher is staffed at x1.0, and x0.5 without
 });
 
 test('a Refectory seats two sittings and never feeds fewer people than having none', () => {
-  const crowd = (withRef: boolean, cleanliness = 100) => {
+  const crowd = (tableCount: number, cleanliness = 100) => {
     const state = rich(createNewAcademy());
     state.characters = Array.from({ length: 15 }, (_, i) => student(200 + i, 1));
-    if (withRef) {
-      place(state, 'refectory', 90, 6, 0, [
+    if (tableCount > 0) {
+      const furn: PlacedFurniture[] = [
         item('long_table', 'required:long_table'),
         item('hearth', 'required:hearth')
-      ], { cleanliness });
+      ];
+      if (tableCount >= 2) furn.push(item('long_table', 'optional'));
+      place(state, 'refectory', 90, 6, 0, furn, { cleanliness });
     }
     return state;
   };
-  const clean = AnkicasterEngine.mealPlan(crowd(true, 100));
-  assert.equal(ROOM_DEFINITIONS.refectory.capacity?.seats, 12);
-  assert.equal(clean.seated, 15, '12 seats × 2 sittings at full efficiency seats all 15');
-  assert.equal(clean.unfed, 0);
-  const none = AnkicasterEngine.mealPlan(crowd(false));
+  assert.equal(ROOM_DEFINITIONS.refectory.capacity?.seats, undefined);
+  const oneTable = AnkicasterEngine.mealPlan(crowd(1, 100));
+  assert.equal(oneTable.seated, 12, '1 long table (6 chairs) × 2 sittings seats 12');
+  assert.equal(oneTable.standing, 3, '3 remaining eat packed/standing');
+  const twoTables = AnkicasterEngine.mealPlan(crowd(2, 100));
+  assert.equal(twoTables.seated, 15, '2 long tables (12 chairs) × 2 sittings at full efficiency seats all 15');
+  assert.equal(twoTables.unfed, 0);
+  const none = AnkicasterEngine.mealPlan(crowd(0));
   assert.equal(none.seated, 0);
   assert.equal(none.standing, 15, 'with no Refectory everyone who has food eats standing');
-  const dirty = AnkicasterEngine.mealPlan(crowd(true, 0));
+  const dirty = AnkicasterEngine.mealPlan(crowd(2, 0));
   assert.ok(dirty.seated + dirty.standing >= none.seated + none.standing, 'a dirty Refectory still feeds at least as many');
 });
 

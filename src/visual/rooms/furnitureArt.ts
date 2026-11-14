@@ -89,6 +89,7 @@ const TABLE: Record<string, Row> = {
   sun_altar: ['statue', 16, 24, 'floor', CLOTH, SUN, 'altar'],
   veiled_mirror: ['frame', 16, 24, 'floor', INDIGO, SL, 'mirror'],
   bench_cauldron: ['vessel', 16, 16, 'floor', IRON, 0x7db861, 'cauldron', 1],
+  student_desk: ['table', 16, 16, 'floor', W, CLOTH, 'desk'],
   student_desks: ['table', 32, 16, 'floor', W, CLOTH, 'desks'],
   chalkboard: ['hanging', 16, 16, 'wall', 0x24451c, CLOTH, 'board'],
   star_chart: ['hanging', 16, 16, 'wall', 0x2e2160, 0xeef1f5, 'chart'],

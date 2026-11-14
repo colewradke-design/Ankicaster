@@ -101,7 +101,7 @@ function student(id: number, seatRoomId?: number, bedRoomId?: number): Character
 test('Content integrity: every furniture item has valid deck & existing room ids, and every specialEffect has a FURNITURE_EFFECTS entry', () => {
   const roomIds = new Set(Object.keys(ROOM_DEFINITIONS));
   const list = Object.values(FURNITURE_DEFINITIONS);
-  assert.equal(list.length, 90);
+  assert.equal(list.length, 92);
 
   for (const f of list) {
     assert.ok(['foundation', 'grounds', 'magic'].includes(f.deck), `${f.id} must have a valid deck`);
@@ -272,7 +272,8 @@ test('Structured effects: rest_bonus, storage_bonus, output_pct, damaged=half, a
   const s1 = makeState();
   const c1 = addRoom(s1, 'class_arcane', 1, 0, [
     { id: nextId++, defId: 'teachers_lectern', slotKind: 'required:teachers_lectern', damaged: false },
-    { id: nextId++, defId: 'orrery_globe', slotKind: 'required:orrery_globe', damaged: false }
+    { id: nextId++, defId: 'orrery_globe', slotKind: 'required:orrery_globe', damaged: false },
+    { id: nextId++, defId: 'student_desk', slotKind: 'required:student_desk', damaged: false }
   ]);
   s1.characters.push(student(1, c1.id), arcaneTeacher(c1.id));
   s1.bellIndex = 0;
@@ -283,6 +284,7 @@ test('Structured effects: rest_bonus, storage_bonus, output_pct, damaged=half, a
   const c2 = addRoom(s2, 'class_arcane', 1, 0, [
     { id: nextId++, defId: 'teachers_lectern', slotKind: 'required:teachers_lectern', damaged: false },
     { id: nextId++, defId: 'orrery_globe', slotKind: 'required:orrery_globe', damaged: false },
+    { id: nextId++, defId: 'student_desk', slotKind: 'required:student_desk', damaged: false },
     { id: nextId++, defId: 'bookshelf', slotKind: 'optional', damaged: false }
   ]);
   s2.characters.push(student(1, c2.id), arcaneTeacher(c2.id));

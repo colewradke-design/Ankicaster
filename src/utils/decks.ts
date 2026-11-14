@@ -16,7 +16,10 @@ const BASE_STARTER_PATTERNS = [
   'hearth',
   'couch',
   'potted_fern',
-  'bookshelf'
+  'bookshelf',
+  'student_desk',
+  'writing_desk',
+  'reading_desk'
 ];
 
 /** Required fixture furniture IDs for a given room definition. */

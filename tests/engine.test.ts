@@ -658,11 +658,11 @@ test('9. Bridged Real Reviews: card age sets honestIvl directly without running 
   snapState.settings.linkNewCards = false;
   snapState.wizard.levels.nature = 5;
   snapState.mana = 200;
-  // Ensure dorm bed and nature classroom seat exist
+  // Ensure dorm bed and nature classroom seat exist (connected cleanly to Entrance Hall x=3..5 & Study x=5..6)
   snapState.rooms.push({
     id: 9910,
     defId: 'dormitory',
-    x: 0,
+    x: 1,
     y: 0,
     w: 2,
     h: 1,
@@ -673,12 +673,12 @@ test('9. Bridged Real Reviews: card age sets honestIvl directly without running 
     buildProgress: 0,
     cleanliness: 100,
     settings: {},
-    furniture: [{ id: 9911, defId: 'simple_cot', slotKind: 'bed', damaged: false }]
+    furniture: [{ id: 9911, defId: 'simple_cot', slotKind: 'required:bed', damaged: false }]
   });
   snapState.rooms.push({
     id: 9920,
     defId: 'class_nature',
-    x: 2,
+    x: 6,
     y: 0,
     w: 2,
     h: 1,
@@ -689,7 +689,11 @@ test('9. Bridged Real Reviews: card age sets honestIvl directly without running 
     buildProgress: 0,
     cleanliness: 100,
     settings: {},
-    furniture: []
+    furniture: [
+      { id: 9921, defId: 'teachers_lectern', slotKind: 'required:teachers_lectern', damaged: false },
+      { id: 9922, defId: 'potting_bench', slotKind: 'required:potting_bench', damaged: false },
+      { id: 9923, defId: 'student_desk', slotKind: 'required:student_desk', damaged: false }
+    ]
   });
 
   // With linkNewCards = false, type 0 card 9002 should NOT be chosen

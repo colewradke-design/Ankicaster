@@ -416,6 +416,7 @@ test('B11 the headmaster walks the school, and only the orb keeps them in the st
   ch.syncState(s);
   assert.equal(wiz.y, yAtSpawn, 'shrinking the castle does not bury the headmaster');
 
+  s.debugTimeHours = 7.5;
   const patch = s.rooms.find(r => r.defId === 'vegetable_patch')!;
   for (let i = 0; i < 200; i++) ch.tick(100, s, false);
   assert.equal(wiz.currentRoomId, patch.id, 'with no orb session the headmaster leaves the study for a job or a visit');

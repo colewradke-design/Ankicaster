@@ -224,18 +224,24 @@ test('Wizard Study climbing follows drawn left staircase (box.left + 9.5) and Ch
     assert.equal(n.x, expectedStairX);
   }
 
+  // Give floor-1 Library its required furniture so it exposes anchors
+  rooms[2].furniture = [
+    { id: 301, defId: 'bookshelf', slotKind: 'required:bookshelf', damaged: false },
+    { id: 302, defId: 'bookshelf', slotKind: 'required:bookshelf', damaged: false },
+    { id: 303, defId: 'reading_desk', slotKind: 'required:reading_desk', damaged: false }
+  ];
+
   const state = createInitialGameState();
   state.rooms = rooms;
-  state.characters = [makeChar(101, undefined)]; // Spawn in Entrance Hall (floor 0)
+  state.debugTimeHours = 7.5; // Break (free time)
+  const stu = makeChar(101, undefined);
+  stu.personality = 'Bookish';
+  stu.currentSchool = 'arcane';
+  state.characters = [stu]; // Spawn in Entrance Hall (floor 0)
 
   const reach = computeReachability(rooms);
   const chor = new Choreographer(nav, groundY);
   chor.syncState(state, reach);
-
-  // Now assign student to floor-1 Library so they must climb Wizard Study's left staircase
-  state.characters[0].seatRoomId = 3;
-  chor.syncState(state, reach);
-  chor.cycleTimeMs = 1000; // class_work phase
 
   let sawClimb = false;
   for (let t = 0; t < 240; t++) {

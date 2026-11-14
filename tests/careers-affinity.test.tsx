@@ -185,7 +185,8 @@ test('Teacher can only be assigned to a classroom of a mastered school, and unst
   const state = makeStateWithCards(30);
   const arcaneClass = addRoom(state, 'class_arcane', 70, 6, 0, [
     { id: nextFurnId++, defId: 'teachers_lectern', slotKind: 'required:teachers_lectern', damaged: false },
-    { id: nextFurnId++, defId: 'orrery_globe', slotKind: 'required:orrery_globe', damaged: false }
+    { id: nextFurnId++, defId: 'orrery_globe', slotKind: 'required:orrery_globe', damaged: false },
+    { id: nextFurnId++, defId: 'student_desk', slotKind: 'required:student_desk', damaged: false }
   ]);
   const natureMaster = makeChar(40, { masteredSchools: ['nature'] });
   const studentInArcane = makeChar(41, {
@@ -234,7 +235,8 @@ test('Teacher can only be assigned to a classroom of a mastered school, and unst
   // Now add a Nature classroom; Nature teacher can be assigned to it and Arcane teacher to Arcane
   const natureClass = addRoom(state, 'class_nature', 71, 8, 0, [
     { id: nextFurnId++, defId: 'teachers_lectern', slotKind: 'required:teachers_lectern', damaged: false },
-    { id: nextFurnId++, defId: 'orrery_globe', slotKind: 'required:orrery_globe', damaged: false }
+    { id: nextFurnId++, defId: 'potting_bench', slotKind: 'required:potting_bench', damaged: false },
+    { id: nextFurnId++, defId: 'student_desk', slotKind: 'required:student_desk', damaged: false }
   ]);
   const okMove = AnkicasterEngine.assignTeacherToClassroom(state, natureMaster.id, natureClass.id);
   assert.equal(okMove.success, true);
@@ -251,7 +253,8 @@ test('Faculty limit can exceed 12 when beds, classrooms, students, and wizard le
   for (let i = 0; i < 7; i++) {
     addRoom(state, 'class_arcane', 100 + i, 6 + i * 2, 0, [
       { id: nextFurnId++, defId: 'teachers_lectern', slotKind: 'required:teachers_lectern', damaged: false },
-      { id: nextFurnId++, defId: 'orrery_globe', slotKind: 'required:orrery_globe', damaged: false }
+      { id: nextFurnId++, defId: 'orrery_globe', slotKind: 'required:orrery_globe', damaged: false },
+      { id: nextFurnId++, defId: 'student_desk', slotKind: 'required:student_desk', damaged: false }
     ]);
   }
   // 14 faculty beds (7 faculty_quarters * 2 beds) => B = 14

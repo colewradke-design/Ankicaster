@@ -200,7 +200,6 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     cost: { mana: 400, timber: 40, stone: 20 },
     buildReviews: 60,
     veil: 5,
-    capacity: { seats: 12 },
     requiredFurniture: [
       { role: 'long_table', count: 1, name: 'Long Table' },
       { role: 'hearth', count: 1, name: 'Hearth' }
@@ -269,13 +268,13 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     cost: { mana: 300, timber: 25, stone: 15 },
     buildReviews: 45,
     veil: 5,
-    capacity: { seats: 5 },
     workplace: { career: 'teacher', slots: 1 },
     requiredFurniture: [
       { role: 'teachers_lectern', count: 1, name: "Teacher's Lectern" },
-      { role: 'orrery_globe', count: 1, name: 'Orrery Globe' }
+      { role: 'orrery_globe', count: 1, name: 'Orrery Globe' },
+      { role: 'student_desk', count: 1, name: 'Student Desk' }
     ],
-    optionalSlots: 4,
+    optionalSlots: 5,
     stats: { primary: ['focus', 'aura'], secondary: 'order' },
     level3Perk: '+1 Tutor slot and +5% Insight essence.',
     description: 'Arcane classroom producing Insight essence each bell.'
@@ -290,13 +289,13 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     cost: { mana: 300, timber: 25, stone: 15 },
     buildReviews: 45,
     veil: 5,
-    capacity: { seats: 5 },
     workplace: { career: 'teacher', slots: 1 },
     requiredFurniture: [
       { role: 'teachers_lectern', count: 1, name: "Teacher's Lectern" },
-      { role: 'potting_bench', count: 1, name: 'Potting Bench' }
+      { role: 'potting_bench', count: 1, name: 'Potting Bench' },
+      { role: 'student_desk', count: 1, name: 'Student Desk' }
     ],
-    optionalSlots: 4,
+    optionalSlots: 5,
     stats: { primary: ['focus', 'aura'], secondary: 'order' },
     level3Perk: '+1 Tutor slot and +5% Herbs essence.',
     description: 'Nature classroom producing Herbs essence each bell.'
@@ -311,13 +310,13 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     cost: { mana: 300, timber: 25, stone: 15 },
     buildReviews: 45,
     veil: 5,
-    capacity: { seats: 5 },
     workplace: { career: 'teacher', slots: 1 },
     requiredFurniture: [
       { role: 'teachers_lectern', count: 1, name: "Teacher's Lectern" },
-      { role: 'sun_altar', count: 1, name: 'Sun Altar' }
+      { role: 'sun_altar', count: 1, name: 'Sun Altar' },
+      { role: 'student_desk', count: 1, name: 'Student Desk' }
     ],
-    optionalSlots: 4,
+    optionalSlots: 5,
     stats: { primary: ['focus', 'aura'], secondary: 'order' },
     level3Perk: '+1 Tutor slot and +5% Radiance essence.',
     description: 'Light classroom producing Radiance essence each bell.'
@@ -332,13 +331,13 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     cost: { mana: 300, timber: 25, stone: 15 },
     buildReviews: 45,
     veil: 5,
-    capacity: { seats: 5 },
     workplace: { career: 'teacher', slots: 1 },
     requiredFurniture: [
       { role: 'teachers_lectern', count: 1, name: "Teacher's Lectern" },
-      { role: 'veiled_mirror', count: 1, name: 'Veiled Mirror' }
+      { role: 'veiled_mirror', count: 1, name: 'Veiled Mirror' },
+      { role: 'student_desk', count: 1, name: 'Student Desk' }
     ],
-    optionalSlots: 4,
+    optionalSlots: 5,
     stats: { primary: ['focus', 'aura'], secondary: 'order' },
     level3Perk: '+1 Tutor slot and +5% Umbra essence.',
     description: 'Shadow classroom producing Umbra essence each bell.'
@@ -353,13 +352,13 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     cost: { mana: 300, timber: 25, stone: 15 },
     buildReviews: 45,
     veil: 5,
-    capacity: { seats: 5 },
     workplace: { career: 'teacher', slots: 1 },
     requiredFurniture: [
       { role: 'teachers_lectern', count: 1, name: "Teacher's Lectern" },
-      { role: 'bench_cauldron', count: 1, name: 'Bench Cauldron' }
+      { role: 'bench_cauldron', count: 1, name: 'Bench Cauldron' },
+      { role: 'student_desk', count: 1, name: 'Student Desk' }
     ],
-    optionalSlots: 4,
+    optionalSlots: 5,
     stats: { primary: ['focus', 'aura'], secondary: 'order' },
     level3Perk: '+1 Tutor slot and +5% Reagents essence.',
     description: 'Alchemy classroom producing Reagents essence each bell.'
@@ -1030,7 +1029,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
     id: 'long_table',
     name: 'Long Table',
     deck: 'foundation',
-    role: 'required',
+    role: 'optional',
     targetRole: 'long_table',
     slots: 1,
     cost: { mana: 120, timber: 15 },
@@ -1060,6 +1059,30 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
     cost: { mana: 80, timber: 8 },
     stats: { focus: 2 },
     rooms: ['class_arcane', 'class_nature', 'class_light', 'class_shadow', 'class_alchemy'],
+    unlock: { type: 'std' }
+  },
+  student_desk: {
+    id: 'student_desk',
+    name: 'Student Desk',
+    deck: 'foundation',
+    role: 'optional',
+    targetRole: 'student_desk',
+    slots: 1,
+    cost: { mana: 60, timber: 6 },
+    stats: { focus: 2, order: 1 },
+    rooms: ['class_arcane', 'class_nature', 'class_light', 'class_shadow', 'class_alchemy'],
+    unlock: { type: 'std' }
+  },
+  writing_desk: {
+    id: 'writing_desk',
+    name: 'Writing Desk',
+    deck: 'foundation',
+    role: 'optional',
+    targetRole: 'writing_desk',
+    slots: 1,
+    cost: { mana: 70, timber: 6 },
+    stats: { focus: 2, order: 1 },
+    rooms: ['dormitory', 'grand_dormitory', 'faculty_quarters'],
     unlock: { type: 'std' }
   },
   orrery_globe: {
@@ -1413,7 +1436,8 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
     id: 'reading_desk',
     name: 'Reading Desk',
     deck: 'foundation',
-    role: 'required',
+    role: 'optional',
+    targetRole: 'reading_desk',
     slots: 1,
     cost: { mana: 90, timber: 8 },
     stats: { focus: 3 },

@@ -59,6 +59,7 @@ import {
   wizardMasteredSchools,
   wizardOrbQuote
 } from '../utils/formulas';
+import { ALL_SCHOOLS, buildAcademySchedule } from '../utils/schedule';
 import { isRoomUnfinished } from '../utils/requiredFurniture';
 import {
   Sparkles,
@@ -310,6 +311,9 @@ export const RosterPanel: React.FC<{
 
   // Faculty limit calculation (Formula F12)
   const { activeFaculty, maxAllowed: facultyLimit, breakdown } = getFacultySummary(state);
+  const schedule = buildAcademySchedule(state);
+  const overenrolledSchools = ALL_SCHOOLS.filter(s => (schedule.overenrolledBySchool[s] || 0) > 0);
+  const selectedAssignment = selectedChar ? schedule.studentAssignments.get(selectedChar.id) : undefined;
 
   return (
     <div className="space-y-4">
@@ -375,7 +379,22 @@ export const RosterPanel: React.FC<{
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="space-y-4">
+          {overenrolledSchools.length > 0 && (
+            <div
+              data-testid="overenrolled-banner"
+              className="bg-amber-950/50 border border-amber-500/60 text-amber-200 px-3.5 py-2.5 rounded-xl text-xs font-semibold space-y-0.5"
+            >
+              {overenrolledSchools.map(sch => (
+                <div key={sch}>
+                  <span className="capitalize font-bold">{sch}</span> is overenrolled by{' '}
+                  {schedule.overenrolledBySchool[sch]} student{schedule.overenrolledBySchool[sch] === 1 ? '' : 's'} (no classroom desk / period).
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {/* Student List */}
           <div className="space-y-2 border-r border-slate-800 pr-4">
             <div className="flex items-center justify-between text-xs font-bold text-slate-300 pb-2 border-b border-slate-800">
@@ -388,6 +407,8 @@ export const RosterPanel: React.FC<{
             <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
               {characters.map(char => {
                 const isSelected = char.id === selectedCharId;
+                const stuAssign = char.status === 'student' ? schedule.studentAssignments.get(char.id) : undefined;
+                const isOverenrolled = char.status === 'student' && schedule.overenrolledStudentIds.has(char.id);
                 return (
                   <div
                     key={char.id}
@@ -404,7 +425,7 @@ export const RosterPanel: React.FC<{
                       <div className="font-bold text-xs text-slate-100">{char.name}</div>
                       <div className="text-xs text-slate-400 capitalize">
                         {char.currentSchool
-                          ? `Student · ${char.currentSchool}`
+                          ? `Student · ${char.currentSchool}${stuAssign ? ` · Period ${stuAssign.period}` : isOverenrolled ? ' · No Period (Overenrolled)' : ''}`
                           : char.career
                           ? `Faculty · ${char.career}`
                           : char.status}
@@ -439,6 +460,18 @@ export const RosterPanel: React.FC<{
                     {selectedChar.title && (
                       <span className="text-xs bg-purple-950/80 text-purple-300 px-2 py-0.5 rounded border border-purple-800 font-bold">
                         {selectedChar.title}
+                      </span>
+                    )}
+                    {selectedChar.status === 'student' && (
+                      <span
+                        data-testid="selected-student-period"
+                        className={`text-xs px-2 py-0.5 rounded border font-bold ${
+                          selectedAssignment
+                            ? 'bg-sky-950/80 text-sky-200 border-sky-700/60'
+                            : 'bg-amber-950/80 text-amber-300 border-amber-600/60'
+                        }`}
+                      >
+                        {selectedAssignment ? `Period ${selectedAssignment.period}` : 'No Period (Overenrolled)'}
                       </span>
                     )}
                   </div>
@@ -627,6 +660,7 @@ export const RosterPanel: React.FC<{
                 : 'No students yet. Admit apprentices from the Entrance Hall (Admissions).'}
             </div>
           )}
+          </div>
         </div>
       )}
     </div>

@@ -87,6 +87,12 @@ import {
   tickCaptures,
   MANUAL_FEED_BOND
 } from './creatureCare';
+import {
+  applyAcademyScheduleToState,
+  buildAcademySchedule,
+  getStudentDelaySource,
+  refectoryChairCount
+} from './schedule';
 
 export { isRoomUnlocked, planHint as blueprintLockHint, isStructure };
 
@@ -644,48 +650,19 @@ export class AnkicasterEngine {
         continue;
       }
       if (c.careerState === 'sabbatical') continue;
+      // Teacher workplaces are managed by applyAcademyScheduleToState below
+      if (c.career === 'teacher') continue;
       const current = c.workplaceRoomId != null ? state.rooms.find(r => r.id === c.workplaceRoomId) : undefined;
       const wp = current ? ROOM_DEFINITIONS[current.defId]?.workplace : undefined;
-      const teacherMatch = c.career !== 'teacher' || (!!current && (() => {
-        const sch = classroomSchool(current.defId);
-        return !!sch && c.masteredSchools.includes(sch);
-      })());
-      const still = !!current && !!wp && wp.career === c.career && teacherMatch && AnkicasterEngine.roomWorkable(current)
+      const still = !!current && !!wp && wp.career === c.career && AnkicasterEngine.roomWorkable(current)
         && AnkicasterEngine.slotsUsed(state, current, c.id) < wp.slots;
       if (still) continue;
       c.workplaceRoomId = AnkicasterEngine.findOpenWorkplace(state, c.career, c.id, c)?.id;
     }
 
-    // Sync student classroom seats when missing or when a matching school classroom becomes available
-    const builtClassrooms = state.rooms.filter(r => r.state === 'built' && r.defId.startsWith('class_'));
-    if (builtClassrooms.length > 0) {
-      for (const c of state.characters) {
-        if (c.status !== 'student') continue;
-        const targetDefId = `class_${c.currentSchool || 'arcane'}`;
-        const currentSeat = c.seatRoomId != null ? state.rooms.find(r => r.id === c.seatRoomId && r.state === 'built') : undefined;
-        const schoolClassrooms = builtClassrooms.filter(r => r.defId === targetDefId);
-        const hasValidSeat =
-          !!currentSeat &&
-          currentSeat.defId.startsWith('class_') &&
-          (currentSeat.defId === targetDefId || schoolClassrooms.length === 0);
-        if (hasValidSeat) continue;
-
-        const seatOpen = (room: PlacedRoom) => {
-          const cap = ROOM_DEFINITIONS[room.defId]?.capacity?.seats || 5;
-          const used = state.characters.filter(s => s.id !== c.id && s.status === 'student' && s.seatRoomId === room.id).length;
-          return used < cap;
-        };
-        const chosen =
-          schoolClassrooms.find(r => !isRoomUnfinished(r) && seatOpen(r)) ||
-          schoolClassrooms.find(r => seatOpen(r)) ||
-          schoolClassrooms[0] ||
-          builtClassrooms.find(r => !isRoomUnfinished(r) && seatOpen(r)) ||
-          builtClassrooms[0];
-        if (chosen) {
-          c.seatRoomId = chosen.id;
-        }
-      }
-    }
+    // Rebuild student classroom periods/desks, teacher period splits, and headmaster room coverage
+    const reach = computeReachability(state.rooms);
+    applyAcademyScheduleToState(state, reach);
 
     // Sync character beds when bedRoomId is unset or points to a non-existent/unbuilt room
     const builtBedRooms = state.rooms.filter(
@@ -735,10 +712,15 @@ export class AnkicasterEngine {
     if (!workplace || !STAFF_CAREERS.has(workplace.career)) return true;
     const classSch = classroomSchool(room.defId);
     if (classSch) {
+      const schedule = buildAcademySchedule(state);
+      const info = schedule.classrooms.get(room.id);
+      if (info?.isStaffed || schedule.headmasterRoomId === room.id) return true;
       return state.characters.some(c =>
         c.workplaceRoomId === room.id &&
         c.career === 'teacher' &&
         c.careerState !== 'sabbatical' &&
+        c.status !== 'away' &&
+        !c.injury &&
         c.masteredSchools.includes(classSch)
       );
     }
@@ -853,15 +835,18 @@ export class AnkicasterEngine {
   }
 
   /**
-   * Who eats on a meal bell. cap is two sittings (floor(seats × 2 × efficiency)) across finished Refectories.
+   * Who eats on a meal bell. cap is two sittings (floor(chairs * 2 * efficiency)) across finished Refectories.
+   * Each Long Table supplies 6 chairs (up to 2 tables = 12 chairs).
    * No Refectory means cap 0: everyone with food stands. Food, not seats, is what leaves someone unfed.
    */
   static mealPlan(state: FullGameState, reach?: Map<number, ReachabilityInfo>, capFactor = 1): { cap: number; seated: number; standing: number; unfed: number } {
     const diners = state.characters.length;
     const food = Math.max(0, Math.floor(state.resources.provisions));
     const refectories = state.rooms.filter(r => r.defId === 'refectory' && r.state === 'built' && !isRoomUnfinished(r));
-    const seats = ROOM_DEFINITIONS.refectory?.capacity?.seats ?? 12;
-    let cap = refectories.reduce((sum, r) => sum + Math.floor(seats * 2 * AnkicasterEngine.roomEfficiency(state, r, reach)), 0);
+    let cap = refectories.reduce(
+      (sum, r) => sum + Math.floor(refectoryChairCount(r) * 2 * AnkicasterEngine.roomEfficiency(state, r, reach)),
+      0
+    );
     if (capFactor < 1) cap = Math.floor(cap * capFactor);
     const served = Math.min(diners, food);
     const seated = Math.min(served, cap);
@@ -1595,6 +1580,7 @@ export class AnkicasterEngine {
     });
 
     // 2. Mastery Delays and Graduation Checks
+    const tickSchedule = buildAcademySchedule(next);
     for (const char of next.characters) {
       if (char.status === 'student' && char.studySetId) {
         const studySet = next.cardSets.find(s => s.id === char.studySetId);
@@ -1604,16 +1590,10 @@ export class AnkicasterEngine {
             const sch = char.currentSchool || 'nature';
             char.readyDays[sch] = (char.readyDays[sch] || 0) + 1;
 
-            const teacher = next.characters.find(c => c.career === 'teacher' && c.workplaceRoomId === char.seatRoomId);
-            let teacherIvls: number[] = [];
-            if (teacher && teacher.careerSetIds.length > 0) {
-              const tSet = next.cardSets.find(s => s.id === teacher.careerSetIds[0]);
-              if (tSet) teacherIvls = tSet.cardIds.map(id => next.allCards[id]?.honestIvl || 0);
-            }
-
+            const delaySrc = getStudentDelaySource(next, tickSchedule, char);
             const delay = calculateTeacherDelay(
-              teacher ? 'teacher' : 'wizard',
-              teacherIvls,
+              delaySrc.teacherType,
+              delaySrc.teacherIvls,
               next.wizard.levels[sch],
               next.wizard.levels.light
             );
@@ -2081,14 +2061,8 @@ export class AnkicasterEngine {
       return { state, success: false, error: `Wizard Level 5 in ${school.toUpperCase()} required to teach.` };
     }
 
-    const classroomDefId = `class_${school}`;
-    const classrooms = next.rooms.filter(r => r.state === 'built' && !isRoomUnfinished(r) && r.defId === classroomDefId);
-    const freeClassroom = classrooms.find(c => {
-      const cap = ROOM_DEFINITIONS[classroomDefId]?.capacity?.seats || 5;
-      const used = next.characters.filter(s => s.status === 'student' && s.seatRoomId === c.id).length;
-      return used < cap;
-    });
-    if (!freeClassroom) {
+    const preSchedule = buildAcademySchedule(next);
+    if ((preSchedule.schoolEnrolled[school] || 0) >= (preSchedule.schoolCapacity[school] || 0)) {
       return { state, success: false, error: `No free seats in ${school.toUpperCase()} classroom.` };
     }
 
@@ -2137,10 +2111,11 @@ export class AnkicasterEngine {
 
     char.studySetId = newSetId;
     char.currentSchool = school;
-    char.seatRoomId = freeClassroom.id;
     char.status = 'student';
     char.readyDays[school] = 0;
     char.chronicle.push({ day: next.day, text: `Enrolled in second school: ${school.toUpperCase()}.` });
+
+    AnkicasterEngine.syncWorkplaces(next);
 
     next.notices.push({
       id: `sec-school-${char.id}`,
@@ -2148,7 +2123,7 @@ export class AnkicasterEngine {
       type: 'enrollment',
       text: `✨ ${char.name} embarked on advanced study in ${school.toUpperCase()} with 50 new flashcards linked!`,
       data: {
-        roomId: freeClassroom.id,
+        roomId: char.seatRoomId,
         characterIds: [char.id],
         school,
         visualEventType: 'student_enrolled'
@@ -2220,13 +2195,9 @@ export class AnkicasterEngine {
       return { state, success: false, error: 'No free student beds available. Build more Dormitories.' };
     }
 
-    const classroomDefId = `class_${school}`;
-    const classrooms = next.rooms.filter(r => r.state === 'built' && r.defId === classroomDefId);
-    let totalSeats = 0;
-    for (const c of classrooms) {
-      totalSeats += (ROOM_DEFINITIONS[classroomDefId]?.capacity?.seats || 5);
-    }
-    const studentsInSchool = currentStudents.filter(c => c.currentSchool === school).length;
+    const preSchedule = buildAcademySchedule(next);
+    const totalSeats = preSchedule.schoolCapacity[school] || 0;
+    const studentsInSchool = preSchedule.schoolEnrolled[school] || 0;
     if (studentsInSchool >= totalSeats) {
       return { state, success: false, error: `No free seats in ${school.toUpperCase()} classroom. Build another.` };
     }
@@ -2277,18 +2248,15 @@ export class AnkicasterEngine {
       careerSetIds: []
     };
 
-    // Auto-assign first finished dorm/classroom with a free bed/seat, falling back to any built one
+    // Auto-assign first finished dorm with a free bed, falling back to any built one
     const freeDorm = dorms.find(d => !isRoomUnfinished(d) && currentStudents.filter(s => s.bedRoomId === d.id).length < dormBedCount(d))
       || dorms.find(d => currentStudents.filter(s => s.bedRoomId === d.id).length < dormBedCount(d))
       || dorms[0];
-    const freeClass = classrooms.find(c => !isRoomUnfinished(c) && currentStudents.filter(s => s.seatRoomId === c.id).length < (ROOM_DEFINITIONS[classroomDefId]?.capacity?.seats || 5))
-      || classrooms.find(c => currentStudents.filter(s => s.seatRoomId === c.id).length < (ROOM_DEFINITIONS[classroomDefId]?.capacity?.seats || 5))
-      || classrooms[0];
     if (freeDorm) newStudent.bedRoomId = freeDorm.id;
-    if (freeClass) newStudent.seatRoomId = freeClass.id;
 
     const ehRoom = next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || next.rooms[0];
     next.characters.push(newStudent);
+    AnkicasterEngine.syncWorkplaces(next);
     next.notices.push({
       id: `enr-${charId}`,
       time: Date.now(),
@@ -3089,9 +3057,13 @@ export class AnkicasterEngine {
       return { state, success: false, error: `Pattern needed (${deckLabel} deck).` };
     }
 
-    const sameItemCount = room.furniture.filter(f => !f.slotKind.startsWith('required:') && f.defId === furnitureDefId).length;
-    if (sameItemCount >= 2) {
-      return { state, success: false, error: `At most 2 ${fDef.name} can be placed in one room.` };
+    const totalSameCount = room.furniture.filter(f => f.defId === furnitureDefId).length;
+    const maxSame = (furnitureDefId === 'student_desk' || furnitureDefId === 'reading_desk') ? 4 : 2;
+    const sameItemCount = (furnitureDefId === 'student_desk' || furnitureDefId === 'reading_desk' || furnitureDefId === 'long_table')
+      ? totalSameCount
+      : room.furniture.filter(f => !f.slotKind.startsWith('required:') && f.defId === furnitureDefId).length;
+    if (sameItemCount >= maxSame) {
+      return { state, success: false, error: `At most ${maxSame} ${fDef.name} can be placed in one room.` };
     }
 
     const roomDef = ROOM_DEFINITIONS[room.defId];
@@ -3341,6 +3313,7 @@ export class AnkicasterEngine {
       return { state, success: false, error: 'That classroom already has a teacher.' };
     }
     char.workplaceRoomId = room.id;
+    AnkicasterEngine.syncWorkplaces(next);
     return { state: next, success: true };
   }
 

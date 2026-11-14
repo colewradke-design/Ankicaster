@@ -108,6 +108,8 @@ export interface Character {
   morale: number; // 0-100
   injury?: InjuryState;
   bedRoomId?: number;
+  classRoomId?: number;
+  period?: 1 | 2 | 3 | 4;
   seatRoomId?: number;
   workplaceRoomId?: number;
   readyDays: Record<string, number>; // school -> days ready

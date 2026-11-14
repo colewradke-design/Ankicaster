@@ -161,7 +161,7 @@ test('hunger settles near 84 when seated and stays above 25 when standing', () =
       s.rooms.push({
         id: 90, defId: 'refectory', x: 6, y: 0, w: 3, h: 1, area: 'castle', level: 1, state: 'built',
         buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {},
-        furniture: [item('long_table', 'required:long_table'), item('hearth', 'required:hearth')]
+        furniture: [item('long_table', 'required:long_table'), item('long_table', 'optional'), item('hearth', 'required:hearth')]
       });
     }
     let worst = 100;

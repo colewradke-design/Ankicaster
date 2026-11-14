@@ -112,7 +112,7 @@ test('Section 2: enrollStudent counts bunk_bed bed_slots, assignCareer guards st
   dorm.furniture = [
     { id: 4001, defId: 'bunk_bed', slotKind: 'required:bed', damaged: false }
   ];
-  const cls = makeBuiltRoom(41, 'class_arcane', 2, 0, 'castle');
+  const cls = makeBuiltRoom(41, 'class_arcane', 6, 0, 'castle');
   s.rooms.push(dorm, cls);
 
   const e1 = AnkicasterEngine.enrollStudent(s, 'arcane', 'Alice', 'Curious', []);
