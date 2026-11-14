@@ -394,7 +394,7 @@ export const FURNITURE_EFFECTS: Record<string, FurnitureEffectDef> = {
   mossbed: { kind: 'heal_pct', value: 10, scope: 'room' },
   moon_curtains: { kind: 'rest_bonus', value: 5, scope: 'room' },
   tea_service: { kind: 'output_pct', value: 5, scope: 'room' },
-  wizard_chess: { kind: 'leisure_bonus', value: 5, scope: 'room' },
+  wizard_chess: { kind: 'leisure_bonus', value: 2, scope: 'room' },
   music_box: { kind: 'composure_bonus', value: 3, scope: 'room' },
   hex_darts: { kind: 'hazard_chance_pct', value: -5, scope: 'academy' },
   warm_hearthstone: { kind: 'hazard_chance_pct', value: -8, scope: 'room' },
@@ -417,7 +417,7 @@ export const FURNITURE_EFFECTS: Record<string, FurnitureEffectDef> = {
   meditation_cushions: { kind: 'composure_bonus', value: 4, scope: 'room' },
   soaking_tub: { kind: 'rest_bonus', value: 5, scope: 'room' },
   halo_candles: { kind: 'composure_bonus', value: 2, scope: 'room' },
-  ward_circle: { kind: 'hazard_chance_pct', value: -10, scope: 'room' },
+  ward_circle: { kind: 'hazard_chance_pct', value: -10, scope: 'adjacent' },
   penitent_benches: { kind: 'composure_bonus', value: 4, scope: 'room' },
   silence_bell: { kind: 'hazard_chance_pct', value: -8, scope: 'adjacent' },
   shadow_ledger: { kind: 'hazard_chance_pct', value: -8, scope: 'academy' },
@@ -429,7 +429,7 @@ export const FURNITURE_EFFECTS: Record<string, FurnitureEffectDef> = {
   garden_gnome: { kind: 'hazard_chance_pct', value: -10, scope: 'grounds' },
   bird_bath: { kind: 'creature_bond_pct', value: 5, scope: 'academy' },
   scarecrow: { kind: 'output_pct', value: 5, scope: 'room' },
-  stone_lantern: { kind: 'morale_bonus', value: 3, scope: 'academy' },
+  stone_lantern: { kind: 'morale_bonus', value: 2, scope: 'academy' },
   beehive_box: { kind: 'nectar_per_bell', value: 0.1, scope: 'room' },
   windmill_charm: { kind: 'output_pct', value: 8, scope: 'room' },
   fairy_ring: { kind: 'taming_pct', value: 8, scope: 'grounds' },
@@ -469,15 +469,16 @@ function roomsAdjacent(a: PlacedRoom, b: PlacedRoom): boolean {
 
 /**
  * Sum a specific furniture effect kind across built rooms, respecting scope:
- * - 'room': only targetRoom
+ * - 'room': only targetRoom (or all rooms when targetRoom is omitted)
  * - 'adjacent': targetRoom and orthogonally/diagonally touching rooms
  * - 'grounds': any grounds room when targetRoom is on grounds (or omitted)
- * - 'academy': all built rooms
+ * - 'academy': all built rooms (unless excludeAcademy is true)
  */
 export function academyFurnitureEffect(
   rooms: PlacedRoom[],
   kind: FurnitureEffectKind,
-  targetRoom?: PlacedRoom
+  targetRoom?: PlacedRoom,
+  excludeAcademy = false
 ): number {
   let total = 0;
   for (const r of rooms) {
@@ -487,6 +488,7 @@ export function academyFurnitureEffect(
     for (const f of sorted) {
       const eff = FURNITURE_EFFECTS[f.defId];
       if (!eff || eff.kind !== kind) continue;
+      if (excludeAcademy && eff.scope === 'academy') continue;
       const seen = counts[f.defId] || 0;
       if (seen >= 2) continue;
       counts[f.defId] = seen + 1;
@@ -494,7 +496,7 @@ export function academyFurnitureEffect(
         eff.scope === 'academy' ||
         (eff.scope === 'grounds' && (!targetRoom || targetRoom.area === 'grounds')) ||
         (eff.scope === 'adjacent' && (!targetRoom || roomsAdjacent(r, targetRoom))) ||
-        (eff.scope === 'room' && targetRoom?.id === r.id);
+        (eff.scope === 'room' && (!targetRoom || targetRoom.id === r.id));
       if (!applies) continue;
       total += eff.value * (f.damaged ? 0.5 : 1);
     }

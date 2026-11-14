@@ -4,7 +4,7 @@
  * changes the Magic deck, via the school multiplier.
  */
 import { DraftCard, FullGameState, FurnitureDefinition, SchoolType } from '../types/ankicaster';
-import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS } from '../data/content';
+import { FURNITURE_DEFINITIONS, POTION_RECIPES, ROOM_DEFINITIONS } from '../data/content';
 
 export type DraftDeckId = 'foundation' | 'grounds' | 'magic';
 
@@ -136,7 +136,7 @@ const MAGIC_EXTRAS: DraftCard[] = [
   { id: 'extra-seed', deck: 'magic', rarity: 'uncommon', name: 'Luminescent Seed Packet', type: 'seed', targetId: 'moonglow_fern', school: 'nature', description: 'Unlock Moonglow Fern crop in sacred plots.' },
   { id: 'extra-dawn', deck: 'magic', rarity: 'rare', name: 'Dawn Blessing Boon', type: 'boon', school: 'light', description: 'Radiant surge: +30 Radiance and fully cures one injured resident.' },
   { id: 'extra-veil', deck: 'magic', rarity: 'rare', name: 'Veil Tether Boon', type: 'boon', school: 'shadow', description: 'Instant +35% Veil Strength and +25 Umbra.' },
-  { id: 'extra-elixir', deck: 'magic', rarity: 'rare', name: 'Elixir of Fellowship Recipe', type: 'recipe_page', targetId: 'elixir_of_fellowship', school: 'alchemy', description: 'Learn to brew Elixir of Fellowship (+15 morale to all students and faculty).' }
+  { id: 'extra-elixir', deck: 'magic', rarity: 'rare', name: 'Elixir of Fellowship Recipe', type: 'recipe_page', targetId: 'elixir_of_fellowship', school: 'alchemy', description: 'Learn to brew Elixir of Fellowship (+10 morale to all students and faculty).' }
 ];
 
 const ROOM_DECK = new Map<string, DraftDeckId>();
@@ -225,13 +225,38 @@ function patternCard(f: FurnitureDefinition): DraftCard {
   };
 }
 
-export function deckPool(deck: DraftDeckId, state?: { knownPatterns?: string[] }): DraftCard[] {
+function recipeRarity(tier: string): DraftCard['rarity'] {
+  if (tier === 'legendary') return 'legendary';
+  if (tier === 'rare') return 'rare';
+  if (tier === 'advanced') return 'uncommon';
+  return 'common';
+}
+
+export function deckPool(deck: DraftDeckId, state?: { knownPatterns?: string[]; potions?: Array<{ id: string; discovered: boolean }> }): DraftCard[] {
+  const discoveredPotions = new Set(
+    (state?.potions || []).filter(p => p.discovered).map(p => p.id)
+  );
   const base =
     deck === 'foundation'
       ? [...FOUNDATION_ROOMS.map(r => roomCard(r, deck)), ...FOUNDATION_EXTRAS.map(c => ({ ...c, deck }))]
       : deck === 'grounds'
       ? [...GROUNDS_ROOMS.map(r => roomCard(r, deck)), ...FOUNDATION_EXTRAS.map(c => ({ ...c, deck, id: `grounds-${c.id}` }))]
-      : [...MAGIC_ROOMS.map(r => roomCard(r, deck)), ...MAGIC_EXTRAS.map(c => ({ ...c }))];
+      : [
+          ...MAGIC_ROOMS.map(r => roomCard(r, deck)),
+          ...MAGIC_EXTRAS.filter(c => !(c.type === 'recipe_page' && c.targetId && discoveredPotions.has(c.targetId))).map(c => ({ ...c })),
+          ...POTION_RECIPES
+            .filter(p => !p.discovered && p.id !== 'elixir_of_fellowship' && !discoveredPotions.has(p.id))
+            .map((p): DraftCard => ({
+              id: `recipe:${p.id}`,
+              deck: 'magic',
+              rarity: recipeRarity(p.tier),
+              name: `${p.name} Recipe`,
+              type: 'recipe_page',
+              targetId: p.id,
+              school: p.school,
+              description: `Learn to brew ${p.name}: ${p.effect}`
+            }))
+        ];
 
   const patterns = Object.values(FURNITURE_DEFINITIONS)
     .filter(f => f.deck === deck && !STARTER_PATTERN_SET.has(f.id) && (!state || !isPatternKnown(state, f.id)))
@@ -276,7 +301,7 @@ export const DRAFT_TUTORIAL = 'Three decks: Foundation (rooms of the living acad
 
 /**
  * Three different cards. Founding draws and bad-luck protection reserve a slot first.
- * Known patterns are excluded, and at most 1 pattern card is offered per draw unless nothing else remains.
+ * Known patterns are excluded, and at most 1 pattern card or recipe page is offered per draw unless nothing else remains.
  */
 export function dealDraft(state: FullGameState, deck: DraftDeckId, rng: () => number = Math.random): DraftCard[] {
   const levels = state.wizard?.levels;
@@ -307,8 +332,9 @@ export function dealDraft(state: FullGameState, deck: DraftDeckId, rng: () => nu
     const left = pool.filter(c => !chosen.some(k => k.id === c.id));
     if (!left.length) break;
     const hasPattern = chosen.some(c => c.type === 'furniture_pattern');
-    const nonPatterns = left.filter(c => c.type !== 'furniture_pattern');
-    const candidates = (hasPattern && nonPatterns.length > 0) ? nonPatterns : left;
+    const hasRecipe = chosen.some(c => c.type === 'recipe_page');
+    const filtered = left.filter(c => !(hasPattern && c.type === 'furniture_pattern') && !(hasRecipe && c.type === 'recipe_page'));
+    const candidates = filtered.length > 0 ? filtered : left;
     take(pickWeighted(candidates, levels, rng));
   }
   return chosen;

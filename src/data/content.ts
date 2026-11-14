@@ -1663,7 +1663,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
     cost: { mana: 200, glass: 15, radiance: 5 },
     stats: { charm: 3, aura: 3 },
     rooms: ['sunlit_sanctum'],
-    unlock: { type: 'std' }
+    unlock: { type: 'std', school: 'light' }
   },
   meditation_cushions: {
     id: 'meditation_cushions',
@@ -1985,7 +1985,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
     stats: { focus: 6, charm: 6 },
     specialEffect: '+0.3 Insight per bell Academy-wide',
     rooms: 'any',
-    unlock: { type: 'rift', destination: 'ashen_wastes' }
+    unlock: { type: 'rift', destination: 'ashen_wastes', school: 'arcane' }
   },
   heartwood_bench: {
     id: 'heartwood_bench',
@@ -1997,7 +1997,7 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
     stats: { comfort: 6, charm: 4 },
     specialEffect: "All occupants' morale +5",
     rooms: ['common_room', 'faculty_lounge', 'sunlit_sanctum'],
-    unlock: { type: 'rift', destination: 'crystal_caverns' }
+    unlock: { type: 'rift', destination: 'crystal_caverns', school: 'nature' }
   }
 };
 
