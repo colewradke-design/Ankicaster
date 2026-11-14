@@ -85,7 +85,7 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
       cleanliness: 100,
       settings: {},
       furniture: [
-        { id: 101, defId: 'grand_doors', slotKind: 'required:grand_doors', damaged: false }
+        { id: 101, defId: 'grand_doors', slotKind: 'required:grand_doors', damaged: false, x: 64, floor: 0, plane: 'floor' }
       ]
     },
     {
@@ -104,8 +104,8 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
       cleanliness: 100,
       settings: {},
       furniture: [
-        { id: 102, defId: 'orb_stand', slotKind: 'required:orb_stand', damaged: false },
-        { id: 103, defId: 'lectern', slotKind: 'required:lectern', damaged: false }
+        { id: 102, defId: 'orb_stand', slotKind: 'required:orb_stand', damaged: false, x: 28, floor: 0, plane: 'floor' },
+        { id: 103, defId: 'lectern', slotKind: 'required:lectern', damaged: false, x: 48, floor: 0, plane: 'floor' }
       ]
     },
     {
@@ -138,6 +138,7 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
     requiredFixturesVersion: 1, // new saves never need the old-save fixture back-fill
     staffingVersion: 1,
     knownPlansVersion: 1,
+    manualFurnitureVersion: 1,
     tutorial: hasLook ? { phase: 'founding', step: 0, part: 0 } : undefined,
     bankAtLastReview: 0,
     renown: 0, // GDD 32: 0 Renown at fresh start

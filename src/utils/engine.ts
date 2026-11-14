@@ -16,7 +16,8 @@ import {
   DraftCard,
   ActiveExpedition,
   InjuryType,
-  AnkiCardSnapshot
+  AnkiCardSnapshot,
+  PlacedFurniture
 } from '../types/ankicaster';
 import {
   ROOM_DEFINITIONS,
@@ -43,8 +44,10 @@ import {
 } from './placement';
 import { normalizeAppearance } from './appearance';
 import {
-  allFurnitureIds, Cost, fillRequiredFixtures, isRoomUnfinished, missingRequiredSlots, requiredInstallOption,
-  requiredSlotStatus, costText, unaffordable, uniqueFurnitureId
+  allFurnitureIds, Cost, fillRequiredFixtures, isFurnitureCompatibleWithRoom,
+  isRoomUnfinished, maxSameFurnitureInRoom, missingRequiredSlots,
+  optionalSlotsCostForNewPiece, optionalSlotsUsed, queuedRequiredBySlot,
+  requiredInstallOption, requiredSlotStatus, costText, unaffordable, uniqueFurnitureId
 } from './requiredFurniture';
 import {
   academyFurnitureEffect,
@@ -93,6 +96,15 @@ import {
   getStudentDelaySource,
   refectoryChairCount
 } from './schedule';
+import {
+  DropTargetInput,
+  findFirstValidFurnitureDrop,
+  LONG_TABLE_MARK_OFFSETS,
+  migrateRoomFurniturePositions,
+  piecePlane,
+  validateFurnitureDrop
+} from '../visual/layout/furniturePlacement';
+import { legacyLayoutRoomFurniture } from '../visual/layout/roomLayouts';
 
 export { isRoomUnlocked, planHint as blueprintLockHint, isStructure };
 
@@ -2670,7 +2682,23 @@ export class AnkicasterEngine {
     };
 
     // Auto-place required starter furniture if built instantly (sites finish with it empty, GDD 15.4)
-    if (isInstant && def.requiredFurniture) fillRequiredFixtures(newRoom, allFurnitureIds(next.rooms));
+    if (isInstant && def.requiredFurniture) {
+      fillRequiredFixtures(newRoom, allFurnitureIds(next.rooms));
+      const allWithNew = [...next.rooms, newRoom];
+      for (const f of newRoom.furniture) {
+        const drop = findFirstValidFurnitureDrop(newRoom, allWithNew, f.defId);
+        if (drop) {
+          f.x = drop.x;
+          f.floor = drop.floor;
+          f.plane = drop.plane;
+          if (drop.wallY !== undefined) f.wallY = drop.wallY;
+        } else {
+          f.x = Math.round((newRoom.w * 64) / 2);
+          f.floor = 0;
+          f.plane = piecePlane(f.defId);
+        }
+      }
+    }
 
     if (newRoom.fromPlan) {
       next.roomPlans = { ...(next.roomPlans || {}) };
@@ -2832,7 +2860,7 @@ export class AnkicasterEngine {
 
     // Furniture -> inventory (damaged items are lost rather than silently repaired)
     next.furnitureInventory = { ...(next.furnitureInventory || {}) };
-    for (const f of room.furniture) {
+    for (const f of [...room.furniture, ...(room.unplacedFurniture || [])]) {
       if (!FURNITURE_DEFINITIONS[f.defId] || f.slotKind.startsWith('required:') || f.damaged) continue; // required fixtures & damaged items refund nothing
       next.furnitureInventory[f.defId] = (next.furnitureInventory[f.defId] || 0) + 1;
     }
@@ -2907,6 +2935,17 @@ export class AnkicasterEngine {
       });
       out.requiredFixturesVersion = 1;
     }
+    // One-time migration for manual furniture placement: backfill saved (x, floor, plane, wallY)
+    // on built rooms using the legacy grid layout so existing saves never jump when upgraded.
+    if (Array.isArray(out.rooms) && (out.manualFurnitureVersion ?? 0) < 1) {
+      out.rooms = out.rooms.map((r: PlacedRoom) => {
+        if (!r || r.state !== 'built' || !Array.isArray(r.furniture) || r.furniture.length === 0) return r;
+        const copy: PlacedRoom = { ...r, furniture: r.furniture.map((f: PlacedFurniture) => ({ ...f })) };
+        migrateRoomFurniturePositions(copy);
+        return copy;
+      });
+      out.manualFurnitureVersion = 1;
+    }
     if (Array.isArray(out.characters) && Array.isArray(out.rooms)) {
       AnkicasterEngine.syncWorkplaces(out);
       out.staffingVersion = 1;
@@ -2953,21 +2992,24 @@ export class AnkicasterEngine {
   }
 
   /**
-   * Install one empty required slot (GDD 17.1). Cost comes from the furniture catalog
-   * (requiredInstallOption); a role with no catalog entry is free. A stored copy of the same
-   * item is used first, for free. Required fixtures are never refunded or returned by demolish.
+   * Step 1 of installing a required fixture: pay cost (or consume stored item) and put the fixture
+   * into `room.unplacedFurniture`. The room stays Unfinished until `dropRoomFurniture` places it.
    */
-  static installRequiredFixture(
+  static acquireRequiredFixture(
     state: FullGameState,
     roomId: number,
     slotIndex: number
-  ): { state: FullGameState; success: boolean; error?: string } {
+  ): { state: FullGameState; success: boolean; furnitureId?: number; error?: string } {
     const room = state.rooms.find(r => r.id === roomId);
     if (!room) return { state, success: false, error: 'Room not found.' };
     if (room.state !== 'built') return { state, success: false, error: 'Finish construction first.' };
     const slot = requiredSlotStatus(room).find(s => s.index === slotIndex);
     if (!slot) return { state, success: false, error: 'No such required slot.' };
     if (slot.filled) return { state, success: false, error: `${slot.name} is already installed.` };
+    const queued = queuedRequiredBySlot(room);
+    if (queued.has(slotIndex)) {
+      return { state, success: false, error: `${slot.name} is already waiting to be placed in this room.` };
+    }
     const opt = requiredInstallOption(slot.role);
     const next = structuredClone(state);
     const beforeRes = resourceSnapshot(next);
@@ -2983,21 +3025,258 @@ export class AnkicasterEngine {
       for (const [k, v] of Object.entries(opt.cost)) if (k !== 'mana' && v) res[k] -= v;
     }
     const ids = allFurnitureIds(next.rooms);
-    let id = r.id * 10 + slot.index + 1;
-    if (ids.has(id)) id = Math.max(0, ...ids) + 1;
-    r.furniture.push({ id, defId: opt.defId, slotKind: `required:${slot.role}`, damaged: false });
-    const rDef = ROOM_DEFINITIONS[r.defId];
-    const left = missingRequiredSlots(r).length;
-    next.notices.push({
-      id: `reqfurn-${Date.now()}-${r.id}-${slot.index}`,
-      time: Date.now(),
-      type: 'furniture',
-      text: `Installed ${slot.name} in ${rDef?.name || 'room'} (${opt.free ? 'free' : costText(opt.cost)}).${left ? ` ${left} required fixture${left === 1 ? '' : 's'} still missing.` : ' The room is now open.'}`,
-      data: { roomId: r.id }
-    });
-    AnkicasterEngine.syncWorkplaces(next);
-    logResourceDiff(next, beforeRes, `Installed ${slot.name}`);
+    const id = uniqueFurnitureId(ids, r.id * 10 + slot.index + 1);
+    r.unplacedFurniture = [...(r.unplacedFurniture || []), { id, defId: opt.defId, slotKind: `required:${slot.role}`, damaged: false }];
+    logResourceDiff(next, beforeRes, `Acquired required ${slot.name}`);
+    return { state: next, success: true, furnitureId: id };
+  }
+
+  /**
+   * Step 1 of adding optional furniture: check compatibility/patterns/slots, pay cost (or use stored),
+   * and add the piece to `room.unplacedFurniture` ready to be placed on the canvas.
+   */
+  static acquireFurniture(
+    state: FullGameState,
+    roomId: number,
+    furnitureDefId: string
+  ): { state: FullGameState; success: boolean; furnitureId?: number; error?: string } {
+    const next = structuredClone(state);
+    const beforeRes = resourceSnapshot(next);
+    const room = next.rooms.find(r => r.id === roomId);
+    if (!room) return { state, success: false, error: 'Room not found.' };
+    if (room.state !== 'built') return { state, success: false, error: 'Finish construction first.' };
+
+    const fDef = FURNITURE_DEFINITIONS[furnitureDefId];
+    if (!fDef) return { state, success: false, error: 'Unknown furniture item.' };
+    if (!isFurnitureCompatibleWithRoom(fDef, room.defId)) {
+      return { state, success: false, error: `${fDef.name} does not belong in this room.` };
+    }
+
+    if (!isPatternKnown(next, furnitureDefId)) {
+      const deckLabel = fDef.deck[0].toUpperCase() + fDef.deck.slice(1);
+      return { state, success: false, error: `Pattern needed (${deckLabel} deck).` };
+    }
+
+    const allItems = [...room.furniture, ...(room.unplacedFurniture || [])];
+    const maxSame = maxSameFurnitureInRoom(room, furnitureDefId);
+    const sameItemCount =
+      furnitureDefId === 'student_desk' || furnitureDefId === 'reading_desk' || furnitureDefId === 'long_table'
+        ? allItems.filter(f => f.defId === furnitureDefId).length
+        : allItems.filter(f => !f.slotKind.startsWith('required:') && f.defId === furnitureDefId).length;
+    if (sameItemCount >= maxSame) {
+      return { state, success: false, error: `At most ${maxSame} ${fDef.name} can be placed in one room.` };
+    }
+
+    const roomDef = ROOM_DEFINITIONS[room.defId];
+    const maxSlots = (roomDef?.optionalSlots || 2) + (room.level - 1) * 2;
+    const currentSlots = optionalSlotsUsed(room);
+    const addedSlots = optionalSlotsCostForNewPiece(room, furnitureDefId);
+    if (currentSlots + addedSlots > maxSlots) {
+      return { state, success: false, error: `No available slots in this room (${currentSlots}/${maxSlots} used).` };
+    }
+
+    // A stored item (returned by demolition or removal) is used for free
+    const stored = next.furnitureInventory?.[furnitureDefId] || 0;
+    if (stored > 0) {
+      next.furnitureInventory = { ...next.furnitureInventory, [furnitureDefId]: stored - 1 };
+    } else {
+      const cost = fDef.cost as Cost;
+      const bad = unaffordable(next, cost);
+      if (bad) return { state, success: false, error: bad };
+
+      next.mana -= cost.mana || 0;
+      const res = next.resources as unknown as Record<string, number>;
+      for (const [k, v] of Object.entries(cost)) {
+        if (k !== 'mana' && v) res[k] = (res[k] || 0) - v;
+      }
+    }
+
+    const ids = allFurnitureIds(next.rooms);
+    const id = uniqueFurnitureId(ids, room.id * 100 + allItems.length + 1);
+    const slotKind = fDef.role === 'bed' ? 'bed' : 'optional';
+    room.unplacedFurniture = [...(room.unplacedFurniture || []), { id, defId: furnitureDefId, slotKind, damaged: false }];
+    logResourceDiff(next, beforeRes, `Acquired ${fDef.name}`);
+    return { state: next, success: true, furnitureId: id };
+  }
+
+  /**
+   * Cancel/return an unplaced optional piece back to `furnitureInventory` (releases its slot).
+   * Required fixtures cannot be cancelled into storage.
+   */
+  static cancelUnplacedFurniture(
+    state: FullGameState,
+    roomId: number,
+    furnitureId: number
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const next = structuredClone(state);
+    const room = next.rooms.find(r => r.id === roomId);
+    if (!room) return { state, success: false, error: 'Room not found.' };
+    const target = (room.unplacedFurniture || []).find(u => u.id === furnitureId);
+    if (!target) return { state, success: false, error: 'Unplaced piece not found.' };
+    if (target.slotKind.startsWith('required:')) {
+      return { state, success: false, error: 'Required room fixtures cannot be returned to storage.' };
+    }
+    room.unplacedFurniture = (room.unplacedFurniture || []).filter(u => u.id !== furnitureId);
+    if (!target.damaged && FURNITURE_DEFINITIONS[target.defId]) {
+      next.furnitureInventory = { ...(next.furnitureInventory || {}) };
+      next.furnitureInventory[target.defId] = (next.furnitureInventory[target.defId] || 0) + 1;
+    }
     return { state: next, success: true };
+  }
+
+  /**
+   * Step 2 of adding/installing furniture: drop a piece from `room.unplacedFurniture` onto a valid
+   * coordinate inside the room. Refuses drops that violate any footprint rule.
+   */
+  static dropRoomFurniture(
+    state: FullGameState,
+    roomId: number,
+    furnitureId: number,
+    target: DropTargetInput
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const next = structuredClone(state);
+    const room = next.rooms.find(r => r.id === roomId);
+    if (!room) return { state, success: false, error: 'Room not found.' };
+    if (room.state !== 'built') return { state, success: false, error: 'Finish construction first.' };
+    const unplaced = (room.unplacedFurniture || []).find(u => u.id === furnitureId);
+    if (!unplaced) return { state, success: false, error: 'Unplaced piece not found.' };
+
+    const check = validateFurnitureDrop(room, next.rooms, unplaced.defId, target);
+    if (!check.valid) return { state, success: false, error: check.error || 'Cannot place there.' };
+
+    room.unplacedFurniture = (room.unplacedFurniture || []).filter(u => u.id !== furnitureId);
+    const placed: PlacedFurniture = {
+      id: unplaced.id,
+      defId: unplaced.defId,
+      slotKind: unplaced.slotKind,
+      damaged: !!unplaced.damaged,
+      x: check.x,
+      floor: check.floor,
+      plane: check.plane
+    };
+    if (check.wallY !== undefined) placed.wallY = check.wallY;
+    if (check.tableId !== undefined && check.markIndex !== undefined) {
+      placed.tableId = check.tableId;
+      placed.markIndex = check.markIndex;
+    }
+    room.furniture.push(placed);
+
+    const rDef = ROOM_DEFINITIONS[room.defId];
+    const fDef = FURNITURE_DEFINITIONS[unplaced.defId];
+    const isReq = unplaced.slotKind.startsWith('required:');
+    const label = fDef?.name || unplaced.slotKind.replace(/^required:/, '').replace(/_/g, ' ');
+    if (isReq) {
+      const left = missingRequiredSlots(room).length;
+      next.notices.push({
+        id: `reqfurn-${Date.now()}-${room.id}-${placed.id}`,
+        time: Date.now(),
+        type: 'furniture',
+        text: `Installed ${label} in ${rDef?.name || 'room'}.${left ? ` ${left} required fixture${left === 1 ? '' : 's'} still missing.` : ' The room is now open.'}`,
+        data: { roomId: room.id }
+      });
+    } else {
+      next.notices.push({
+        id: `furn-${Date.now()}-${placed.id}`,
+        time: Date.now(),
+        type: 'furniture',
+        text: `Installed ${label} into ${rDef?.name || 'room'}.`,
+        data: { roomId: room.id }
+      });
+    }
+    AnkicasterEngine.syncWorkplaces(next);
+    return { state: next, success: true };
+  }
+
+  /**
+   * Reposition an already-placed piece inside the same room.
+   * Moving a long_table carries any snapped wooden_chair pieces with it.
+   */
+  static movePlacedFurniture(
+    state: FullGameState,
+    roomId: number,
+    furnitureId: number,
+    target: DropTargetInput
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const next = structuredClone(state);
+    const room = next.rooms.find(r => r.id === roomId);
+    if (!room) return { state, success: false, error: 'Room not found.' };
+    if (room.state !== 'built') return { state, success: false, error: 'Finish construction first.' };
+    const piece = room.furniture.find(f => f.id === furnitureId);
+    if (!piece) return { state, success: false, error: 'Furniture not found.' };
+
+    const check = validateFurnitureDrop(room, next.rooms, piece.defId, target, { excludeFurnitureId: furnitureId });
+    if (!check.valid) return { state, success: false, error: check.error || 'Cannot move there.' };
+
+    piece.x = check.x;
+    piece.floor = check.floor;
+    piece.plane = check.plane;
+    if (check.wallY !== undefined) piece.wallY = check.wallY;
+    else delete piece.wallY;
+
+    if (piece.defId === 'wooden_chair') {
+      if (check.tableId !== undefined && check.markIndex !== undefined) {
+        piece.tableId = check.tableId;
+        piece.markIndex = check.markIndex;
+      } else {
+        delete piece.tableId;
+        delete piece.markIndex;
+      }
+    } else if (piece.defId === 'long_table') {
+      for (const chair of room.furniture) {
+        if (chair.defId === 'wooden_chair' && chair.tableId === piece.id) {
+          const col = Math.max(0, Math.min(2, (chair.markIndex ?? 0) % 3));
+          chair.x = check.x + LONG_TABLE_MARK_OFFSETS[col];
+          chair.floor = check.floor;
+          chair.plane = 'floor';
+        }
+      }
+    }
+
+    AnkicasterEngine.syncWorkplaces(next);
+    return { state: next, success: true };
+  }
+
+  /**
+   * Install one empty required slot (GDD 17.1). If `target` is given, places at `target` cleanly
+   * (failing if invalid); if omitted (headless/test callers), picks the first valid drop spot.
+   */
+  static installRequiredFixture(
+    state: FullGameState,
+    roomId: number,
+    slotIndex: number,
+    target?: DropTargetInput
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const acq = AnkicasterEngine.acquireRequiredFixture(state, roomId, slotIndex);
+    if (!acq.success || acq.furnitureId === undefined) return { state, success: false, error: acq.error };
+    const r = acq.state.rooms.find(x => x.id === roomId)!;
+    const item = r.unplacedFurniture!.find(u => u.id === acq.furnitureId)!;
+
+    if (target) {
+      return AnkicasterEngine.dropRoomFurniture(acq.state, roomId, acq.furnitureId, target);
+    }
+
+    const drop = findFirstValidFurnitureDrop(r, acq.state.rooms, item.defId);
+    if (drop) {
+      return AnkicasterEngine.dropRoomFurniture(acq.state, roomId, acq.furnitureId, {
+        x: drop.x,
+        floor: drop.floor,
+        plane: drop.plane,
+        wallY: drop.wallY,
+        tableId: drop.tableId,
+        markIndex: drop.markIndex
+      });
+    }
+
+    // Fallback for legacy crowded test fixtures when no target is supplied
+    r.unplacedFurniture = (r.unplacedFurniture || []).filter(u => u.id !== acq.furnitureId);
+    r.furniture.push({ id: item.id, defId: item.defId, slotKind: item.slotKind, damaged: false });
+    const legacy = legacyLayoutRoomFurniture(r).items.find(v => v.furniture.id === item.id);
+    const placed = r.furniture[r.furniture.length - 1];
+    placed.x = legacy?.x ?? Math.round((r.w * 64) / 2);
+    placed.floor = legacy?.floor ?? 0;
+    placed.plane = legacy?.kind ?? piecePlane(item.defId);
+    AnkicasterEngine.syncWorkplaces(acq.state);
+    return { state: acq.state, success: true };
   }
 
   /**
@@ -3036,86 +3315,51 @@ export class AnkicasterEngine {
   }
 
   /**
-   * Add furniture to room
+   * Add optional furniture to room. When `target` is omitted (headless callers), picks the first
+   * valid drop coordinate automatically; when `target` is supplied, strictly validates it.
    */
   static addFurniture(
     state: FullGameState,
     roomId: number,
-    furnitureDefId: string
+    furnitureDefId: string,
+    target?: DropTargetInput
   ): { state: FullGameState; success: boolean; error?: string } {
-    const next = structuredClone(state);
-    const beforeRes = resourceSnapshot(next);
-    const room = next.rooms.find(r => r.id === roomId);
-    if (!room) return { state, success: false, error: 'Room not found.' };
-    if (room.state !== 'built') return { state, success: false, error: 'Finish construction first.' };
+    const acq = AnkicasterEngine.acquireFurniture(state, roomId, furnitureDefId);
+    if (!acq.success || acq.furnitureId === undefined) return { state, success: false, error: acq.error };
+    const r = acq.state.rooms.find(x => x.id === roomId)!;
+    const item = r.unplacedFurniture!.find(u => u.id === acq.furnitureId)!;
 
-    const fDef = FURNITURE_DEFINITIONS[furnitureDefId];
-    if (!fDef) return { state, success: false, error: 'Unknown furniture item.' };
-
-    if (!isPatternKnown(next, furnitureDefId)) {
-      const deckLabel = fDef.deck[0].toUpperCase() + fDef.deck.slice(1);
-      return { state, success: false, error: `Pattern needed (${deckLabel} deck).` };
+    if (target) {
+      return AnkicasterEngine.dropRoomFurniture(acq.state, roomId, acq.furnitureId, target);
     }
 
-    const totalSameCount = room.furniture.filter(f => f.defId === furnitureDefId).length;
-    const maxSame = (furnitureDefId === 'student_desk' || furnitureDefId === 'reading_desk') ? 4 : 2;
-    const sameItemCount = (furnitureDefId === 'student_desk' || furnitureDefId === 'reading_desk' || furnitureDefId === 'long_table')
-      ? totalSameCount
-      : room.furniture.filter(f => !f.slotKind.startsWith('required:') && f.defId === furnitureDefId).length;
-    if (sameItemCount >= maxSame) {
-      return { state, success: false, error: `At most ${maxSame} ${fDef.name} can be placed in one room.` };
+    const drop = findFirstValidFurnitureDrop(r, acq.state.rooms, furnitureDefId);
+    if (drop) {
+      return AnkicasterEngine.dropRoomFurniture(acq.state, roomId, acq.furnitureId, {
+        x: drop.x,
+        floor: drop.floor,
+        plane: drop.plane,
+        wallY: drop.wallY,
+        tableId: drop.tableId,
+        markIndex: drop.markIndex
+      });
     }
 
-    const roomDef = ROOM_DEFINITIONS[room.defId];
-    const maxSlots = (roomDef?.optionalSlots || 2) + (room.level - 1) * 2;
-    const currentSlots = room.furniture.filter(f => !f.slotKind.startsWith('required:')).reduce((acc, f) => {
-      const def = FURNITURE_DEFINITIONS[f.defId];
-      return acc + (def?.slots || 1);
-    }, 0);
-
-    if (currentSlots + fDef.slots > maxSlots) {
-      return { state, success: false, error: `No available slots in this room (${currentSlots}/${maxSlots} used).` };
-    }
-
-    // A stored item (returned by demolition) is re-installed for free
-    const stored = next.furnitureInventory?.[furnitureDefId] || 0;
-    if (stored > 0) {
-      next.furnitureInventory = { ...next.furnitureInventory, [furnitureDefId]: stored - 1 };
-    } else {
-      const cost = fDef.cost as Cost;
-      const bad = unaffordable(next, cost);
-      if (bad) return { state, success: false, error: bad };
-
-      next.mana -= cost.mana || 0;
-      const res = next.resources as unknown as Record<string, number>;
-      for (const [k, v] of Object.entries(cost)) {
-        if (k !== 'mana' && v) res[k] = (res[k] || 0) - v;
-      }
-    }
-
-    const ids = allFurnitureIds(next.rooms);
-    room.furniture.push({
-      id: uniqueFurnitureId(ids, room.id * 100 + room.furniture.length + 1),
-      defId: furnitureDefId,
-      slotKind: fDef.role === 'bed' ? 'bed' : 'optional',
-      damaged: false
-    });
-
-    next.notices.push({
-      id: `furn-${Date.now()}`,
-      time: Date.now(),
-      type: 'furniture',
-      text: `Installed ${fDef.name} into ${roomDef?.name}.`,
-      data: { roomId }
-    });
-    AnkicasterEngine.syncWorkplaces(next);
-    logResourceDiff(next, beforeRes, `Installed ${fDef.name}`);
-
-    return { state: next, success: true };
+    // Fallback for tight legacy test rooms when target is omitted
+    r.unplacedFurniture = (r.unplacedFurniture || []).filter(u => u.id !== acq.furnitureId);
+    r.furniture.push({ id: item.id, defId: item.defId, slotKind: item.slotKind, damaged: false });
+    const legacy = legacyLayoutRoomFurniture(r).items.find(v => v.furniture.id === item.id);
+    const placed = r.furniture[r.furniture.length - 1];
+    placed.x = legacy?.x ?? Math.round((r.w * 64) / 2);
+    placed.floor = legacy?.floor ?? 0;
+    placed.plane = legacy?.kind ?? piecePlane(item.defId);
+    AnkicasterEngine.syncWorkplaces(acq.state);
+    return { state: acq.state, success: true };
   }
 
   /**
-   * Remove furniture from room
+   * Remove furniture from room. If a long_table is removed, any snapped chairs are detached;
+   * chairs whose full 16px box no longer clears neighbours are moved to unplacedFurniture.
    */
   static removeFurniture(
     state: FullGameState,
@@ -3133,6 +3377,35 @@ export class AnkicasterEngine {
     }
 
     room.furniture = room.furniture.filter(f => f.id !== furnitureId);
+    if (target.defId === 'long_table') {
+      const detachedIds: number[] = [];
+      for (const f of room.furniture) {
+        if (f.defId === 'wooden_chair' && f.tableId === target.id) {
+          delete f.tableId;
+          delete f.markIndex;
+          detachedIds.push(f.id);
+        }
+      }
+      for (const cid of detachedIds) {
+        const chair = room.furniture.find(f => f.id === cid);
+        if (!chair) continue;
+        const ok = validateFurnitureDrop(
+          room,
+          next.rooms,
+          chair.defId,
+          { x: chair.x ?? Math.round((room.w * 64) / 2), floor: chair.floor ?? 0 },
+          { excludeFurnitureId: cid }
+        );
+        if (!ok.valid) {
+          room.furniture = room.furniture.filter(f => f.id !== cid);
+          room.unplacedFurniture = [
+            ...(room.unplacedFurniture || []),
+            { id: chair.id, defId: chair.defId, slotKind: chair.slotKind, damaged: chair.damaged }
+          ];
+        }
+      }
+    }
+
     if (!target.damaged && FURNITURE_DEFINITIONS[target.defId]) {
       next.furnitureInventory = { ...(next.furnitureInventory || {}) };
       next.furnitureInventory[target.defId] = (next.furnitureInventory[target.defId] || 0) + 1;

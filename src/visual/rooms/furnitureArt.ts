@@ -76,6 +76,7 @@ const TABLE: Record<string, Row> = {
   hex_darts: ['frame', 16, 16, 'floor', RED, CLOTH, 'darts'],
   warm_hearthstone: ['statue', 16, 16, 'floor', SD, 0xe8752a, 'hearthstone', 1],
   long_table: ['table', 32, 16, 'floor', W, CLOTH, 'long'],
+  wooden_chair: ['seat', 16, 16, 'floor', W, WD, 'chair'],
   hearth: ['box', 16, 24, 'floor', ST, 0xe8752a, 'hearth', 1],
   cooking_range: ['box', 16, 24, 'floor', IRON, 0xe8752a, 'oven', 1],
   spice_rack: ['shelf', 16, 16, 'wall', W, RED, 'jars'],
@@ -452,6 +453,14 @@ function drawFamily(g: Painter, art: FurnitureArt, bx: { left: number; top: numb
         g.rect(L + 3, B - 4, 2, 4).fill({ color: darken(a, 0.7) });
         g.rect(R - 5, B - 4, 2, 4).fill({ color: darken(a, 0.7) });
         if (c2 === LEAF) for (let i = 0; i < 3; i++) g.circle(L + 6 + i * 9, B - 6.5, 1.5).fill({ color: c2 });
+      } else if (v === 'chair') {
+        // Compact 8px oak dining chair centered inside the 16x16 slot
+        g.rect(cx - 3.5, B - 11, 7, 1.5).fill({ color: a }); // top rail
+        g.rect(cx - 3, B - 9.5, 1.2, 4.5).fill({ color: c2 }); // left stile
+        g.rect(cx + 1.8, B - 9.5, 1.2, 4.5).fill({ color: c2 }); // right stile
+        g.rect(cx - 4, B - 5, 8, 1.6).fill({ color: a }); // seat
+        g.rect(cx - 3.5, B - 3.4, 1.3, 3.4).fill({ color: c2 }); // left leg
+        g.rect(cx + 2.2, B - 3.4, 1.3, 3.4).fill({ color: c2 }); // right leg
       } else {
         const back = v === 'armchair' ? 11 : 9;
         g.rect(L + 1, B - back, w - 2, back - 5).fill({ color: darken(a, 0.85) }); // back

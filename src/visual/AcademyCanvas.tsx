@@ -16,7 +16,7 @@ import { FullGameState, PlacedRoom, CreatureInstance } from '../types/ankicaster
 import { VisualWorld } from './world/VisualWorld';
 import { castleCellToWorldX } from './layout/gridToWorld';
 import { ZoomIn, ZoomOut, Maximize2, Home, Move, Hammer, X as XIcon, Wand2 } from 'lucide-react';
-import { ROOM_DEFINITIONS } from '../data/content';
+import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS } from '../data/content';
 import { AnkicasterEngine } from '../utils/engine';
 import { validatePlacement, roomLimitStatus, getGridSize, findAutoPlacement, PlacementCheck } from '../utils/placement';
 import { reviewsToGoText } from '../utils/construction';
@@ -24,11 +24,24 @@ import { formatMaterialCost } from '../utils/resourceReport';
 import { tamingRequirement } from './creatures/creatureArt';
 import { arrivalStage, arrivalStageLabel, originLabel } from '../utils/creatures';
 import { registerVisualPreviewListener } from './events/visualEvents';
+import {
+  DropTargetInput,
+  DropValidationResult,
+  findFirstValidFurnitureDrop,
+  piecePlane,
+  resolveFurniturePosition,
+  snapFurnitureX,
+  validateFurnitureDrop
+} from './layout/furniturePlacement';
 
 TextureStyle.defaultOptions.scaleMode = 'nearest';
 
-/** Build a new room, or move an existing one, with the ghost placement tool. */
-export type PlacementMode = { kind: 'build'; defId: string } | { kind: 'move'; roomId: number };
+/** Build a new room, move an existing one, or place/move furniture with the ghost placement tool. */
+export type PlacementMode =
+  | { kind: 'build'; defId: string }
+  | { kind: 'move'; roomId: number }
+  | { kind: 'furniture_place'; roomId: number; furnitureId: number }
+  | { kind: 'furniture_move'; roomId: number; furnitureId: number };
 
 export function creatureHoverText(c: {
   nickname: string;
@@ -62,6 +75,8 @@ interface AcademyCanvasProps {
   onResolveHazard?: (roomId: number, method: 'warder' | 'spell') => void;
   placement?: PlacementMode | null;
   onPlacementConfirm?: (x: number, y: number) => void;
+  onFurnitureDropConfirm?: (target: DropTargetInput) => void;
+  onPlacementReject?: (reason: string) => void;
   onPlacementCancel?: () => void;
   onPlacementAuto?: () => void;
   /** Tutorial: keep this room on screen, and report its page rect. */
@@ -71,6 +86,9 @@ interface AcademyCanvasProps {
 
 /** Validate a placement candidate exactly as the engine will (the engine re-checks on confirm). */
 export function checkPlacementCandidate(state: FullGameState, mode: PlacementMode, x: number, y: number): PlacementCheck {
+  if (mode.kind === 'furniture_place' || mode.kind === 'furniture_move') {
+    return { valid: false, errors: ['Point inside the room to place furniture'], warnings: [] };
+  }
   if (mode.kind === 'move') return AnkicasterEngine.validateMove(state, mode.roomId, x, y);
   const def = ROOM_DEFINITIONS[mode.defId];
   if (!def) return { valid: false, errors: ['Unknown room'], warnings: [] };
@@ -80,12 +98,25 @@ export function checkPlacementCandidate(state: FullGameState, mode: PlacementMod
 }
 
 function placementFootprint(state: FullGameState, mode: PlacementMode) {
+  if (mode.kind === 'furniture_place' || mode.kind === 'furniture_move') return null;
   if (mode.kind === 'move') {
     const r = state.rooms.find(rr => rr.id === mode.roomId);
     return r ? { area: r.area, w: r.w, h: r.h, defId: r.defId } : null;
   }
   const def = ROOM_DEFINITIONS[mode.defId];
   return def ? { area: def.area, w: def.size[0], h: def.size[1], defId: def.id } : null;
+}
+
+function placementTargetFurniture(state: FullGameState, mode: PlacementMode | null | undefined) {
+  if (!mode || (mode.kind !== 'furniture_place' && mode.kind !== 'furniture_move')) return null;
+  const room = state.rooms.find(r => r.id === mode.roomId);
+  if (!room) return null;
+  const piece =
+    mode.kind === 'furniture_place'
+      ? (room.unplacedFurniture || []).find(u => u.id === mode.furnitureId)
+      : room.furniture.find(f => f.id === mode.furnitureId);
+  if (!piece) return null;
+  return { room, piece };
 }
 
 export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
@@ -97,6 +128,8 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   onResolveHazard,
   placement,
   onPlacementConfirm,
+  onFurnitureDropConfirm,
+  onPlacementReject,
   onPlacementCancel,
   onPlacementAuto,
   focusRoomDefId,
@@ -113,6 +146,7 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
   const [currentZoom, setCurrentZoom] = useState(2);
   /** Current ghost candidate and its rule check (drives the banner text). */
   const [candidate, setCandidate] = useState<{ x: number; y: number; check: PlacementCheck } | null>(null);
+  const [furnCandidate, setFurnCandidate] = useState<DropValidationResult | null>(null);
   const [hoverTip, setHoverTip] = useState<{ x: number; y: number; text: string } | null>(null);
   const placementRef = useRef<PlacementMode | null | undefined>(placement);
   placementRef.current = placement;
@@ -292,15 +326,67 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     }
   }, [state, selectedRoomId]);
 
-  // Placement mode: seed the ghost (auto spot for Build), clear it when the mode ends
-  const placementKey = placement ? (placement.kind === 'build' ? `b:${placement.defId}` : `m:${placement.roomId}`) : '';
+  // Placement mode: seed the ghost (auto spot for Build, target room/spot for Furniture), clear it when the mode ends
+  const placementKey = placement
+    ? placement.kind === 'build'
+      ? `b:${placement.defId}`
+      : placement.kind === 'move'
+      ? `m:${placement.roomId}`
+      : placement.kind === 'furniture_place'
+      ? `fp:${placement.roomId}:${placement.furnitureId}`
+      : `fm:${placement.roomId}:${placement.furnitureId}`
+    : '';
   useEffect(() => {
     const world = worldRef.current;
     if (!placement) {
       setCandidate(null);
+      setFurnCandidate(null);
       world?.setGhost(null);
+      world?.setFurnitureGhost(null);
       return;
     }
+    if (placement.kind === 'furniture_place' || placement.kind === 'furniture_move') {
+      setCandidate(null);
+      world?.setGhost(null);
+      world?.ensureRoomIdVisible(placement.roomId);
+      const info = placementTargetFurniture(state, placement);
+      if (!info) {
+        setFurnCandidate(null);
+        world?.setFurnitureGhost(null);
+        return;
+      }
+      if (placement.kind === 'furniture_move') {
+        const cur = resolveFurniturePosition(info.room, { ...info.piece, damaged: !!info.piece.damaged });
+        showFurnitureCandidate({
+          x: cur.x,
+          floor: cur.floor,
+          plane: cur.plane,
+          wallY: cur.wallY,
+          tableId: cur.tableId,
+          markIndex: cur.markIndex
+        });
+      } else {
+        const spot = findFirstValidFurnitureDrop(info.room, state.rooms, info.piece.defId);
+        if (spot) {
+          showFurnitureCandidate({
+            x: spot.x,
+            floor: spot.floor,
+            plane: spot.plane,
+            wallY: spot.wallY,
+            tableId: spot.tableId,
+            markIndex: spot.markIndex
+          });
+        } else {
+          showFurnitureCandidate({
+            x: snapFurnitureX(info.room.w * 32),
+            floor: piecePlane(info.piece.defId) === 'ceiling' ? Math.max(0, info.room.h - 1) : 0
+          });
+        }
+      }
+      return;
+    }
+    setFurnCandidate(null);
+    world?.setFurnitureGhost(null);
     if (placement.kind === 'build') {
       const spot = findAutoPlacement(state, placement.defId);
       if (spot) showCandidate(spot.x, spot.y);
@@ -337,6 +423,41 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
       plotCount: grid.plotCount, castleFloors: grid.castleFloors,
       ignoreRoomId: mode.kind === 'move' ? mode.roomId : undefined
     });
+  }
+
+  function showFurnitureCandidate(target: DropTargetInput): DropValidationResult | null {
+    const mode = placementRef.current;
+    const world = worldRef.current;
+    const st = latestRef.current.state;
+    const info = placementTargetFurniture(st, mode);
+    if (!mode || !info || (mode.kind !== 'furniture_place' && mode.kind !== 'furniture_move')) return null;
+    const excludeFurnitureId = mode.kind === 'furniture_move' ? mode.furnitureId : undefined;
+    const check = validateFurnitureDrop(info.room, st.rooms, info.piece.defId, target, { excludeFurnitureId });
+    setFurnCandidate(check);
+    world?.setFurnitureGhost({
+      roomId: info.room.id,
+      furnitureId: info.piece.id,
+      defId: info.piece.defId,
+      x: check.x,
+      floor: check.floor,
+      plane: check.plane,
+      wallY: check.wallY,
+      valid: check.valid,
+      collidingIds: check.collidingIds,
+      tableId: check.tableId,
+      markIndex: check.markIndex
+    });
+    return check;
+  }
+
+  function furnitureCandidateAtPointer(clientX: number, clientY: number): DropTargetInput | null {
+    const container = containerRef.current;
+    const world = worldRef.current;
+    const mode = placementRef.current;
+    const info = placementTargetFurniture(latestRef.current.state, mode);
+    if (!container || !world || !mode || !info) return null;
+    const rect = container.getBoundingClientRect();
+    return world.furnitureTargetAt(clientX - rect.left, clientY - rect.top, info.room.id, info.piece.defId);
   }
 
   function candidateAtPointer(clientX: number, clientY: number) {
@@ -396,8 +517,13 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
       setHoverTip(null);
     }
     if (placementRef.current && !(isDraggingRef.current && totalDragDistRef.current > 6)) {
-      const c = candidateAtPointer(e.clientX, e.clientY);
-      if (c) showCandidate(c.x, c.y);
+      if (placementRef.current.kind === 'furniture_place' || placementRef.current.kind === 'furniture_move') {
+        const ft = furnitureCandidateAtPointer(e.clientX, e.clientY);
+        if (ft) showFurnitureCandidate(ft);
+      } else {
+        const c = candidateAtPointer(e.clientX, e.clientY);
+        if (c) showCandidate(c.x, c.y);
+      }
     }
     if (!isDraggingRef.current || !worldRef.current) return;
     const dx = e.clientX - lastMousePosRef.current.x;
@@ -422,13 +548,33 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
     const world = worldRef.current;
     if (!container || !world) return;
 
-    // Placement mode: a click confirms a valid ghost (an invalid one just explains why)
+    // Placement mode: a click confirms a valid ghost (an invalid one explains why)
     if (placementRef.current) {
+      if (placementRef.current.kind === 'furniture_place' || placementRef.current.kind === 'furniture_move') {
+        const ft = furnitureCandidateAtPointer(e.clientX, e.clientY);
+        if (!ft) return;
+        const check = showFurnitureCandidate(ft);
+        if (!check) return;
+        if (check.valid) {
+          onFurnitureDropConfirm?.({
+            x: check.x,
+            floor: check.floor,
+            plane: check.plane,
+            wallY: check.wallY,
+            tableId: check.tableId,
+            markIndex: check.markIndex
+          });
+        } else if (check.error) {
+          onPlacementReject?.(check.error);
+        }
+        return;
+      }
       const c = candidateAtPointer(e.clientX, e.clientY);
       if (!c) return;
       showCandidate(c.x, c.y);
       const check = checkPlacementCandidate(latestRef.current.state, placementRef.current, c.x, c.y);
       if (check.valid) onPlacementConfirm?.(c.x, c.y);
+      else if (check.errors[0]) onPlacementReject?.(check.errors[0]);
       return;
     }
 
@@ -519,7 +665,47 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
       />
 
       {/* Placement banner: what is being placed, whether the spot is valid, how to confirm/cancel */}
-      {placement && (() => {
+      {placement && (placement.kind === 'furniture_place' || placement.kind === 'furniture_move') && (() => {
+        const info = placementTargetFurniture(state, placement);
+        const rDef = info ? ROOM_DEFINITIONS[info.room.defId] : undefined;
+        const fDef = info ? FURNITURE_DEFINITIONS[info.piece.defId] : undefined;
+        const plane = info ? piecePlane(info.piece.defId) : 'floor';
+        const planeLabel = plane === 'floor' ? 'Floor' : plane === 'wall' ? 'Wall' : 'Ceiling';
+        const ok = !!furnCandidate?.valid;
+        const itemName = fDef?.name || info?.piece.slotKind.replace(/^required:/, '').replace(/_/g, ' ') || 'Furniture';
+        const msg = !furnCandidate
+          ? 'Point inside the room to place'
+          : ok
+            ? (furnCandidate.tableId != null ? 'Snapping to Long Table seat' : 'Valid spot')
+            : (furnCandidate.error || 'Cannot place there');
+        return (
+          <div
+            data-testid="placement-banner"
+            data-valid={ok ? 'true' : 'false'}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-slate-900/95 border border-amber-500/40 rounded-xl px-4 py-2.5 shadow-2xl text-[13px] max-w-[92%]"
+          >
+            {placement.kind === 'furniture_move' ? <Move className="w-4 h-4 text-amber-300 shrink-0" /> : <Hammer className="w-4 h-4 text-amber-300 shrink-0" />}
+            <div className="min-w-0">
+              <div className="font-bold text-amber-200">
+                {placement.kind === 'furniture_move' ? 'Moving' : 'Placing'} {itemName}
+                <span className="text-slate-400 font-normal">
+                  {' '}· {rDef?.name || info?.room.defId || 'Room'} · {planeLabel}
+                  {info && info.room.h > 1 && furnCandidate ? ` · Floor ${furnCandidate.floor + 1}` : ''}
+                </span>
+              </div>
+              <div className={ok ? 'text-emerald-300' : 'text-rose-300'} data-testid="placement-status">
+                {ok ? '✓ ' : '✕ '}{msg}
+              </div>
+              <div className="text-slate-500 text-[11px]">Click inside room to place · Esc or right-click to cancel · drag to pan</div>
+            </div>
+            <button onClick={() => onPlacementCancel?.()} className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800" aria-label="Cancel placement">
+              <XIcon className="w-3.5 h-3.5" /> Cancel
+            </button>
+          </div>
+        );
+      })()}
+
+      {placement && (placement.kind === 'build' || placement.kind === 'move') && (() => {
         const fp = placementFootprint(state, placement);
         const def = fp ? ROOM_DEFINITIONS[fp.defId] : undefined;
         const ok = !!candidate?.check.valid;

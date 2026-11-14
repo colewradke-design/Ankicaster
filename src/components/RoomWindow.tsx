@@ -17,7 +17,18 @@ import {
   X, AlertTriangle, Sparkles, Droplets, Shield, Gauge, ChevronRight, Info, Hammer, Users, Briefcase, Award, Move, Trash2, Pause, Play, Lock
 } from 'lucide-react';
 import { reviewsToGo, reviewsToGoText } from '../utils/construction';
-import { requiredSlotStatus, requiredInstallOption, costText, unaffordable } from '../utils/requiredFurniture';
+import {
+  requiredSlotStatus,
+  requiredInstallOption,
+  costText,
+  unaffordable,
+  isFurnitureCompatibleWithRoom,
+  optionalSlotsUsed,
+  maxSameFurnitureInRoom,
+  optionalSlotsCostForNewPiece,
+  queuedRequiredBySlot,
+  refectoryTableTotal
+} from '../utils/requiredFurniture';
 import { AnkicasterEngine } from '../utils/engine';
 import { WizardPortrait } from './WizardPortrait';
 import { CharacterPortrait } from './CharacterPortrait';
@@ -172,12 +183,34 @@ export interface RoomWindowProps {
   onTogglePause?: (roomId: number, paused: boolean) => void;
   /** Install one empty required slot (by its index in the room's required slots). */
   onInstallRequired?: (roomId: number, slotIndex: number) => void;
+  /** Enter manual placement mode for an unplaced item waiting in `room.unplacedFurniture`. */
+  onPlaceFurniture?: (roomId: number, furnitureId: number) => void;
+  /** Enter manual move mode for an installed furniture piece inside `room.furniture`. */
+  onMoveFurniture?: (roomId: number, furnitureId: number) => void;
+  /** Return an unplaced optional piece back to storage. */
+  onCancelUnplacedFurniture?: (roomId: number, furnitureId: number) => void;
   /** For tests/screenshots: render the details section expanded. */
   detailsOpen?: boolean;
 }
 
 export const RoomWindow: React.FC<RoomWindowProps> = ({
-  state, room, onClose, onOpenScreen, onResolveHazard, onUpgrade, onAddFurniture, onRemoveFurniture, onMove, onDemolish, onChangeLook, onTogglePause, onInstallRequired, detailsOpen = false
+  state,
+  room,
+  onClose,
+  onOpenScreen,
+  onResolveHazard,
+  onUpgrade,
+  onAddFurniture,
+  onRemoveFurniture,
+  onMove,
+  onDemolish,
+  onChangeLook,
+  onTogglePause,
+  onInstallRequired,
+  onPlaceFurniture,
+  onMoveFurniture,
+  onCancelUnplacedFurniture,
+  detailsOpen = false
 }) => {
   const moveBlock = AnkicasterEngine.roomActionBlock(state, room.id, 'move');
   const demolishBlock = AnkicasterEngine.roomActionBlock(state, room.id, 'demolish');
@@ -197,15 +230,14 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
   const reqStatus = requiredSlotStatus(room);
   const reqMissing = reqStatus.filter(s => !s.filled).length;
   const unfinished = !isSite && reqMissing > 0;
+  const unplaced = room.unplacedFurniture || [];
+  const queuedReq = queuedRequiredBySlot(room);
+  const maxSlots = (def?.optionalSlots || 2) + (room.level - 1) * 2;
+  const usedSlots = optionalSlotsUsed(room);
+  const tableTotal = refectoryTableTotal(room);
 
   const compatible = Object.values(FURNITURE_DEFINITIONS)
-    .filter(fDef => {
-      if (fDef.role === 'required') return false;
-      if (fDef.rooms === 'any') return true;
-      if (Array.isArray(fDef.rooms) && fDef.rooms.includes(room.defId)) return true;
-      if (fDef.role === 'bed' && room.defId.includes('dorm')) return true;
-      return false;
-    })
+    .filter(fDef => fDef.role !== 'required' && isFurnitureCompatibleWithRoom(fDef, room.defId))
     .sort((a, b) => (isPatternKnown(state, a.id) ? 0 : 1) - (isPatternKnown(state, b.id) ? 0 : 1));
 
   return (
@@ -319,6 +351,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                   const why = opt.free || storedN > 0 ? undefined : unaffordable(state, opt.cost);
                   const installed = slot.filled ? room.furniture[slot.furnitureIndex] : undefined;
                   const installedName = installed ? FURNITURE_DEFINITIONS[installed.defId]?.name || slot.name : '';
+                  const queuedId = !slot.filled ? queuedReq.get(slot.index) : undefined;
                   return (
                     <li key={slot.index} className="flex items-center justify-between gap-2" data-required-slot={slot.role} data-filled={slot.filled ? 'yes' : 'no'}>
                       <span className={slot.filled ? 'text-slate-200' : 'text-amber-100'}>
@@ -327,6 +360,19 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                       </span>
                       {slot.filled ? (
                         <span className="text-[12px] text-emerald-400">Installed</span>
+                      ) : queuedId !== undefined ? (
+                        onPlaceFurniture ? (
+                          <button
+                            data-action="place-required"
+                            onClick={() => onPlaceFurniture(room.id, queuedId)}
+                            title={`Place ${slot.name} inside this room`}
+                            className="shrink-0 px-2.5 py-1 min-h-[28px] bg-emerald-500/20 hover:bg-emerald-500/35 text-emerald-200 border border-emerald-500/50 rounded-md text-[12px] font-bold"
+                          >
+                            Place
+                          </button>
+                        ) : (
+                          <span className="text-[12px] text-amber-300">Ready to place</span>
+                        )
                       ) : onInstallRequired && (
                         <button
                           data-action="install-required"
@@ -343,6 +389,52 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                 })}
               </ul>
               {unfinished && <div className="text-[12px] text-amber-300/80 mt-1.5">Unfinished rooms run at 0% until every required fixture is in place.</div>}
+            </div>
+          )}
+
+          {!isSite && unplaced.length > 0 && (
+            <div className="rounded-xl px-3 py-2 text-[13px] border bg-amber-950/25 border-amber-600/40 space-y-1.5" data-testid="to-place-furniture">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-bold text-amber-200">To place ({unplaced.length})</span>
+                <span className="text-[11px] text-slate-400">Pick Place to drop on canvas</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {unplaced.map(u => {
+                  const uDef = FURNITURE_DEFINITIONS[u.defId];
+                  const uReq = u.slotKind.startsWith('required:');
+                  const uName = uDef?.name || u.defId.replace(/_/g, ' ');
+                  return (
+                    <span
+                      key={u.id}
+                      data-unplaced-id={u.id}
+                      className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md border ${uReq ? 'border-amber-700/60 text-amber-200 bg-slate-900/80' : 'border-slate-700 text-slate-200 bg-slate-900/80'}`}
+                    >
+                      <span>{uName}</span>
+                      {onPlaceFurniture && (
+                        <button
+                          data-action="place-furniture"
+                          onClick={() => onPlaceFurniture(room.id, u.id)}
+                          className="px-1.5 py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500/35 text-emerald-200 border border-emerald-500/40 text-[11px] font-bold"
+                          title={`Place ${uName}`}
+                        >
+                          Place
+                        </button>
+                      )}
+                      {!uReq && onCancelUnplacedFurniture && (
+                        <button
+                          data-action="cancel-unplaced"
+                          onClick={() => onCancelUnplacedFurniture(room.id, u.id)}
+                          className="text-slate-400 hover:text-rose-300"
+                          aria-label={`Store ${uName}`}
+                          title="Return to storage"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </span>
+                  );
+                })}
+              </div>
             </div>
           )}
 
@@ -618,7 +710,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
             <summary className="cursor-pointer list-none flex items-center justify-between px-3 py-2 min-h-[36px] text-[13px] font-bold text-slate-300">
               <span>Room details</span>
               <span className="flex items-center gap-1 text-slate-500 font-normal">
-                {room.furniture.length} items
+                {room.furniture.length} items{unplaced.length > 0 ? ` · ${unplaced.length} to place` : ''}
                 <ChevronRight className="w-4 h-4 transition group-open:rotate-90" />
               </span>
             </summary>
@@ -694,12 +786,24 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                         const req = f.slotKind.startsWith('required:');
                         const eff = FURNITURE_EFFECTS[f.defId];
                         const effText = eff ? formatFurnitureEffect(eff.kind, eff.value * (f.damaged ? 0.5 : 1)) : null;
+                        const pieceName = fDef?.name || f.defId;
                         return (
                           <span key={f.id} className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border ${req ? 'border-amber-800/50 text-amber-200' : 'border-slate-700 text-slate-200'}`} title={effText || (req ? 'Required fixture' : 'Optional furnishing')}>
-                            <span>{fDef?.name || f.defId}</span>
+                            <span>{pieceName}</span>
                             {effText && <span className="text-[11px] text-emerald-300/90">({effText})</span>}
+                            {onMoveFurniture && (
+                              <button
+                                data-action="move-furniture"
+                                onClick={() => onMoveFurniture(room.id, f.id)}
+                                className="text-sky-300 hover:text-sky-200 ml-0.5"
+                                aria-label={`Move ${pieceName}`}
+                                title={`Move ${pieceName}`}
+                              >
+                                <Move className="w-3 h-3" />
+                              </button>
+                            )}
                             {!req && (
-                              <button onClick={() => onRemoveFurniture(room.id, f.id)} className="text-rose-400 hover:text-rose-300 ml-0.5" aria-label={`Remove ${fDef?.name || f.defId}`} title="Remove">
+                              <button onClick={() => onRemoveFurniture(room.id, f.id)} className="text-rose-400 hover:text-rose-300 ml-0.5" aria-label={`Remove ${pieceName}`} title="Remove">
                                 <X className="w-3.5 h-3.5" />
                               </button>
                             )}
@@ -722,7 +826,13 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
               </div>
 
               <div data-tour="room-furnish">
-                <div className="text-[12px] uppercase tracking-wider font-bold text-slate-500 mb-1.5">Furnish</div>
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <span className="text-[12px] uppercase tracking-wider font-bold text-slate-500">Furnish</span>
+                  <span className="text-[11px] font-mono text-slate-400" data-testid="room-slots-usage">
+                    Slots {usedSlots}/{maxSlots}
+                    {room.defId === 'refectory' && tableTotal > 0 ? ` · ${6 * tableTotal} table seats free` : ''}
+                  </span>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1">
                   {compatible.map(fDef => {
                     const known = isPatternKnown(state, fDef.id);
@@ -747,17 +857,27 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                         </div>
                       );
                     }
-                    const buyTitle = [furnitureBuyTitle(room, fDef.stats), effText].filter(Boolean).join(' · ');
+                    const slotCost = optionalSlotsCostForNewPiece(room, fDef.id);
+                    const capLimit = maxSameFurnitureInRoom(room, fDef.id);
+                    const buyTitle = [
+                      furnitureBuyTitle(room, fDef.stats),
+                      effText,
+                      slotCost === 0 ? 'Uses 0 slots (long table seat)' : `Max ${capLimit}/room`
+                    ].filter(Boolean).join(' · ');
                     return (
                     <div key={fDef.id} title={buyTitle} className="flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 px-2.5 py-1.5 rounded-lg">
                       <div className="min-w-0">
                         <div className="text-slate-200 truncate">{fDef.name}</div>
-                        {effText && <div className="text-[11px] text-emerald-400/80 truncate">{effText}</div>}
+                        {(effText || slotCost === 0) && (
+                          <div className="text-[11px] text-emerald-400/80 truncate">
+                            {effText || (slotCost === 0 ? 'No slot cost at Long Table' : '')}
+                          </div>
+                        )}
                       </div>
                       <button
                         onClick={() => onAddFurniture(room.id, fDef.id)}
                         className="shrink-0 px-2 py-1 min-h-[28px] bg-amber-500/15 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-md text-[12px] font-bold"
-                        title={`${buyTitle} · Install ${fDef.name}`}
+                        title={`${buyTitle} · Place ${fDef.name}`}
                       >
                         {(stored[fDef.id] || 0) > 0 ? `Stored ×${stored[fDef.id]}` : costText(fDef.cost)}
                       </button>

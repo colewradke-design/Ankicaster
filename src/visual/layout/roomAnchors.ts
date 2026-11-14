@@ -2,15 +2,17 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * Deterministic furniture & room anchors for visual agents.
- * Every anchor represents one physical furniture piece or fixed room spot,
- * never a per-agent width hash, so agents spread out and never stack.
+ * Deterministic furniture & room anchors for visual agents (manual-furniture.md).
+ * Every anchor represents one physical furniture piece (using its placed x/floor)
+ * or a dedicated room spot, never inventing seats when furniture isn't placed.
  * Read-only over FullGameState (safe for deep-freeze tests & VR-01).
  */
 import { FullGameState, PlacedRoom } from '../../types/ankicaster';
 import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS } from '../../data/content';
 import { getFloorLineY, roomToWorldBox } from './gridToWorld';
 import { layoutRoomFurniture, PlacedFurnitureView, floorLineFor } from './roomLayouts';
+import { getFurnitureArt } from '../rooms/furnitureArt';
+import { isSeatDef, pieceKind, piecePlane } from './furniturePlacement';
 import { ReachabilityInfo } from '../../utils/reachability';
 
 export type RoomAnchorKind =
@@ -86,7 +88,7 @@ function nudgeDistinct(
   const list = occupiedXByFloor.get(floor) ?? [];
   occupiedXByFloor.set(floor, list);
   let x = clampRoomX(rawX, boxLeft, boxWidth, margin);
-  if (list.some(ox => Math.abs(ox - x) < minSpacing)) {
+  if (minSpacing > 0 && list.some(ox => Math.abs(ox - x) < minSpacing)) {
     const minX = boxLeft + margin;
     const maxX = Math.max(minX, boxLeft + boxWidth - margin);
     let found: number | null = null;
@@ -102,7 +104,6 @@ function nudgeDistinct(
     if (found !== null) {
       x = found;
     } else {
-      // Fallback: pick midpoint of largest free gap
       const sorted = [...list].sort((a, b) => a - b);
       let bestX = clampRoomX(rawX + list.length * 4, boxLeft, boxWidth, 6);
       let bestGap = -1;
@@ -130,18 +131,25 @@ function pushAnchor(
   rawX: number,
   localFloor: number,
   box: { left: number; width: number; floorLineY: number },
-  opts: { furnitureId?: number; defId?: string; minSpacing?: number; margin?: number } = {}
+  opts: { furnitureId?: number; defId?: string; minSpacing?: number; margin?: number; exact?: boolean } = {}
 ): RoomAnchor {
   const worldFloor = room.area === 'castle' ? room.y + localFloor : 0;
-  const x = nudgeDistinct(
-    rawX,
-    worldFloor,
-    occupiedXByFloor,
-    box.left,
-    box.width,
-    opts.minSpacing ?? 11,
-    opts.margin ?? 10
-  );
+  const x = opts.exact
+    ? clampRoomX(rawX, box.left, box.width, opts.margin ?? 6)
+    : nudgeDistinct(
+        rawX,
+        worldFloor,
+        occupiedXByFloor,
+        box.left,
+        box.width,
+        opts.minSpacing ?? 11,
+        opts.margin ?? 10
+      );
+  if (opts.exact) {
+    const list = occupiedXByFloor.get(worldFloor) ?? [];
+    list.push(x);
+    occupiedXByFloor.set(worldFloor, list);
+  }
   const y = floorLineFor(box.floorLineY, localFloor);
   const index = target.length;
   const anchor: RoomAnchor = {
@@ -160,8 +168,28 @@ function pushAnchor(
   return anchor;
 }
 
+/** Find a standing X beside a bookshelf or non-seat bulk piece, outside its bulk box. */
+function besideBulkX(
+  it: PlacedFurnitureView,
+  box: { left: number; width: number },
+  bulkBoxes: Array<{ floor: number; left: number; right: number }>
+): number {
+  const art = getFurnitureArt(it.furniture.defId);
+  const shelfCenter = box.left + it.x;
+  const half = art.w / 2;
+  const minBound = box.left + 8;
+  const maxBound = box.left + box.width - 8;
+  const candidates = [shelfCenter + half + 4, shelfCenter - half - 4];
+  for (const cx of candidates) {
+    if (cx < minBound || cx > maxBound) continue;
+    const hitsBulk = bulkBoxes.some(b => b.floor === it.floor && cx >= b.left && cx <= b.right);
+    if (!hitsBulk) return cx;
+  }
+  return clampRoomX(candidates[0], box.left, box.width, 8);
+}
+
 /**
- * Computes deterministic, non-overlapping anchors inside `room`.
+ * Computes deterministic, piece-tracked anchors inside `room`.
  */
 export function buildRoomAnchors(room: PlacedRoom, groundY: number): RoomAnchorSet {
   const box = roomToWorldBox(room, groundY);
@@ -170,6 +198,15 @@ export function buildRoomAnchors(room: PlacedRoom, groundY: number): RoomAnchorS
     .filter(it => !it.furniture.damaged)
     .slice()
     .sort((a, b) => a.floor - b.floor || a.x - b.x || a.furniture.id - b.furniture.id);
+
+  // World-space boxes of all bulk pieces (including damaged ones so people don't stand inside them)
+  const bulkBoxes = view.items
+    .filter(it => pieceKind(it.furniture.defId) === 'bulk')
+    .map(it => {
+      const art = getFurnitureArt(it.furniture.defId);
+      const wx = box.left + it.x;
+      return { floor: it.floor, left: wx - art.w / 2, right: wx + art.w / 2 };
+    });
 
   const lecterns: RoomAnchor[] = [];
   const studentDesks: RoomAnchor[] = [];
@@ -186,20 +223,18 @@ export function buildRoomAnchors(room: PlacedRoom, groundY: number): RoomAnchorS
   const occ = new Map<number, number[]>();
 
   const itemWorldX = (it: PlacedFurnitureView) => box.left + it.x;
-
-  // Avoid placing agents over the Wizard's Study internal stair column (left ~18px)
-  const minRoomMargin = room.defId === 'wizard_study' ? 22 : isPenDef(room.defId) ? 16 : 10;
+  const minRoomMargin = room.defId === 'wizard_study' ? 22 : isPenDef(room.defId) ? 16 : 8;
 
   if (room.defId.startsWith('class_')) {
-    const lecternItems = items.filter(it => it.furniture.defId === 'teachers_lectern' || it.furniture.slotKind === 'required:teachers_lectern');
+    const lecternItems = items.filter(
+      it => it.furniture.defId === 'teachers_lectern' || it.furniture.slotKind === 'required:teachers_lectern'
+    );
     for (const it of lecternItems) {
       pushAnchor(lecterns, all, occ, room, 'lectern', itemWorldX(it), it.floor, box, {
         furnitureId: it.furniture.id,
-        defId: it.furniture.defId
+        defId: it.furniture.defId,
+        exact: true
       });
-    }
-    if (lecterns.length === 0) {
-      pushAnchor(lecterns, all, occ, room, 'lectern', box.left + 22, 0, box);
     }
 
     const deskItems = items
@@ -208,48 +243,64 @@ export function buildRoomAnchors(room: PlacedRoom, groundY: number): RoomAnchorS
     for (const it of deskItems) {
       pushAnchor(studentDesks, all, occ, room, 'student_desk', itemWorldX(it), it.floor, box, {
         furnitureId: it.furniture.id,
-        defId: it.furniture.defId
+        defId: it.furniture.defId,
+        exact: true
+      });
+    }
+
+    const shelfItems = items.filter(it => it.furniture.defId === 'bookshelf');
+    for (const it of shelfItems) {
+      pushAnchor(bookshelves, all, occ, room, 'bookshelf', besideBulkX(it, box, bulkBoxes), it.floor, box, {
+        furnitureId: it.furniture.id,
+        defId: it.furniture.defId,
+        margin: 8
       });
     }
   } else if (room.defId === 'refectory') {
     const tableItems = items
       .filter(it => it.furniture.defId === 'long_table' || it.furniture.slotKind === 'required:long_table')
       .slice(0, 2);
-    const hearthItems = items.filter(it => it.furniture.defId === 'hearth');
-    for (const h of hearthItems) {
-      // Reserve hearth x slightly so chairs stay clear
-      const list = occ.get(room.area === 'castle' ? room.y + h.floor : 0) ?? [];
-      list.push(clampRoomX(itemWorldX(h), box.left, box.width, 10));
-      occ.set(room.area === 'castle' ? room.y + h.floor : 0, list);
-    }
-    // 6 distinct chairs per table
-    if (tableItems.length === 1) {
-      const xs = spreadRowX(6, box.left, box.width, 12);
-      const tbl = tableItems[0];
-      for (const cx of xs) {
-        pushAnchor(chairs, all, occ, room, 'chair', cx, tbl.floor, box, {
-          furnitureId: tbl.furniture.id,
-          defId: 'long_table',
-          minSpacing: 11,
-          margin: 10
-        });
-      }
-    } else if (tableItems.length >= 2) {
-      const xs = spreadRowX(12, box.left, box.width, 10);
-      xs.forEach((cx, idx) => {
-        const tbl = idx < 6 ? tableItems[0] : tableItems[1];
-        pushAnchor(chairs, all, occ, room, 'chair', cx, tbl.floor, box, {
-          furnitureId: tbl.furniture.id,
-          defId: 'long_table',
-          minSpacing: 9,
-          margin: 8
-        });
+    const validTableIds = new Set(tableItems.map(t => t.furniture.id));
+
+    // Only wooden_chair items snapped onto an undamaged long_table (up to 6 per table) feed/seat diners
+    const perTableUsedMarks = new Map<number, Set<number>>();
+    const snappedChairs = items
+      .filter(
+        it =>
+          it.furniture.defId === 'wooden_chair' &&
+          typeof it.tableId === 'number' &&
+          typeof it.markIndex === 'number' &&
+          it.markIndex >= 0 &&
+          it.markIndex < 6 &&
+          validTableIds.has(it.tableId)
+      )
+      .sort((a, b) => (a.tableId! - b.tableId!) || (a.markIndex! - b.markIndex!) || (a.furniture.id - b.furniture.id));
+
+    for (const ch of snappedChairs) {
+      const usedMarks = perTableUsedMarks.get(ch.tableId!) ?? new Set<number>();
+      if (usedMarks.size >= 6 || usedMarks.has(ch.markIndex!)) continue;
+      usedMarks.add(ch.markIndex!);
+      perTableUsedMarks.set(ch.tableId!, usedMarks);
+      // Slight side offset so front/back row diners at the same column don't overlap pixel-for-pixel
+      const rowOffset = ch.markIndex! < 3 ? -1.5 : 1.5;
+      pushAnchor(chairs, all, occ, room, 'chair', itemWorldX(ch) + rowOffset, ch.floor, box, {
+        furnitureId: ch.furniture.id,
+        defId: ch.furniture.defId,
+        exact: true,
+        margin: 6
       });
     }
-    // Also provide 2 non-meal visitor/hearth seats for outside mealtime if hearth exists
-    const seatXs = spreadRowX(2, box.left, box.width, 20);
-    for (const sx of seatXs) {
-      pushAnchor(seats, all, occ, room, 'seat', sx, 0, box, { minSpacing: 12, margin: 14 });
+
+    // Non-meal leisure seats only from actual placed seat furniture (freestanding chairs, benches, etc.)
+    const freeSeats = items.filter(
+      it => isSeatDef(it.furniture.defId) && !(it.furniture.defId === 'wooden_chair' && typeof it.tableId === 'number')
+    );
+    for (const sItem of freeSeats) {
+      pushAnchor(seats, all, occ, room, 'seat', itemWorldX(sItem), sItem.floor, box, {
+        furnitureId: sItem.furniture.id,
+        defId: sItem.furniture.defId,
+        exact: true
+      });
     }
   } else if (room.defId === 'library') {
     const deskItems = items
@@ -258,26 +309,39 @@ export function buildRoomAnchors(room: PlacedRoom, groundY: number): RoomAnchorS
     for (const it of deskItems) {
       pushAnchor(readingDesks, all, occ, room, 'reading_desk', itemWorldX(it), it.floor, box, {
         furnitureId: it.furniture.id,
-        defId: it.furniture.defId
+        defId: it.furniture.defId,
+        exact: true
       });
     }
-    const shelfItems = items.filter(it => it.furniture.defId === 'bookshelf' || it.furniture.slotKind === 'required:bookshelf');
+    const shelfItems = items.filter(
+      it => it.furniture.defId === 'bookshelf' || it.furniture.slotKind === 'required:bookshelf' || it.furniture.defId === 'rolling_ladder'
+    );
     for (const it of shelfItems) {
-      pushAnchor(bookshelves, all, occ, room, 'bookshelf', itemWorldX(it), it.floor, box, {
+      pushAnchor(bookshelves, all, occ, room, 'bookshelf', besideBulkX(it, box, bulkBoxes), it.floor, box, {
         furnitureId: it.furniture.id,
-        defId: it.furniture.defId
+        defId: it.furniture.defId,
+        margin: 8
       });
     }
-    const ladder = items.find(it => it.furniture.defId === 'rolling_ladder');
-    if (ladder) {
-      pushAnchor(bookshelves, all, occ, room, 'bookshelf', itemWorldX(ladder), ladder.floor, box, {
-        furnitureId: ladder.furniture.id,
-        defId: ladder.furniture.defId
+    const otherSeats = items.filter(
+      it =>
+        isSeatDef(it.furniture.defId) &&
+        it.furniture.defId !== 'reading_desk' &&
+        it.furniture.slotKind !== 'required:reading_desk'
+    );
+    for (const sItem of otherSeats) {
+      pushAnchor(readingDesks, all, occ, room, 'seat', itemWorldX(sItem), sItem.floor, box, {
+        furnitureId: sItem.furniture.id,
+        defId: sItem.furniture.defId,
+        exact: true
       });
     }
   } else if (room.defId === 'dormitory' || room.defId === 'grand_dormitory' || room.defId === 'faculty_quarters') {
     const bedItems = items.filter(
-      it => it.furniture.slotKind.includes('bed') || FURNITURE_DEFINITIONS[it.furniture.defId]?.role === 'bed'
+      it =>
+        it.furniture.slotKind.includes('bed') ||
+        FURNITURE_DEFINITIONS[it.furniture.defId]?.role === 'bed' ||
+        FURNITURE_DEFINITIONS[it.furniture.defId]?.role === 'faculty_bed'
     );
     for (const it of bedItems) {
       const slots = it.furniture.defId === 'bunk_bed' ? 2 : 1;
@@ -286,15 +350,9 @@ export function buildRoomAnchors(room: PlacedRoom, groundY: number): RoomAnchorS
         pushAnchor(beds, all, occ, room, 'bed', itemWorldX(it) + offset, it.floor, box, {
           furnitureId: it.furniture.id,
           defId: it.furniture.defId,
-          minSpacing: 8,
-          margin: 8
+          exact: true,
+          margin: 6
         });
-      }
-    }
-    if (room.defId === 'faculty_quarters' && beds.length === 0) {
-      const cap = (ROOM_DEFINITIONS.faculty_quarters?.capacity?.facultyBeds ?? 2) + Math.max(0, room.level - 1);
-      for (const bx of spreadRowX(cap, box.left, box.width, 14)) {
-        pushAnchor(beds, all, occ, room, 'bed', bx, 0, box, { minSpacing: 10 });
       }
     }
     const wdItems = items
@@ -303,74 +361,119 @@ export function buildRoomAnchors(room: PlacedRoom, groundY: number): RoomAnchorS
     for (const it of wdItems) {
       pushAnchor(writingDesks, all, occ, room, 'writing_desk', itemWorldX(it), it.floor, box, {
         furnitureId: it.furniture.id,
-        defId: it.furniture.defId
+        defId: it.furniture.defId,
+        exact: true
+      });
+    }
+    const extraSeats = items.filter(
+      it =>
+        isSeatDef(it.furniture.defId) &&
+        it.furniture.defId !== 'writing_desk' &&
+        !bedItems.some(b => b.furniture.id === it.furniture.id)
+    );
+    for (const it of extraSeats) {
+      pushAnchor(seats, all, occ, room, 'seat', itemWorldX(it), it.floor, box, {
+        furnitureId: it.furniture.id,
+        defId: it.furniture.defId,
+        exact: true
       });
     }
   } else if (room.defId === 'infirmary') {
     const cotItems = items.filter(
-      it => it.furniture.slotKind.includes('bed') || it.furniture.defId === 'apothecaries_cot' || it.furniture.defId === 'simple_cot'
+      it => it.furniture.slotKind.includes('bed') || it.furniture.defId === 'infirmary_cot' || it.furniture.defId === 'simple_cot'
     );
     for (const it of cotItems) {
       pushAnchor(cots, all, occ, room, 'cot', itemWorldX(it), it.floor, box, {
         furnitureId: it.furniture.id,
-        defId: it.furniture.defId
-      });
-    }
-    // Ensure at least capacity.beds cots if infirmary is built
-    const targetCots = ROOM_DEFINITIONS.infirmary?.capacity?.beds ?? 3;
-    if (cots.length < targetCots) {
-      for (const cx of spreadRowX(targetCots, box.left, box.width, 14)) {
-        if (cots.length >= targetCots) break;
-        pushAnchor(cots, all, occ, room, 'cot', cx, 0, box);
-      }
-    }
-    pushAnchor(workSpots, all, occ, room, 'work', box.left + box.width * 0.25, 0, box);
-  } else if (room.defId === 'wizard_study') {
-    const orbItem = items.find(it => it.furniture.defId === 'astral_orb' || it.furniture.slotKind === 'required:astral_orb');
-    pushAnchor(orbs, all, occ, room, 'orb', orbItem ? itemWorldX(orbItem) : box.left + box.width * 0.55, 0, box, {
-      furnitureId: orbItem?.furniture.id,
-      defId: orbItem?.furniture.defId,
-      margin: minRoomMargin
-    });
-    for (const wx of spreadRowX(2, box.left, box.width, minRoomMargin)) {
-      pushAnchor(seats, all, occ, room, 'seat', wx, 0, box, { margin: minRoomMargin });
-    }
-  } else if (room.defId === 'common_room' || room.defId === 'faculty_lounge') {
-    const seatCap = ROOM_DEFINITIONS[room.defId]?.capacity?.leisureSeats ?? (room.defId === 'faculty_lounge' ? 6 : 4);
-    for (const it of items) {
-      if (seats.length >= Math.max(seatCap, items.length)) break;
-      pushAnchor(seats, all, occ, room, 'seat', itemWorldX(it), it.floor, box, {
-        furnitureId: it.furniture.id,
-        defId: it.furniture.defId
-      });
-    }
-    const desired = Math.max(seatCap, room.w * 2);
-    if (seats.length < desired) {
-      for (const sx of spreadRowX(desired, box.left, box.width, 12)) {
-        if (seats.length >= desired) break;
-        pushAnchor(seats, all, occ, room, 'seat', sx, 0, box);
-      }
-    }
-  } else {
-    // Work/visit/pen/garden/sanctum/observatory/scriptorium/lab/kitchen/bathhouse/yard/ward/detention/hall
-    const workplaceItems = items.slice(0, 4);
-    for (const it of workplaceItems) {
-      pushAnchor(workSpots, all, occ, room, 'work', itemWorldX(it), it.floor, box, {
-        furnitureId: it.furniture.id,
         defId: it.furniture.defId,
+        exact: true
+      });
+    }
+    const cabinet = items.find(it => it.furniture.defId === 'remedy_cabinet' || it.furniture.defId === 'healing_basin');
+    pushAnchor(
+      workSpots,
+      all,
+      occ,
+      room,
+      'work',
+      cabinet ? besideBulkX(cabinet, box, bulkBoxes) : box.left + box.width * 0.25,
+      cabinet?.floor ?? 0,
+      box
+    );
+  } else if (room.defId === 'wizard_study') {
+    const orbItem = items.find(
+      it => it.furniture.defId === 'orb_stand' || it.furniture.defId === 'astral_orb' || it.furniture.slotKind === 'required:orb_stand'
+    );
+    if (orbItem) {
+      pushAnchor(orbs, all, occ, room, 'orb', itemWorldX(orbItem), orbItem.floor, box, {
+        furnitureId: orbItem.furniture.id,
+        defId: orbItem.furniture.defId,
+        exact: true,
         margin: minRoomMargin
       });
     }
-    const desiredSpots = Math.max(3, Math.min(6, room.w * 2));
-    if (workSpots.length < desiredSpots) {
+    const lecternItem = items.find(it => it.furniture.defId === 'lectern' || it.furniture.slotKind === 'required:lectern');
+    if (lecternItem) {
+      pushAnchor(lecterns, all, occ, room, 'lectern', itemWorldX(lecternItem), lecternItem.floor, box, {
+        furnitureId: lecternItem.furniture.id,
+        defId: lecternItem.furniture.defId,
+        exact: true,
+        margin: minRoomMargin
+      });
+    }
+    for (const sItem of items.filter(it => isSeatDef(it.furniture.defId))) {
+      pushAnchor(seats, all, occ, room, 'seat', itemWorldX(sItem), sItem.floor, box, {
+        furnitureId: sItem.furniture.id,
+        defId: sItem.furniture.defId,
+        exact: true,
+        margin: minRoomMargin
+      });
+    }
+  } else if (room.defId === 'common_room' || room.defId === 'faculty_lounge') {
+    // Only actual seat pieces are seats (never stand/sit on globes, clocks, plants, or hearths)
+    const seatItems = items.filter(it => isSeatDef(it.furniture.defId));
+    for (const it of seatItems) {
+      pushAnchor(seats, all, occ, room, 'seat', itemWorldX(it), it.floor, box, {
+        furnitureId: it.furniture.id,
+        defId: it.furniture.defId,
+        exact: true
+      });
+    }
+  } else {
+    // Work / garden / pen / craft / sanctum / entrance rooms:
+    // Seats from placed seat furniture; work spots beside/in front of active floor stations (never wall/ceiling/decor globes).
+    for (const it of items) {
+      const defId = it.furniture.defId;
+      if (isSeatDef(defId)) {
+        pushAnchor(seats, all, occ, room, 'seat', itemWorldX(it), it.floor, box, {
+          furnitureId: it.furniture.id,
+          defId,
+          exact: true,
+          margin: minRoomMargin
+        });
+      } else if (piecePlane(defId) === 'floor' && pieceKind(defId) === 'bulk' && !NON_INTERACTIVE_PROPS.has(defId)) {
+        const spotX = defId === 'bookshelf' ? besideBulkX(it, box, bulkBoxes) : itemWorldX(it);
+        pushAnchor(workSpots, all, occ, room, 'work', spotX, it.floor, box, {
+          furnitureId: it.furniture.id,
+          defId,
+          margin: minRoomMargin
+        });
+      }
+    }
+    // Grounds plots (and entrance hall fallback): outdoor gardens/yards/hallways still have open walkable spots when unfurnished
+    if (
+      (room.area === 'grounds' || room.defId === 'entrance_hall' || room.defId === 'corridor' || room.defId === 'spiral_stair') &&
+      workSpots.length + seats.length < 3
+    ) {
+      const desiredSpots = room.defId === 'entrance_hall' ? 2 : 3;
       for (const wx of spreadRowX(desiredSpots, box.left, box.width, minRoomMargin)) {
-        if (workSpots.length >= desiredSpots) break;
+        if (workSpots.length + seats.length >= desiredSpots) break;
+        const insideBulk = bulkBoxes.some(b => b.floor === 0 && wx >= b.left && wx <= b.right);
+        if (insideBulk) continue;
         pushAnchor(workSpots, all, occ, room, 'work', wx, 0, box, { margin: minRoomMargin });
       }
     }
-    for (const w of workSpots) {
-      seats.push(w);
-    }
+    for (const w of workSpots) seats.push(w);
   }
 
   return {
@@ -389,6 +492,33 @@ export function buildRoomAnchors(room: PlacedRoom, groundY: number): RoomAnchorS
     all
   };
 }
+
+/** Purely decorative bulk props that no one sits or stands on (globes, statues, plants, clocks). */
+const NON_INTERACTIVE_PROPS = new Set([
+  'orrery_globe',
+  'globe_elsewhere',
+  'potted_fern',
+  'grandfather_clock',
+  'familiar_statue',
+  'garden_gnome',
+  'bird_bath',
+  'scarecrow',
+  'stone_lantern',
+  'windmill_charm',
+  'rune_marker',
+  'fairy_ring',
+  'artifact_plinth',
+  'supply_chest',
+  'footlocker',
+  'wardrobe',
+  'creature_toybox',
+  'fish_bowl',
+  'radiant_lamp',
+  'ward_lantern',
+  'warm_hearthstone',
+  'music_box',
+  'hex_darts'
+]);
 
 function isPenDef(defId: string): boolean {
   return !!ROOM_DEFINITIONS[defId]?.capacity?.creatures;

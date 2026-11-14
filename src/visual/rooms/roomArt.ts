@@ -149,11 +149,22 @@ export function drawRoomInterior(g: Painter, room: PlacedRoom, box: Box, opts: R
   return res;
 }
 
+function furnitureDrawLayer(pt: ReturnType<typeof placedFurniturePoints>[number]): number {
+  const defId = pt.view.furniture.defId;
+  if (defId === 'woven_rug') return 0; // flat floor background under standing furniture
+  if (pt.view.kind === 'wall' || pt.view.kind === 'ceiling') return 1;
+  if (defId === 'wooden_chair' && typeof pt.view.tableId === 'number') {
+    return (pt.view.markIndex ?? 0) < 3 ? 2 : 4; // back row before long_table (3), front row after
+  }
+  return 3;
+}
+
 function placeFurniture(g: Painter, room: PlacedRoom, box: Box, tint: number, gk: string, res: RoomArtResult, cropStage = 3) {
   if (NO_FURNITURE_ROOMS.has(room.defId)) return;
   const view = layoutRoomFurniture(room);
   const ceilingY = box.top + 3;
-  for (const pt of placedFurniturePoints(room, box)) {
+  const points = [...placedFurniturePoints(room, box)].sort((a, b) => furnitureDrawLayer(a) - furnitureDrawLayer(b));
+  for (const pt of points) {
     const it = pt.view;
     const { art, x, y } = pt;
     const damaged = !!it.furniture.damaged;

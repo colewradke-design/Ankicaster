@@ -213,6 +213,8 @@ export interface PlacedRoom {
     glassworksActive?: boolean;
   };
   furniture: PlacedFurniture[];
+  /** Built/acquired furniture for this room waiting to be manually placed on the canvas. */
+  unplacedFurniture?: UnplacedFurniture[];
   /** What the player actually paid when placing this room (refund bounds; GDD 15.4). Mana is always 0. */
   spent?: {
     mana: number;
@@ -286,11 +288,31 @@ export interface FurnitureDefinition {
   };
 }
 
+export type FurniturePlane = 'floor' | 'wall' | 'ceiling';
+
 export interface PlacedFurniture {
   id: number;
   defId: string;
   slotKind: string;
   damaged: boolean;
+  /** Manual placement coordinate in art pixels from room left edge (center X). */
+  x?: number;
+  /** Manual placement floor index (0 = ground floor). */
+  floor?: number;
+  /** Surface plane copied from furniture definition/art on drop. */
+  plane?: FurniturePlane;
+  /** Vertical offset from floor line for wall pieces (negative = above floor line, default -26). */
+  wallY?: number;
+  /** For wooden_chair snapped onto a long_table: the table's PlacedFurniture id and mark 0..5. */
+  tableId?: number;
+  markIndex?: number;
+}
+
+export interface UnplacedFurniture {
+  id: number;
+  defId: string;
+  slotKind: string;
+  damaged?: boolean;
 }
 
 export type HabitatType = 'meadow' | 'tide' | 'sky' | 'gloom' | 'ember' | 'crystal';
@@ -658,6 +680,8 @@ export interface FullGameState {
   staffingVersion?: number;
   /** One-time load migration: rooms already built or started stay in knownPlans. */
   knownPlansVersion?: number;
+  /** One-time load migration: existing placed furniture receives deterministic saved positions. */
+  manualFurnitureVersion?: number;
   /** Guided tutorial. Missing on old saves means already done. */
   tutorial?: TutorialProgress;
   /** Set when a preview debug action touched this save. Real play never sets it. */

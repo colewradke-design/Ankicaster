@@ -176,11 +176,18 @@ test('a Refectory seats two sittings and never feeds fewer people than having no
     const state = rich(createNewAcademy());
     state.characters = Array.from({ length: 15 }, (_, i) => student(200 + i, 1));
     if (tableCount > 0) {
-      const furn: PlacedFurniture[] = [
-        item('long_table', 'required:long_table'),
-        item('hearth', 'required:hearth')
-      ];
-      if (tableCount >= 2) furn.push(item('long_table', 'optional'));
+      const t1 = { ...item('long_table', 'required:long_table'), x: 64, floor: 0, plane: 'floor' as const };
+      const furn: PlacedFurniture[] = [t1, { ...item('hearth', 'required:hearth'), x: 168, floor: 0, plane: 'floor' as const }];
+      for (let m = 0; m < 6; m++) {
+        furn.push({ ...item('wooden_chair', 'optional'), tableId: t1.id, markIndex: m, floor: 0, plane: 'floor' as const });
+      }
+      if (tableCount >= 2) {
+        const t2 = { ...item('long_table', 'optional'), x: 120, floor: 0, plane: 'floor' as const };
+        furn.push(t2);
+        for (let m = 0; m < 6; m++) {
+          furn.push({ ...item('wooden_chair', 'optional'), tableId: t2.id, markIndex: m, floor: 0, plane: 'floor' as const });
+        }
+      }
       place(state, 'refectory', 90, 6, 0, furn, { cleanliness });
     }
     return state;

@@ -170,7 +170,14 @@ export function fixtureState(room: Pick<PlacedRoom, 'defId' | 'furniture'>, role
 }
 
 /** Anchor x (art px from the room's left) of a required role, for dressing drawn as that piece. */
-export function requiredAnchorX(room: Pick<PlacedRoom, 'defId' | 'w' | 'h'>, role: string): number | undefined {
+export function requiredAnchorX(room: Pick<PlacedRoom, 'defId' | 'w' | 'h'> & { furniture?: PlacedRoom['furniture'] }, role: string): number | undefined {
+  if (room.furniture) {
+    const slot = requiredSlotStatus(room as Pick<PlacedRoom, 'defId' | 'furniture'>).find(s => s.role === role && s.filled);
+    if (slot) {
+      const item = room.furniture[slot.furnitureIndex];
+      if (item && typeof item.x === 'number') return item.x;
+    }
+  }
   return getRoomLayout(room.defId, room.w, room.h).required.find(a => a.role === role)?.x;
 }
 
@@ -199,8 +206,17 @@ export function placedFurniturePoints(room: PlacedRoom, box: Box): PlacedFurnitu
   return layoutRoomFurniture(room).items.map(view => {
     const art = getFurnitureArt(view.furniture.defId);
     const fl = floorLineFor(box.floorLineY, view.floor);
+    const isSnappedChair = view.furniture.defId === 'wooden_chair' && typeof view.tableId === 'number';
+    const isBackRow = isSnappedChair && typeof view.markIndex === 'number' && view.markIndex < 3;
     const x = Math.min(box.left + box.width - art.w / 2 - 2, Math.max(box.left + art.w / 2 + 2, box.left + view.x));
-    const y = view.kind === 'floor' ? fl : view.kind === 'wall' ? fl - 26 : ceilingY + (room.h - 1 - view.floor) * CELL_H;
+    const y =
+      view.kind === 'floor'
+        ? isBackRow
+          ? fl - 2
+          : fl
+        : view.kind === 'wall'
+          ? fl + (view.wallY ?? -26)
+          : ceilingY + (room.h - 1 - view.floor) * CELL_H;
     return { view, art, x, y, floorY: fl };
   });
 }

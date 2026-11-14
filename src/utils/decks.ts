@@ -13,6 +13,7 @@ export const STRUCTURE_ROOMS = new Set(['spiral_stair', 'corridor', 'support_pil
 const BASE_STARTER_PATTERNS = [
   'simple_cot',
   'long_table',
+  'wooden_chair',
   'hearth',
   'couch',
   'potted_fern',

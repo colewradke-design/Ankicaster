@@ -51,9 +51,31 @@ export function refectoryTableCount(room: PlacedRoom): number {
   return Math.min(2, count);
 }
 
-/** Total meal chairs in a refectory: 6 chairs per intact long table (0, 6, or 12). */
+/** Total meal chairs in a refectory: undamaged wooden_chair items snapped onto undamaged long_tables (max 6/table, 12 total). */
 export function refectoryChairCount(room: PlacedRoom): number {
-  return 6 * refectoryTableCount(room);
+  if (room.state !== 'built' || isRoomUnfinished(room)) return 0;
+  const validTableIds = new Set(
+    (room.furniture || [])
+      .filter(f => !f.damaged && (f.defId === 'long_table' || f.slotKind === 'required:long_table'))
+      .slice(0, 2)
+      .map(t => t.id)
+  );
+  if (validTableIds.size === 0) return 0;
+
+  const perTableMarks = new Map<number, Set<number>>();
+  let total = 0;
+  for (const f of room.furniture || []) {
+    if (f.damaged || f.defId !== 'wooden_chair') continue;
+    if (typeof f.tableId !== 'number' || typeof f.markIndex !== 'number') continue;
+    if (f.markIndex < 0 || f.markIndex >= 6) continue;
+    if (!validTableIds.has(f.tableId)) continue;
+    const used = perTableMarks.get(f.tableId) ?? new Set<number>();
+    if (used.size >= 6 || used.has(f.markIndex)) continue;
+    used.add(f.markIndex);
+    perTableMarks.set(f.tableId, used);
+    total += 1;
+  }
+  return Math.min(12, total);
 }
 
 /** Intact reading desks in a built library (clamped 0..4). */

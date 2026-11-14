@@ -15,7 +15,7 @@
  */
 
 import { Container, Graphics, Text, TextStyle } from 'pixi.js';
-import { FullGameState, PlacedRoom } from '../../types/ankicaster';
+import { FullGameState, FurniturePlane, PlacedRoom } from '../../types/ankicaster';
 import { ROOM_DEFINITIONS } from '../../data/content';
 import { Camera } from './Camera';
 import { NavGraph } from '../layout/navGraph';
@@ -45,6 +45,19 @@ import { CreatureChoreographer, CreatureVisualAgent } from '../creatures/creatur
 import { drawCreature, drawCreatureArrival, drawCreatureBubble, creatureSize, tamingRingFraction, tamingRequirement } from '../creatures/creatureArt';
 import { drawRiftGateArch, getRiftGateVisualState, RIFT_RETURN_FLARE_MS } from '../rooms/riftGateArt';
 import { CREATURE_DEFINITIONS } from '../../data/content';
+import { drawFurniture, furnitureBox, getFurnitureArt } from '../rooms/furnitureArt';
+import { floorLineFor } from '../layout/roomLayouts';
+import {
+  buildResolvedMap,
+  DEFAULT_WALL_Y,
+  DropTargetInput,
+  FURNITURE_SNAP_GRID,
+  longTableSeatMarks,
+  MEZZANINE_ROOMS,
+  piecePlane,
+  snapFurnitureX,
+  snapWallOffsetY
+} from '../layout/furniturePlacement';
 import {
   AtmosphereState,
   computeAtmosphere
@@ -77,6 +90,20 @@ export interface GhostFootprint {
   castleFloors: number;
   /** Room being moved (its own cells count as free). */
   ignoreRoomId?: number;
+}
+
+export interface FurnitureGhost {
+  roomId: number;
+  furnitureId: number;
+  defId: string;
+  x: number;
+  floor: number;
+  plane: FurniturePlane;
+  wallY?: number;
+  valid: boolean;
+  collidingIds: number[];
+  tableId?: number;
+  markIndex?: number;
 }
 
 export class VisualWorld {
@@ -130,6 +157,7 @@ export class VisualWorld {
   /** Build / Move placement ghost (world space, above rooms). */
   ghostGraphics = new Graphics();
   ghost: GhostFootprint | null = null;
+  furnitureGhost: FurnitureGhost | null = null;
 
   camera: Camera;
   navGraph: NavGraph;
@@ -839,6 +867,7 @@ export class VisualWorld {
 
   /** Show (or clear) the placement ghost. */
   setGhost(ghost: GhostFootprint | null) {
+    if (ghost) this.furnitureGhost = null;
     const same = ghost && this.ghost && ghost.area === this.ghost.area && ghost.x === this.ghost.x &&
       ghost.y === this.ghost.y && ghost.w === this.ghost.w && ghost.h === this.ghost.h &&
       ghost.valid === this.ghost.valid && ghost.plotCount === this.ghost.plotCount;
@@ -847,10 +876,122 @@ export class VisualWorld {
     this.renderGhost();
   }
 
+  /** Show (or clear) the manual furniture placement ghost. */
+  setFurnitureGhost(ghost: FurnitureGhost | null) {
+    if (ghost) this.ghost = null;
+    const prev = this.furnitureGhost;
+    const same =
+      ghost &&
+      prev &&
+      ghost.roomId === prev.roomId &&
+      ghost.furnitureId === prev.furnitureId &&
+      ghost.defId === prev.defId &&
+      ghost.x === prev.x &&
+      ghost.floor === prev.floor &&
+      ghost.plane === prev.plane &&
+      ghost.wallY === prev.wallY &&
+      ghost.valid === prev.valid &&
+      ghost.tableId === prev.tableId &&
+      ghost.markIndex === prev.markIndex &&
+      ghost.collidingIds.length === prev.collidingIds.length &&
+      ghost.collidingIds.every((id, i) => id === prev.collidingIds[i]);
+    if (same || (!ghost && !prev)) return;
+    this.furnitureGhost = ghost;
+    this.renderGhost();
+  }
+
   renderGhost() {
     this.ghostGraphics.clear();
+    if (!this.state) return;
+
+    const fg = this.furnitureGhost;
+    if (fg) {
+      const room = this.state.rooms.find(r => r.id === fg.roomId);
+      if (!room) return;
+      const box = roomToWorldBox(room, this.groundY);
+      const fl = floorLineFor(box.floorLineY, fg.floor);
+      const ceilingY = box.top + 3;
+
+      // 1. Highlight target room & 4-px snap grid ticks
+      this.ghostGraphics.rect(box.left - 1, box.top - 1, box.width + 2, box.height + 2)
+        .stroke({ color: 0xf6e08c, width: 1.5, alpha: 0.9 });
+      if (fg.plane !== 'ceiling') {
+        for (let gx = 4; gx <= box.width - 4; gx += FURNITURE_SNAP_GRID) {
+          this.ghostGraphics.rect(box.left + gx - 0.5, fl - 1.5, 1, 1.5)
+            .fill({ color: 0xf6e08c, alpha: gx % 16 === 0 ? 0.55 : 0.28 });
+        }
+      }
+
+      // 2. If placing/moving a wooden_chair, show the 6 seat marks on every undamaged long_table
+      const resolved = buildResolvedMap(room);
+      if (fg.defId === 'wooden_chair') {
+        for (const t of room.furniture) {
+          if (t.defId !== 'long_table' || t.damaged) continue;
+          const tpos = resolved.get(t.id);
+          if (!tpos || tpos.floor !== fg.floor) continue;
+          const tFl = floorLineFor(box.floorLineY, tpos.floor);
+          const marks = longTableSeatMarks(tpos.x, tpos.floor);
+          for (const m of marks) {
+            const occupied = room.furniture.some(
+              f => f.id !== fg.furnitureId && f.defId === 'wooden_chair' && f.tableId === t.id && f.markIndex === m.markIndex
+            );
+            const active = fg.tableId === t.id && fg.markIndex === m.markIndex;
+            const mx = box.left + m.x;
+            const my = m.row === 'back' ? tFl - 12 : tFl - 3;
+            const col = active ? 0x3ccf6e : occupied ? 0x6b6a75 : 0xf6e08c;
+            this.ghostGraphics.circle(mx, my, active ? 2.5 : 1.8)
+              .fill({ color: col, alpha: occupied ? 0.45 : 0.9 })
+              .stroke({ color: 0x1b1822, width: 0.8 });
+          }
+        }
+      }
+
+      // 3. Outline any existing piece this drop would hit
+      for (const cid of fg.collidingIds) {
+        const cf = room.furniture.find(f => f.id === cid);
+        const cpos = resolved.get(cid);
+        if (!cf || !cpos) continue;
+        const cArt = getFurnitureArt(cf.defId);
+        const cFl = floorLineFor(box.floorLineY, cpos.floor);
+        const cWorldX = box.left + cpos.x;
+        const cWorldY =
+          cpos.plane === 'floor'
+            ? cFl
+            : cpos.plane === 'wall'
+            ? cFl + (cpos.wallY ?? DEFAULT_WALL_Y)
+            : ceilingY;
+        const snappedChair = cf.defId === 'wooden_chair' && typeof cf.tableId === 'number';
+        const cBox = furnitureBox({ w: snappedChair ? 8 : cArt.w, h: cArt.h, anchor: cpos.plane }, cWorldX, cWorldY);
+        this.ghostGraphics.rect(cBox.left - 1, cBox.top - 1, cBox.w + 2, cBox.h + 2)
+          .fill({ color: 0xe0464b, alpha: 0.18 })
+          .stroke({ color: 0xff4757, width: 1.5 });
+      }
+
+      // 4. Sprite under the cursor (full colour if valid; red tint if illegal)
+      const art = getFurnitureArt(fg.defId);
+      const worldX = box.left + fg.x;
+      const worldY =
+        fg.plane === 'floor'
+          ? fl
+          : fg.plane === 'wall'
+          ? fl + (fg.wallY ?? DEFAULT_WALL_Y)
+          : ceilingY;
+      drawFurniture(this.ghostGraphics, fg.defId, worldX, worldY, {});
+      const spriteW = fg.defId === 'wooden_chair' && fg.tableId != null ? 8 : art.w;
+      const sb = furnitureBox({ w: spriteW, h: art.h, anchor: fg.plane }, worldX, worldY);
+      if (fg.valid) {
+        this.ghostGraphics.rect(sb.left - 0.5, sb.top - 0.5, sb.w + 1, sb.h + 1)
+          .stroke({ color: 0x3ccf6e, width: 1.2, alpha: 0.9 });
+      } else {
+        this.ghostGraphics.rect(sb.left, sb.top, sb.w, sb.h)
+          .fill({ color: 0xe0464b, alpha: 0.48 })
+          .stroke({ color: 0xff4757, width: 1.5 });
+      }
+      return;
+    }
+
     const ghost = this.ghost;
-    if (!ghost || !this.state) return;
+    if (!ghost) return;
     // Faint blueprint outline of free cells for the area being placed
     const cells: Array<{ left: number; top: number; width: number; height: number }> = [];
     if (ghost.area === 'castle') {
@@ -895,6 +1036,57 @@ export class VisualWorld {
     if (p.x < leftEnd + (rightStart - leftEnd) / 2) plot = Math.min(p.x, leftEnd - 1) / CELL_W;
     else plot = 9 + Math.max(0, p.x - rightStart) / CELL_W;
     return { x: Math.round(plot - w / 2), y: 0 };
+  }
+
+  /** Convert screen pointer inside the canvas to a snapped furniture drop target inside `roomId`. */
+  furnitureTargetAt(screenX: number, screenY: number, roomId: number, defId: string): DropTargetInput | null {
+    const room = this.state?.rooms.find(r => r.id === roomId);
+    if (!room) return null;
+    const p = this.screenToWorld(screenX, screenY);
+    const box = roomToWorldBox(room, this.groundY);
+    const plane = piecePlane(defId);
+    const rawX = p.x - box.left;
+    const x = snapFurnitureX(rawX);
+
+    let floor = 0;
+    if (plane === 'ceiling') {
+      floor = Math.max(0, room.h - 1);
+    } else if (plane === 'wall' || MEZZANINE_ROOMS.has(room.defId)) {
+      const rawFloor = Math.floor((box.floorLineY - p.y) / CELL_H);
+      floor = Math.max(0, Math.min(room.h - 1, rawFloor));
+    }
+
+    const fl = floorLineFor(box.floorLineY, floor);
+    const wallY =
+      plane === 'wall'
+        ? snapWallOffsetY(p.y - fl)
+        : defId === 'wooden_chair'
+        ? Math.round(p.y - fl)
+        : undefined;
+
+    return { x, floor, wallY };
+  }
+
+  /** Pan camera onto a specific room by id if it sits off screen. */
+  ensureRoomIdVisible(roomId: number): boolean {
+    if (this.camera.viewportWidth < 20 || this.camera.viewportHeight < 20) return false;
+    const room = this.state?.rooms.find(r => r.id === roomId);
+    if (!room) return false;
+    const box = roomToWorldBox(room, this.groundY);
+    const z = this.camera.zoom;
+    const ox = this.camera.viewportWidth / 2 - this.camera.x * z;
+    const oy = this.camera.viewportHeight / 2 - this.camera.y * z;
+    const left = ox + box.left * z;
+    const top = oy + box.top * z;
+    const width = box.width * z;
+    const height = box.height * z;
+    const pad = 32;
+    const vw = this.camera.viewportWidth;
+    const vh = this.camera.viewportHeight;
+    if (left < pad || top < pad || left + width > vw - pad || top + height > vh - pad) {
+      this.camera.centerOn(box.left + box.width / 2, box.top + box.height / 2);
+    }
+    return true;
   }
 
   renderOverlays() {

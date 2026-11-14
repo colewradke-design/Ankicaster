@@ -158,10 +158,22 @@ test('hunger settles near 84 when seated and stays above 25 when standing', () =
     s.bellIndex = 4;
     s.characters = Array.from({ length: 15 }, (_, i) => student(100 + i));
     if (withRef) {
+      const t1 = { ...item('long_table', 'required:long_table'), x: 64, floor: 0, plane: 'floor' as const };
+      const t2 = { ...item('long_table', 'optional'), x: 120, floor: 0, plane: 'floor' as const };
+      const refFurn: PlacedFurniture[] = [
+        t1,
+        t2,
+        { ...item('hearth', 'required:hearth'), x: 168, floor: 0, plane: 'floor' as const }
+      ];
+      for (const tbl of [t1, t2]) {
+        for (let m = 0; m < 6; m++) {
+          refFurn.push({ ...item('wooden_chair', 'optional'), tableId: tbl.id, markIndex: m, floor: 0, plane: 'floor' as const });
+        }
+      }
       s.rooms.push({
         id: 90, defId: 'refectory', x: 6, y: 0, w: 3, h: 1, area: 'castle', level: 1, state: 'built',
         buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {},
-        furniture: [item('long_table', 'required:long_table'), item('long_table', 'optional'), item('hearth', 'required:hearth')]
+        furniture: refFurn
       });
     }
     let worst = 100;

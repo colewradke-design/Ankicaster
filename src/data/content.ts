@@ -1037,6 +1037,28 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
     rooms: ['refectory'],
     unlock: { type: 'std' }
   },
+  wooden_chair: {
+    id: 'wooden_chair',
+    name: 'Wooden Chair',
+    deck: 'foundation',
+    role: 'optional',
+    targetRole: 'seat',
+    slots: 1,
+    cost: { mana: 15, timber: 6 },
+    stats: { comfort: 1 },
+    rooms: [
+      'refectory',
+      'dormitory',
+      'grand_dormitory',
+      'faculty_quarters',
+      'common_room',
+      'library',
+      'faculty_lounge',
+      'entrance_hall',
+      'wizard_study'
+    ],
+    unlock: { type: 'std' }
+  },
   hearth: {
     id: 'hearth',
     name: 'Hearth',

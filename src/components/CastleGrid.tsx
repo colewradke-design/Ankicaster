@@ -11,6 +11,7 @@
 import React from 'react';
 import { PlacedRoom, FullGameState, CreatureInstance } from '../types/ankicaster';
 import { AcademyCanvas, PlacementMode } from '../visual/AcademyCanvas';
+import type { DropTargetInput } from '../visual/layout/furniturePlacement';
 
 interface CastleGridProps {
   state: FullGameState;
@@ -21,6 +22,8 @@ interface CastleGridProps {
   onResolveHazard?: (roomId: number, method: 'warder' | 'spell') => void;
   placement?: PlacementMode | null;
   onPlacementConfirm?: (x: number, y: number) => void;
+  onFurnitureDropConfirm?: (target: DropTargetInput) => void;
+  onPlacementReject?: (reason: string) => void;
   onPlacementCancel?: () => void;
   onPlacementAuto?: () => void;
   focusRoomDefId?: string | null;

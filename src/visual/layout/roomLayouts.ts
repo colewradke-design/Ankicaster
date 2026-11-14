@@ -137,6 +137,9 @@ export interface PlacedFurnitureView {
   x: number; // art px from room left
   floor: number;
   kind: FurnitureAnchor;
+  wallY?: number;
+  tableId?: number;
+  markIndex?: number;
 }
 
 export interface RoomFurnitureView {
@@ -145,8 +148,8 @@ export interface RoomFurnitureView {
   missing: LayoutAnchor[];
 }
 
-/** Assign each installed item to an anchor (stable: depends only on the room's furniture list). */
-export function layoutRoomFurniture(room: PlacedRoom): RoomFurnitureView {
+/** Legacy grid layout generator (used for one-time save migration and un-migrated test fixtures). */
+export function legacyLayoutRoomFurniture(room: PlacedRoom): RoomFurnitureView {
   const layout = getRoomLayout(room.defId, room.w, room.h);
   const items: PlacedFurnitureView[] = [];
   const missing: LayoutAnchor[] = [];
@@ -180,6 +183,66 @@ export function layoutRoomFurniture(room: PlacedRoom): RoomFurnitureView {
     const lap = Math.floor(k / list.length);
     items.push({ furniture: f, x: a.x + lap * 5, floor: a.floor, kind });
   });
+  return { items, missing };
+}
+
+const MARK_X_OFFSETS = [-10, 0, 10] as const;
+
+/**
+ * Resolve each placed piece in the room. Pieces with saved manual coordinates use their exact
+ * saved (x, floor, plane, wallY, tableId, markIndex); un-migrated legacy pieces fall back to the
+ * legacy grid layout so old saves/fixtures don't jump.
+ */
+export function layoutRoomFurniture(room: PlacedRoom): RoomFurnitureView {
+  if (NO_FURNITURE_ROOMS.has(room.defId)) return { items: [], missing: [] };
+  const legacy = room.furniture.some(f => typeof f.x !== 'number') ? legacyLayoutRoomFurniture(room) : null;
+  const legacyById = legacy ? new Map(legacy.items.map(v => [v.furniture.id, v])) : null;
+  const layout = getRoomLayout(room.defId, room.w, room.h);
+  const status = requiredSlotStatus(room);
+  const missing: LayoutAnchor[] = legacy
+    ? legacy.missing
+    : layout.required.filter((_, k) => (status[k]?.furnitureIndex ?? -1) < 0);
+
+  const items: PlacedFurnitureView[] = [];
+  const tablePosById = new Map<number, { x: number; floor: number }>();
+
+  // First resolve all non-snapped items (including long_table)
+  for (const f of room.furniture) {
+    const art = getFurnitureArt(f.defId);
+    const hit = legacyById?.get(f.id);
+    const x = typeof f.x === 'number' && Number.isFinite(f.x) ? f.x : hit?.x ?? Math.round((room.w * CELL_W) / 2);
+    const floor = typeof f.floor === 'number' && Number.isFinite(f.floor) ? f.floor : hit?.floor ?? 0;
+    const kind = f.plane ?? hit?.kind ?? art.anchor;
+    if (f.defId === 'long_table') {
+      tablePosById.set(f.id, { x, floor });
+    }
+    items.push({
+      furniture: f,
+      x,
+      floor,
+      kind,
+      wallY: kind === 'wall' ? f.wallY : undefined,
+      tableId: f.tableId,
+      markIndex: f.markIndex
+    });
+  }
+
+  // Sync any snapped wooden_chair items directly onto their table's seat mark
+  for (const it of items) {
+    if (
+      it.furniture.defId === 'wooden_chair' &&
+      typeof it.tableId === 'number' &&
+      typeof it.markIndex === 'number'
+    ) {
+      const tbl = tablePosById.get(it.tableId);
+      if (tbl) {
+        const col = ((it.markIndex % 3) + 3) % 3;
+        it.x = tbl.x + MARK_X_OFFSETS[col];
+        it.floor = tbl.floor;
+      }
+    }
+  }
+
   return { items, missing };
 }
 

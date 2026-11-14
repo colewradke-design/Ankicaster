@@ -14,7 +14,7 @@
  */
 
 import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS } from '../data/content';
-import type { FullGameState, PlacedFurniture, PlacedRoom } from '../types/ankicaster';
+import type { FullGameState, FurnitureDefinition, PlacedFurniture, PlacedRoom } from '../types/ankicaster';
 
 export interface RequiredSlot {
   role: string;
@@ -135,7 +135,10 @@ export function unaffordable(state: FullGameState, c: Cost): string | undefined 
 /** Every furniture id in the save (for unique ids). */
 export function allFurnitureIds(rooms: PlacedRoom[]): Set<number> {
   const ids = new Set<number>();
-  for (const r of rooms) for (const f of r.furniture || []) ids.add(f.id);
+  for (const r of rooms) {
+    for (const f of r.furniture || []) ids.add(f.id);
+    for (const u of r.unplacedFurniture || []) ids.add(u.id);
+  }
   return ids;
 }
 
@@ -166,4 +169,85 @@ export function fillRequiredFixtures(room: PlacedRoom, ids: Set<number>): number
     });
   }
   return missing.length;
+}
+
+/** Whether a furniture definition can legally be placed in `roomDefId`. */
+export function isFurnitureCompatibleWithRoom(fDef: FurnitureDefinition, roomDefId: string): boolean {
+  if (fDef.rooms === 'any') return true;
+  if (Array.isArray(fDef.rooms) && fDef.rooms.includes(roomDefId)) return true;
+  if (fDef.role === 'bed' && roomDefId.includes('dorm')) return true;
+  return false;
+}
+
+/** Number of long_table items (placed or awaiting placement) in a refectory, capped at 2. */
+export function refectoryTableTotal(room: Pick<PlacedRoom, 'defId' | 'furniture' | 'unplacedFurniture'>): number {
+  if (room.defId !== 'refectory') return 0;
+  const count = [...(room.furniture || []), ...(room.unplacedFurniture || [])]
+    .filter(f => f.defId === 'long_table' || f.slotKind === 'required:long_table')
+    .length;
+  return Math.min(2, count);
+}
+
+/**
+ * Optional slots currently consumed (both placed and awaiting-placement).
+ * In a refectory, up to 6 wooden_chair items per long_table (max 12 across 2 tables)
+ * are exempt from optional slot limits.
+ */
+export function optionalSlotsUsed(room: Pick<PlacedRoom, 'defId' | 'furniture' | 'unplacedFurniture'>): number {
+  const allOptional = [...(room.furniture || []), ...(room.unplacedFurniture || [])]
+    .filter(f => !f.slotKind.startsWith('required:'));
+  let freeChairsLeft = room.defId === 'refectory' ? 6 * refectoryTableTotal(room) : 0;
+  let used = 0;
+  for (const f of allOptional) {
+    if (f.defId === 'wooden_chair' && freeChairsLeft > 0) {
+      freeChairsLeft -= 1;
+      continue;
+    }
+    used += FURNITURE_DEFINITIONS[f.defId]?.slots || 1;
+  }
+  return used;
+}
+
+/** Max allowed copies of `furnitureDefId` in `room`. */
+export function maxSameFurnitureInRoom(
+  room: Pick<PlacedRoom, 'defId' | 'furniture' | 'unplacedFurniture'>,
+  furnitureDefId: string
+): number {
+  if (furnitureDefId === 'student_desk' || furnitureDefId === 'reading_desk') return 4;
+  if (furnitureDefId === 'wooden_chair' && room.defId === 'refectory') {
+    return Math.max(2, 6 * refectoryTableTotal(room));
+  }
+  return 2;
+}
+
+/** Effective optional slots added if buying/acquiring `furnitureDefId` in `room`. */
+export function optionalSlotsCostForNewPiece(
+  room: Pick<PlacedRoom, 'defId' | 'furniture' | 'unplacedFurniture'>,
+  furnitureDefId: string
+): number {
+  if (furnitureDefId === 'wooden_chair' && room.defId === 'refectory') {
+    const existingChairs = [...(room.furniture || []), ...(room.unplacedFurniture || [])]
+      .filter(f => !f.slotKind.startsWith('required:') && f.defId === 'wooden_chair')
+      .length;
+    if (existingChairs < 6 * refectoryTableTotal(room)) return 0;
+  }
+  return FURNITURE_DEFINITIONS[furnitureDefId]?.slots || 1;
+}
+
+/** Map unfilled required slot index -> queued unplaced furniture id waiting to be dropped. */
+export function queuedRequiredBySlot(
+  room: Pick<PlacedRoom, 'defId' | 'furniture' | 'unplacedFurniture'>
+): Map<number, number> {
+  const unplaced = room.unplacedFurniture || [];
+  const usedUnplacedIds = new Set<number>();
+  const out = new Map<number, number>();
+  for (const s of requiredSlotStatus(room)) {
+    if (s.filled) continue;
+    const hit = unplaced.find(u => !usedUnplacedIds.has(u.id) && u.slotKind === `required:${s.role}`);
+    if (hit) {
+      usedUnplacedIds.add(hit.id);
+      out.set(s.index, hit.id);
+    }
+  }
+  return out;
 }

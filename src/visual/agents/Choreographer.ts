@@ -667,7 +667,7 @@ export class Choreographer {
     }
 
     // 4. Follow path along nav graph
-    if (agent.path.length > 0 && agent.pathIndex < agent.path.length) {
+    if (deltaMs > 0 && agent.path.length > 0 && agent.pathIndex < agent.path.length) {
       const targetNode = agent.path[agent.pathIndex];
       const dx = targetNode.x - agent.x;
       const dy = targetNode.y - agent.y;
@@ -945,18 +945,20 @@ export class Choreographer {
           const slot = info?.periods[activePeriod];
           if (info && slot && slot.studentIds.length > 0 && this.isRoomReachable(info.roomId)) {
             const set = this.anchorsFor(info.roomId, state);
-            const lectern = set?.lecterns[0] ?? set?.all[0];
-            return {
-              blockKey: `class:p${activePeriod}:room${info.roomId}`,
-              mandatory: true,
-              activity: 'class',
-              roomId: info.roomId,
-              anchor: lectern,
-              anim: 'teach',
-              wizardErrand: 'teach',
-              canKeepOnTimer: true,
-              allowTalk: false
-            };
+            const lectern = set?.lecterns[0];
+            if (lectern) {
+              return {
+                blockKey: `class:p${activePeriod}:room${info.roomId}`,
+                mandatory: true,
+                activity: 'class',
+                roomId: info.roomId,
+                anchor: lectern,
+                anim: 'teach',
+                wizardErrand: 'teach',
+                canKeepOnTimer: true,
+                allowTalk: false
+              };
+            }
           }
         }
       } else if (agent.character) {
@@ -965,7 +967,8 @@ export class Choreographer {
           const stuAssign = schedule.studentAssignments.get(char.id);
           if (stuAssign && stuAssign.period === activePeriod && this.isRoomReachable(stuAssign.classRoomId)) {
             const set = this.anchorsFor(stuAssign.classRoomId, state);
-            const desk = set?.studentDesks[stuAssign.deskIndex] ?? set?.studentDesks[0] ?? set?.all[0];
+            const desk =
+              set?.studentDesks[stuAssign.deskIndex] ?? set?.studentDesks.find(d => !takenAnchors.has(d.id));
             if (desk) {
               return {
                 blockKey: `class:p${activePeriod}:room${stuAssign.classRoomId}`,
@@ -986,17 +989,19 @@ export class Choreographer {
             const slot = info?.periods[activePeriod];
             if (slot && slot.studentIds.length > 0) {
               const set = this.anchorsFor(tAssign.classRoomId, state);
-              const lectern = set?.lecterns[0] ?? set?.all[0];
-              return {
-                blockKey: `class:p${activePeriod}:room${tAssign.classRoomId}`,
-                mandatory: true,
-                activity: 'class',
-                roomId: tAssign.classRoomId,
-                anchor: lectern,
-                anim: 'teach',
-                canKeepOnTimer: true,
-                allowTalk: false
-              };
+              const lectern = set?.lecterns[0];
+              if (lectern) {
+                return {
+                  blockKey: `class:p${activePeriod}:room${tAssign.classRoomId}`,
+                  mandatory: true,
+                  activity: 'class',
+                  roomId: tAssign.classRoomId,
+                  anchor: lectern,
+                  anim: 'teach',
+                  canKeepOnTimer: true,
+                  allowTalk: false
+                };
+              }
             }
           }
         }
@@ -1020,7 +1025,7 @@ export class Choreographer {
         if (inSitting) {
           if (sit.sitting !== 'packed' && sit.roomId !== undefined && sit.chairIndex !== undefined && this.isRoomReachable(sit.roomId)) {
             const set = this.anchorsFor(sit.roomId, state);
-            const chair = set?.chairs[sit.chairIndex] ?? set?.chairs.find(c => !takenAnchors.has(c.id)) ?? set?.all[0];
+            const chair = set?.chairs[sit.chairIndex] ?? set?.chairs.find(c => !takenAnchors.has(c.id));
             if (chair) {
               return {
                 blockKey: `meal:${mealStart}:${sit.sitting}:r${sit.roomId}`,

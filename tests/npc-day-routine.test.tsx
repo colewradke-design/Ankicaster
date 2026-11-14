@@ -494,14 +494,28 @@ test('Section 6 & 7: personal timers stagger & hold during talk, reduceMotion de
 test('Section 8: Meals use two sittings by chair count with packed fallback; Night uses own beds & Early Riser/Night Owl', () => {
   const s = setupBasicAcademy();
   // Connect cleanly: dorm x=1..3 | EH x=3..5 | Study x=5..6 | Ref x=6..9 | Lib x=9..11 | Common x=11..13
-  const ref = makeRoom(60, 'refectory', 6, 0, 'castle');
+  const refTbl = { ...furn('long_table', 'required:long_table'), x: 64, floor: 0, plane: 'floor' as const };
+  const refHearth = { ...furn('hearth', 'required:hearth'), x: 160, floor: 0, plane: 'floor' as const };
+  const refChairs = Array.from({ length: 6 }, (_, m) => ({
+    ...furn('wooden_chair', 'optional'),
+    tableId: refTbl.id,
+    markIndex: m,
+    floor: 0,
+    plane: 'floor' as const
+  }));
+  const ref = makeRoom(60, 'refectory', 6, 0, 'castle', [refTbl, refHearth, ...refChairs]);
   const dorm = makeRoom(61, 'dormitory', 1, 0, 'castle', [
     furn('bunk_bed', 'required:bed'),
     furn('bunk_bed', 'optional'),
     furn('writing_desk', 'optional')
   ]);
   const lib = makeRoom(62, 'library', 9, 0, 'castle');
-  const common = makeRoom(63, 'common_room', 11, 0, 'castle');
+  const common = makeRoom(63, 'common_room', 11, 0, 'castle', [
+    { ...furn('couch', 'required:couch_or_hearth'), x: 32, floor: 0, plane: 'floor' as const },
+    { ...furn('armchair', 'optional'), x: 60, floor: 0, plane: 'floor' as const },
+    { ...furn('wooden_chair', 'optional'), x: 84, floor: 0, plane: 'floor' as const },
+    { ...furn('wooden_chair', 'optional'), x: 104, floor: 0, plane: 'floor' as const }
+  ]);
   s.rooms.push(ref, dorm, lib, common);
 
   for (let i = 1; i <= 14; i++) {

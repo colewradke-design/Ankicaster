@@ -35,6 +35,7 @@ import { ScreenId, SCREEN_DEFS, getAcademyMenuScreens } from './ui/screens';
 import { CastleGrid } from './components/CastleGrid';
 import { DemolishConfirm } from './components/DemolishConfirm';
 import type { PlacementMode } from './visual/AcademyCanvas';
+import type { DropTargetInput } from './visual/layout/furniturePlacement';
 import { CreatureDebugPanel } from './debug/CreatureDebugPanel';
 import { normalizeAppearance } from './utils/appearance';
 import { wizardOrbQuote } from './utils/formulas';
@@ -640,10 +641,35 @@ export default function App() {
         playChime('review');
         setPlacement(null);
       }
-    } else {
+    } else if (placement.kind === 'move') {
       const res = AnkicasterEngine.moveRoom(state, placement.roomId, x, y);
       if (reportPlacement(res, 'Room moved.')) {
         setState(res.state);
+        playChime('review');
+        setPlacement(null);
+      }
+    }
+  };
+
+  const handleFurnitureDropConfirm = (target: DropTargetInput) => {
+    if (!placement) return;
+    if (placement.kind === 'furniture_place') {
+      const res = AnkicasterEngine.dropRoomFurniture(state, placement.roomId, placement.furnitureId, target);
+      if (!res.success) {
+        addToast(res.error || 'Cannot place furniture there.', 'warning');
+      } else {
+        setState(res.state);
+        addToast(res.state.notices[res.state.notices.length - 1]?.text || 'Furniture placed!', 'success');
+        playChime('review');
+        setPlacement(null);
+      }
+    } else if (placement.kind === 'furniture_move') {
+      const res = AnkicasterEngine.movePlacedFurniture(state, placement.roomId, placement.furnitureId, target);
+      if (!res.success) {
+        addToast(res.error || 'Cannot move furniture there.', 'warning');
+      } else {
+        setState(res.state);
+        addToast('Furniture moved.', 'success');
         playChime('review');
         setPlacement(null);
       }
@@ -951,6 +977,8 @@ export default function App() {
           onResolveHazard={handleResolveHazard}
           placement={placement}
           onPlacementConfirm={handlePlacementConfirm}
+          onFurnitureDropConfirm={handleFurnitureDropConfirm}
+          onPlacementReject={reason => addToast(reason, 'warning')}
           onPlacementCancel={() => setPlacement(null)}
           onPlacementAuto={placement?.kind === 'build' ? () => handleAutoPlaceRoom(placement.defId) : undefined}
           focusRoomDefId={view?.focusRoom ? 'wizard_study' : null}
@@ -1018,21 +1046,37 @@ export default function App() {
             }
           }}
           onAddFurniture={(roomId, fDefId) => {
-            const res = AnkicasterEngine.addFurniture(state, roomId, fDefId);
-            if (!res.success) addToast(res.error || 'Cannot install', 'warning');
+            const res = AnkicasterEngine.acquireFurniture(state, roomId, fDefId);
+            if (!res.success || res.furnitureId === undefined) addToast(res.error || 'Cannot install', 'warning');
             else {
               setState(res.state);
-              addToast(`Installed ${FURNITURE_DEFINITIONS[fDefId]?.name || fDefId}!`, 'success');
-              playChime('review');
+              setSelectedRoom(null);
+              setPlacement({ kind: 'furniture_place', roomId, furnitureId: res.furnitureId });
             }
           }}
           onInstallRequired={(roomId, slotIndex) => {
-            const res = AnkicasterEngine.installRequiredFixture(state, roomId, slotIndex);
-            if (!res.success) addToast(res.error || 'Cannot install', 'warning');
+            const res = AnkicasterEngine.acquireRequiredFixture(state, roomId, slotIndex);
+            if (!res.success || res.furnitureId === undefined) addToast(res.error || 'Cannot install', 'warning');
             else {
               setState(res.state);
-              addToast(res.state.notices[res.state.notices.length - 1]?.text || 'Installed!', 'success');
-              playChime('review');
+              setSelectedRoom(null);
+              setPlacement({ kind: 'furniture_place', roomId, furnitureId: res.furnitureId });
+            }
+          }}
+          onPlaceFurniture={(roomId, furnitureId) => {
+            setSelectedRoom(null);
+            setPlacement({ kind: 'furniture_place', roomId, furnitureId });
+          }}
+          onMoveFurniture={(roomId, furnitureId) => {
+            setSelectedRoom(null);
+            setPlacement({ kind: 'furniture_move', roomId, furnitureId });
+          }}
+          onCancelUnplacedFurniture={(roomId, furnitureId) => {
+            const res = AnkicasterEngine.cancelUnplacedFurniture(state, roomId, furnitureId);
+            if (!res.success) addToast(res.error || 'Cannot return furniture.', 'warning');
+            else {
+              setState(res.state);
+              addToast('Returned unplaced piece to storage.', 'info');
             }
           }}
           onMove={roomId => {
