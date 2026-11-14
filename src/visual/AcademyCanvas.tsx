@@ -16,7 +16,7 @@ import { FullGameState, PlacedRoom, CreatureInstance } from '../types/ankicaster
 import { VisualWorld } from './world/VisualWorld';
 import { castleCellToWorldX } from './layout/gridToWorld';
 import { ZoomIn, ZoomOut, Maximize2, Home, Move, Hammer, X as XIcon, Wand2 } from 'lucide-react';
-import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS } from '../data/content';
+import { ROOM_DEFINITIONS, roomDisplayName, FURNITURE_DEFINITIONS } from '../data/content';
 import { AnkicasterEngine } from '../utils/engine';
 import { validatePlacement, roomLimitStatus, getGridSize, findAutoPlacement, PlacementCheck } from '../utils/placement';
 import { reviewsToGoText } from '../utils/construction';
@@ -101,10 +101,10 @@ function placementFootprint(state: FullGameState, mode: PlacementMode) {
   if (mode.kind === 'furniture_place' || mode.kind === 'furniture_move') return null;
   if (mode.kind === 'move') {
     const r = state.rooms.find(rr => rr.id === mode.roomId);
-    return r ? { area: r.area, w: r.w, h: r.h, defId: r.defId } : null;
+    return r ? { area: r.area, w: r.w, h: r.h, defId: r.defId, level: r.level } : null;
   }
   const def = ROOM_DEFINITIONS[mode.defId];
-  return def ? { area: def.area, w: def.size[0], h: def.size[1], defId: def.id } : null;
+  return def ? { area: def.area, w: def.size[0], h: def.size[1], defId: def.id, level: 1 } : null;
 }
 
 function placementTargetFurniture(state: FullGameState, mode: PlacementMode | null | undefined) {
@@ -667,7 +667,6 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
       {/* Placement banner: what is being placed, whether the spot is valid, how to confirm/cancel */}
       {placement && (placement.kind === 'furniture_place' || placement.kind === 'furniture_move') && (() => {
         const info = placementTargetFurniture(state, placement);
-        const rDef = info ? ROOM_DEFINITIONS[info.room.defId] : undefined;
         const fDef = info ? FURNITURE_DEFINITIONS[info.piece.defId] : undefined;
         const plane = info ? piecePlane(info.piece.defId) : 'floor';
         const planeLabel = plane === 'floor' ? 'Floor' : plane === 'wall' ? 'Wall' : 'Ceiling';
@@ -689,7 +688,7 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
               <div className="font-bold text-amber-200">
                 {placement.kind === 'furniture_move' ? 'Moving' : 'Placing'} {itemName}
                 <span className="text-slate-400 font-normal">
-                  {' '}· {rDef?.name || info?.room.defId || 'Room'} · {planeLabel}
+                  {' '}· {info ? roomDisplayName(info.room) : 'Room'} · {planeLabel}
                   {info && info.room.h > 1 && furnCandidate ? ` · Floor ${furnCandidate.floor + 1}` : ''}
                 </span>
               </div>
@@ -723,7 +722,7 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
             {placement.kind === 'move' ? <Move className="w-4 h-4 text-amber-300 shrink-0" /> : <Hammer className="w-4 h-4 text-amber-300 shrink-0" />}
             <div className="min-w-0">
               <div className="font-bold text-amber-200">
-                {placement.kind === 'move' ? 'Moving' : 'Placing'} {def?.name}
+                {placement.kind === 'move' ? 'Moving' : 'Placing'} {fp ? roomDisplayName(fp.defId, fp.level) : def?.name}
                 {placement.kind === 'build' && def ? <span className="text-slate-400 font-normal"> · {formatMaterialCost(def.cost)} · {def.size.join('×')}</span> : null}
               </div>
               <div className={ok ? (candidate?.check.warnings.length ? 'text-amber-300' : 'text-emerald-300') : 'text-rose-300'} data-testid="placement-status">

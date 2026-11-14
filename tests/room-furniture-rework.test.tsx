@@ -3,17 +3,19 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createInitialGameState } from '../src/data/initialState.ts';
-import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS } from '../src/data/content.ts';
-import type { Character, FullGameState, PlacedFurniture, PlacedRoom } from '../src/types/ankicaster.ts';
+import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS, roomDisplayName } from '../src/data/content.ts';
+import type { Character, CreatureInstance, FullGameState, PlacedFurniture, PlacedRoom } from '../src/types/ankicaster.ts';
 import { AnkicasterEngine } from '../src/utils/engine.ts';
 import { furnitureEffectForRoom, roomFurnitureEffects } from '../src/utils/formulas.ts';
 import { isFurnitureCompatibleWithRoom, maxOptionalSlots } from '../src/utils/requiredFurniture.ts';
 import { computeReachability } from '../src/utils/reachability.ts';
 import { RoomWindow } from '../src/components/RoomWindow.tsx';
+import { DemolishConfirm } from '../src/components/DemolishConfirm.tsx';
 import { NavGraph } from '../src/visual/layout/navGraph.ts';
 import { Choreographer } from '../src/visual/agents/Choreographer.ts';
-import { getGroundY, roomToWorldBox } from '../src/visual/layout/gridToWorld.ts';
-import { pieceKind, piecePlane, validateFurnitureDrop } from '../src/visual/layout/furniturePlacement.ts';
+import { CreatureChoreographer } from '../src/visual/creatures/creatureChoreographer.ts';
+import { getGroundY, getTotalWorldWidth, roomToWorldBox } from '../src/visual/layout/gridToWorld.ts';
+import { pieceKind, piecePlane, roomLabelKeepOutRect, validateFurnitureDrop } from '../src/visual/layout/furniturePlacement.ts';
 import { drawFurniture } from '../src/visual/rooms/furnitureArt.ts';
 import { drawRoomInterior } from '../src/visual/rooms/roomArt.ts';
 import { MOVE_SPEED } from '../src/visual/agents/doll.ts';
@@ -596,3 +598,184 @@ test('spiral_stair Lv 2 is faster Magical Elevator and Lv 3 is unstacked Telepor
   assert.notEqual(opsByLevel[1], opsByLevel[2], 'Lv 2 Magical Elevator differs visually from Lv 3 Teleportation Portal');
   assert.notEqual(opsByLevel[0], opsByLevel[2], 'Lv 1 Stairs differ visually from Lv 3 Teleportation Portal');
 });
+
+test('student_desk visually flips to face teachers_lectern and updates when lectern moves', () => {
+  // 1. Standalone desk sprite is asymmetric under flipX (chair flips side to face R vs L)
+  const rightFacing = makeRecorder();
+  drawFurniture(rightFacing.p, 'student_desk', 40, 100, { flipX: false });
+  const leftFacing = makeRecorder();
+  drawFurniture(leftFacing.p, 'student_desk', 40, 100, { flipX: true });
+  assert.notDeepEqual(rightFacing.ops, leftFacing.ops, 'student_desk flipX mirrors side-profile geometry');
+
+  const groundY = getGroundY(3);
+  const cls = makeRoom(80, 'class_arcane', 1, 0, 1, [
+    { id: 8001, defId: 'teachers_lectern', slotKind: 'required:teachers_lectern', damaged: false, x: 20, floor: 0, plane: 'floor' },
+    { id: 8002, defId: 'orrery_globe', slotKind: 'required:orrery_globe', damaged: false, x: 64, floor: 0, plane: 'floor' },
+    { id: 8003, defId: 'student_desk', slotKind: 'required:student_desk', damaged: false, x: 56, floor: 0, plane: 'floor' }
+  ]);
+  const box = roomToWorldBox(cls, groundY);
+
+  // Extract expected desk draw ops for right of lectern (flipX: true -> faces Left)
+  const expectedLeftRec = makeRecorder();
+  drawFurniture(expectedLeftRec.p, 'student_desk', box.left + 56, box.floorLineY, { flipX: true });
+  const expectedRightRec = makeRecorder();
+  drawFurniture(expectedRightRec.p, 'student_desk', box.left + 56, box.floorLineY, { flipX: false });
+
+  // Classroom with lectern at x=20 and desk at x=56 -> desk must draw left-facing ops
+  const roomLeftLectern = makeRecorder();
+  drawRoomInterior(roomLeftLectern.p, cls, box);
+  const roomLeftStream = roomLeftLectern.ops.join('|');
+  assert.ok(roomLeftStream.includes(expectedLeftRec.ops.join('|')), 'Desk right of lectern faces Left toward lectern');
+  assert.equal(roomLeftStream.includes(expectedRightRec.ops.join('|')), false, 'Desk right of lectern does not face Right');
+
+  // Move lectern to x=108 (to the right of desk at x=56) -> same desk must flip to face Right!
+  const clsMovedLectern: PlacedRoom = {
+    ...cls,
+    furniture: cls.furniture.map(f => (f.id === 8001 ? { ...f, x: 108 } : f))
+  };
+  const roomRightLectern = makeRecorder();
+  drawRoomInterior(roomRightLectern.p, clsMovedLectern, box);
+  const roomRightStream = roomRightLectern.ops.join('|');
+  assert.ok(roomRightStream.includes(expectedRightRec.ops.join('|')), 'After lectern moves right, desk flips to face Right');
+  assert.equal(roomRightStream.includes(expectedLeftRec.ops.join('|')), false, 'After lectern moves right, desk no longer faces Left');
+});
+
+test('freeroaming creatures receive MOVE_SPEED.elevator boost on Lv 2 Magical Elevator and teleport across Lv 3 portals', () => {
+  const groundY = getGroundY(3);
+  const worldW = getTotalWorldWidth(3);
+  const base = createInitialGameState();
+  const makeRoamer = (id: number, defId: string): CreatureInstance => ({
+    id,
+    defId,
+    nickname: defId,
+    status: 'tamed',
+    hungry: false,
+    hatchProgress: 10,
+    tamingProgress: 10,
+    bondLevel: 2,
+    bondProgress: 0,
+    arrivedDay: 1,
+    roomId: 1
+  });
+
+  // 1. Stacked Lv 1 stairs vs Lv 2 Magical Elevator (scurry creature: bramblefox)
+  const eh = makeRoom(1, 'entrance_hall', 2, 0);
+  const stairF0Lv1 = makeRoom(2, 'spiral_stair', 1, 0, 1);
+  const stairF1Lv1 = makeRoom(3, 'spiral_stair', 1, 1, 1);
+  const dormF1 = makeRoom(4, 'dormitory', 2, 1, 1, [
+    { id: 4001, defId: 'simple_cot', slotKind: 'required:bed', damaged: false }
+  ]);
+
+  const roomsLv1 = [eh, stairF0Lv1, stairF1Lv1, dormF1];
+  const roomsLv2 = [eh, { ...stairF0Lv1, level: 2 as const }, { ...stairF1Lv1, level: 2 as const }, dormF1];
+
+  const nav1 = new NavGraph(roomsLv1, groundY);
+  const cc1 = new CreatureChoreographer(nav1, groundY, worldW);
+  const state1: FullGameState = { ...base, rooms: roomsLv1, creatures: [makeRoamer(101, 'bramblefox')] };
+  cc1.syncState(state1);
+  const fox1 = cc1.agents.get(101)!;
+  const f0Node = nav1.nodes.get('room-2-f0')!;
+  const f1Node = nav1.nodes.get('room-3-f1')!;
+  fox1.x = f0Node.x;
+  fox1.y = f0Node.y;
+  fox1.roamPath = [f0Node, f1Node];
+  fox1.roamPathIdx = 1;
+
+  const nav2 = new NavGraph(roomsLv2, groundY);
+  const cc2 = new CreatureChoreographer(nav2, groundY, worldW);
+  const state2: FullGameState = { ...base, rooms: roomsLv2, creatures: [makeRoamer(101, 'bramblefox')] };
+  cc2.syncState(state2);
+  const fox2 = cc2.agents.get(101)!;
+  fox2.x = f0Node.x;
+  fox2.y = f0Node.y;
+  fox2.roamPath = [f0Node, f1Node];
+  fox2.roamPathIdx = 1;
+
+  // Tick 500ms: elevator moves at MOVE_SPEED.elevator (72 px/s -> 36 px), Lv 1 scurry moves 50 px/s -> 25 px
+  for (let i = 0; i < 5; i++) {
+    cc1.tick(100, state1, false);
+    cc2.tick(100, state2, false);
+  }
+  const climbedLv1 = f0Node.y - fox1.y;
+  const climbedLv2 = f0Node.y - fox2.y;
+  assert.ok(climbedLv2 > climbedLv1, `Lv 2 elevator roamer climbed farther (${climbedLv2}px) than Lv 1 stairs (${climbedLv1}px)`);
+  assert.ok(Math.abs(climbedLv2 - MOVE_SPEED.elevator * 0.5) < 0.5, `Elevator roamer matches MOVE_SPEED.elevator (${climbedLv2}px vs ${MOVE_SPEED.elevator * 0.5}px)`);
+
+  // Tick another 400ms (total 900ms > 600ms scurry pause window): Lv 2 elevator completes climb without mid-lift scurry pause
+  for (let i = 0; i < 4; i++) {
+    cc2.tick(100, state2, false);
+  }
+  assert.equal(fox2.roamPath.length, 0, 'Lv 2 elevator roamer finishes ascent cleanly without pausing mid-shaft');
+  assert.equal(fox2.y, f1Node.y);
+
+  // 2. Unstacked Lv 3 Teleportation Portals: roaming creature jumps instantaneously between portal nodes
+  const portalA = makeRoom(10, 'spiral_stair', 1, 0, 3);
+  const portalB = makeRoom(11, 'spiral_stair', 5, 1, 3);
+  const roomsLv3 = [eh, portalA, portalB, makeRoom(12, 'dormitory', 6, 1, 1, [{ id: 12001, defId: 'simple_cot', slotKind: 'required:bed', damaged: false }])];
+  const nav3 = new NavGraph(roomsLv3, groundY);
+  const cc3 = new CreatureChoreographer(nav3, groundY, worldW);
+  const state3: FullGameState = { ...base, rooms: roomsLv3, creatures: [makeRoamer(102, 'bramblefox')] };
+  cc3.syncState(state3);
+  const fox3 = cc3.agents.get(102)!;
+  const pNodeA = nav3.nodes.get('room-10-f0')!;
+  const pNodeB = nav3.nodes.get('room-11-f1')!;
+  fox3.x = pNodeA.x;
+  fox3.y = pNodeA.y;
+  fox3.roamPath = [pNodeA, pNodeB];
+  fox3.roamPathIdx = 1;
+  cc3.tick(50, state3, false);
+  assert.equal(fox3.x, pNodeB.x, 'Roaming creature teleports X across Lv 3 Teleportation Portals');
+  assert.equal(fox3.y, pNodeB.y, 'Roaming creature teleports Y across Lv 3 Teleportation Portals');
+});
+
+test('stair room display name changes per tier (Spiral Stair -> Magical Elevator -> Teleportation Portal)', () => {
+  assert.equal(roomDisplayName('spiral_stair', 1), 'Spiral Stair');
+  assert.equal(roomDisplayName('spiral_stair', 2), 'Magical Elevator');
+  assert.equal(roomDisplayName('spiral_stair', 3), 'Teleportation Portal');
+  assert.equal(roomDisplayName('dormitory', 3), 'Dormitory');
+
+  const s = richState();
+  const stair = makeRoom(90, 'spiral_stair', 1, 0, 1);
+  s.rooms.push(stair);
+
+  const renderStairWindow = (room: PlacedRoom) =>
+    renderToStaticMarkup(
+      <RoomWindow
+        state={s}
+        room={room}
+        onClose={() => {}}
+        onOpenScreen={() => {}}
+        onResolveHazard={() => {}}
+        onUpgrade={() => {}}
+        onAddFurniture={() => {}}
+        onRemoveFurniture={() => {}}
+      />
+    );
+
+  const html1 = renderStairWindow(stair);
+  assert.ok(html1.includes('Spiral Stair'), 'Lv 1 RoomWindow shows Spiral Stair');
+  assert.ok(!html1.includes('aria-label="Magical Elevator window"'), 'Lv 1 RoomWindow dialog label is Spiral Stair');
+
+  const up2 = AnkicasterEngine.upgradeRoom(s, 90);
+  assert.equal(up2.success, true);
+  const stair2 = up2.state.rooms.find(r => r.id === 90)!;
+  assert.equal(roomDisplayName(stair2), 'Magical Elevator');
+  assert.ok(up2.state.notices[up2.state.notices.length - 1].text.includes('Magical Elevator'));
+  const html2 = renderStairWindow(stair2);
+  assert.ok(html2.includes('aria-label="Magical Elevator window"'), 'Lv 2 RoomWindow title updates to Magical Elevator');
+
+  const up3 = AnkicasterEngine.upgradeRoom(up2.state, 90);
+  assert.equal(up3.success, true);
+  const stair3 = up3.state.rooms.find(r => r.id === 90)!;
+  assert.equal(roomDisplayName(stair3), 'Teleportation Portal');
+  assert.ok(up3.state.notices[up3.state.notices.length - 1].text.includes('Teleportation Portal'));
+  const html3 = renderStairWindow(stair3);
+  assert.ok(html3.includes('aria-label="Teleportation Portal window"'), 'Lv 3 RoomWindow title updates to Teleportation Portal');
+
+  const demolishHtml = renderToStaticMarkup(
+    <DemolishConfirm state={up3.state} roomId={90} onCancel={() => {}} onConfirm={() => {}} />
+  );
+  assert.ok(demolishHtml.includes('Teleportation Portal'), 'DemolishConfirm uses Lv 3 Teleportation Portal name');
+  assert.ok((roomLabelKeepOutRect(stair3)?.right ?? 0) >= (roomLabelKeepOutRect(stair)?.right ?? 0));
+});
+

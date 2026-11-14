@@ -173,11 +173,20 @@ function placeFurniture(g: Painter, room: PlacedRoom, box: Box, tint: number, gk
   const view = layoutRoomFurniture(room);
   const ceilingY = box.top + 3;
   const points = [...placedFurniturePoints(room, box)].sort((a, b) => furnitureDrawLayer(a) - furnitureDrawLayer(b));
+  const lecternPt = points.find(
+    pt => pt.view.furniture.defId === 'teachers_lectern' || pt.view.furniture.slotKind === 'required:teachers_lectern'
+  );
+  const lecternX = lecternPt ? lecternPt.view.x : box.width / 2;
   for (const pt of points) {
     const it = pt.view;
     const { art, x, y } = pt;
     const damaged = !!it.furniture.damaged;
-    const flipX = it.furniture.defId === 'teachers_lectern' && it.x >= box.width / 2;
+    const flipX =
+      it.furniture.defId === 'teachers_lectern'
+        ? it.x >= box.width / 2
+        : it.furniture.defId === 'student_desk' || it.furniture.slotKind === 'required:student_desk'
+          ? it.x > lecternX
+          : false;
     if (isDressingArt(room.defId, it.furniture)) {
       // The dressing draws this piece (one object, never two); only the wrench badge comes from here
       if (damaged) {

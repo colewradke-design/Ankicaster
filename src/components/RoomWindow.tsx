@@ -35,7 +35,7 @@ import { WizardPortrait } from './WizardPortrait';
 import { CharacterPortrait } from './CharacterPortrait';
 import { CreaturePortrait } from './CreaturePortrait';
 import { FullGameState, PlacedRoom } from '../types/ankicaster';
-import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS, SPELL_DEFINITIONS, CREATURE_DEFINITIONS } from '../data/content';
+import { ROOM_DEFINITIONS, roomDisplayName, FURNITURE_DEFINITIONS, SPELL_DEFINITIONS, CREATURE_DEFINITIONS } from '../data/content';
 import {
   calculateRoomQuality, calculateFacultyLimit, wizardOrbQuote,
   furnitureEffectForRoom, formatFurnitureEffect, FurnitureEffectKind, roomFurnitureEffects,
@@ -245,14 +245,14 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[1px] flex items-center justify-center p-4" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div
         role="dialog"
-        aria-label={`${def?.name || room.defId} window`}
+        aria-label={`${roomDisplayName(room)} window`}
         data-room-window={room.defId}
         className="bg-slate-900 border border-amber-900/50 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl"
       >
         {/* 1. Header */}
         <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-slate-800 bg-gradient-to-r from-amber-900/30 to-transparent rounded-t-2xl" data-tour="room-header">
           <div className="flex items-center gap-2 flex-wrap min-w-0">
-            <h3 className="text-base font-bold text-amber-300 truncate">{def?.name || room.defId}</h3>
+            <h3 className="text-base font-bold text-amber-300 truncate">{roomDisplayName(room)}</h3>
             <span className="text-[12px] bg-amber-500/20 border border-amber-500/40 text-amber-200 px-2 py-0.5 rounded-md font-bold">Lv {room.level}</span>
             <span className="text-[12px] bg-slate-800 border border-slate-700 text-slate-200 px-2 py-0.5 rounded-md capitalize" title={`Quality ${Math.round(q)}`}>{tier}</span>
             <span className="text-[12px] text-slate-500 font-mono">{room.area === 'castle' ? `F${room.y}` : 'Grounds'}</span>

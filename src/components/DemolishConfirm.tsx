@@ -9,7 +9,7 @@
 import React from 'react';
 import { AlertTriangle, Trash2 } from 'lucide-react';
 import { FullGameState } from '../types/ankicaster';
-import { ROOM_DEFINITIONS } from '../data/content';
+import { roomDisplayName } from '../data/content';
 import { AnkicasterEngine } from '../utils/engine';
 import { REFUND_MATERIALS } from '../utils/placement';
 
@@ -22,7 +22,7 @@ export const DemolishConfirm: React.FC<{
   const room = state.rooms.find(r => r.id === roomId);
   const preview = AnkicasterEngine.demolishPreview(state, roomId);
   if (!room || !preview) return null;
-  const def = ROOM_DEFINITIONS[room.defId];
+  const displayName = roomDisplayName(room);
   const { refund } = preview;
   const back = REFUND_MATERIALS.filter(k => refund[k] > 0).map(k => `${refund[k]} ${k[0].toUpperCase()}${k.slice(1)}`);
   if (refund.mana > 0) back.unshift(`${refund.mana} Mana`);
@@ -30,10 +30,10 @@ export const DemolishConfirm: React.FC<{
 
   return (
     <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onMouseDown={e => { if (e.target === e.currentTarget) onCancel(); }}>
-      <div role="alertdialog" aria-label={`${verb} ${def?.name}`} data-testid="demolish-confirm" className="bg-slate-900 border border-rose-800/60 rounded-2xl w-full max-w-md shadow-2xl">
+      <div role="alertdialog" aria-label={`${verb} ${displayName}`} data-testid="demolish-confirm" className="bg-slate-900 border border-rose-800/60 rounded-2xl w-full max-w-md shadow-2xl">
         <div className="flex items-center gap-2 px-5 py-3 border-b border-slate-800">
           <AlertTriangle className="w-5 h-5 text-rose-400" />
-          <h3 className="font-bold text-rose-200">{verb}: {def?.name || room.defId}?</h3>
+          <h3 className="font-bold text-rose-200">{verb}: {displayName}?</h3>
         </div>
         <div className="p-5 space-y-3 text-[13px] text-slate-300">
           {preview.blocked ? (

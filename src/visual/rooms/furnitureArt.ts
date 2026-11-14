@@ -373,11 +373,39 @@ function drawFamily(g: Painter, art: FurnitureArt, bx: { left: number; top: numb
         g.rect(L + 3, top + 1, w - 6, 2).fill({ color: c2 });
         break;
       }
+      if (v === 'desk') {
+        const chairShade = darken(a, 0.72);
+        const legShade = darken(a, 0.7);
+        if (flipX) {
+          // Student sits on the right, facing Left
+          g.rect(R - 2.5, B - 11, 1.5, 11).fill({ color: chairShade });
+          g.rect(R - 5.5, B - 5, 4, 1.5).fill({ color: darken(a, 0.85) });
+          g.rect(R - 5.2, B - 3.5, 1.2, 3.5).fill({ color: legShade });
+          g.rect(L + 1, top, w - 6.5, 2).fill({ color: a });
+          g.rect(L + 1.5, top + 2, 1.5, B - top - 2).fill({ color: legShade });
+          g.rect(L + 1.5, top + 2, 2, 4).fill({ color: darken(a, 0.82) });
+          g.rect(R - 8, top + 2, 1.5, B - top - 2).fill({ color: legShade });
+          g.rect(L + 3.5, top - 1.5, 5.5, 1.5).fill({ color: c2 });
+          g.rect(L + 2, top - 1.2, 1.2, 1.2).fill({ color: 0x1b1822 });
+        } else {
+          // Student sits on the left, facing Right
+          g.rect(L + 1, B - 11, 1.5, 11).fill({ color: chairShade });
+          g.rect(L + 1.5, B - 5, 4, 1.5).fill({ color: darken(a, 0.85) });
+          g.rect(L + 4, B - 3.5, 1.2, 3.5).fill({ color: legShade });
+          g.rect(L + 5.5, top, w - 6.5, 2).fill({ color: a });
+          g.rect(L + 6.5, top + 2, 1.5, B - top - 2).fill({ color: legShade });
+          g.rect(R - 3.5, top + 2, 2, 4).fill({ color: darken(a, 0.82) });
+          g.rect(R - 3, top + 2, 1.5, B - top - 2).fill({ color: legShade });
+          g.rect(L + 7, top - 1.5, 5.5, 1.5).fill({ color: c2 });
+          g.rect(R - 3.2, top - 1.2, 1.2, 1.2).fill({ color: 0x1b1822 });
+        }
+        break;
+      }
       g.rect(L + 1, top, w - 2, 2).fill({ color: a });
       g.rect(L + 2, top + 2, 1.5, B - top - 2).fill({ color: darken(a, 0.7) });
       g.rect(R - 3.5, top + 2, 1.5, B - top - 2).fill({ color: darken(a, 0.7) });
       if (w >= 32) g.rect(cx - 0.75, top + 2, 1.5, B - top - 2).fill({ color: darken(a, 0.7) });
-      if (v === 'desk' || v === 'scribe' || v === 'quill') {
+      if (v === 'scribe' || v === 'quill') {
         g.rect(L + 3, top - 1.5, 6, 1.5).fill({ color: c2 });
         if (v === 'scribe') { g.rect(R - 5, top - 4, 1.5, 4).fill({ color: CLOTH }); flame(g, R - 4.25, top - 4, 0.5); }
         if (v === 'quill') line(g, cx + 2, top - 2 - (f % 2), cx + 5, top - 8 - (f % 2), 0xf6f1e8, 1);

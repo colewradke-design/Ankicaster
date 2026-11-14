@@ -10,7 +10,7 @@ import {
   Sparkles, Shield, Sun, Hammer, Settings as SettingsIcon, ChevronDown, AlertTriangle, Castle
 } from 'lucide-react';
 import { FullGameState } from '../types/ankicaster';
-import { ROOM_DEFINITIONS } from '../data/content';
+import { roomDisplayName } from '../data/content';
 import {
   ScreenId, SCREEN_DEFS, getAcademyMenuScreens, hazardRooms
 } from '../ui/screens';
@@ -113,7 +113,7 @@ export const AcademyMenu: React.FC<{
                   className="w-full flex items-center gap-2.5 px-3 py-2 min-h-[32px] rounded-lg text-[13px] text-rose-200 hover:bg-rose-500/10 text-left"
                 >
                   <AlertTriangle className="w-4 h-4 text-rose-400" />
-                  <span className="flex-1">{ROOM_DEFINITIONS[r.defId]?.name || r.defId}</span>
+                  <span className="flex-1">{roomDisplayName(r)}</span>
                 </button>
               ))}
               <div className="my-1 border-t border-slate-800" />
@@ -209,7 +209,7 @@ export const TopBar: React.FC<TopBarProps> = ({ state, onOpenScreen, onOpenRoom,
           <button
             onClick={() => onOpenRoom(hazards[0].id)}
             className="flex items-center gap-1.5 px-2.5 py-1 min-h-[32px] rounded-lg border border-rose-600/60 bg-rose-950/60 text-rose-200 text-[13px] font-bold hover:bg-rose-900/60"
-            title={`Hazard in ${hazards.map(h => ROOM_DEFINITIONS[h.defId]?.name || h.defId).join(', ')}`}
+            title={`Hazard in ${hazards.map(h => roomDisplayName(h)).join(', ')}`}
             data-testid="hazard-chip"
           >
             <AlertTriangle className="w-4 h-4" />

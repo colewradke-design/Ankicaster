@@ -12,6 +12,7 @@ import {
   FurnitureDefinition,
   CreatureDefinition,
   PotionRecipe,
+  PlacedRoom,
   RiftDestination,
   SchoolEvent
 } from '../types/ankicaster';
@@ -924,6 +925,25 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     description: 'Infused with starlight: accelerates injury healing by +20% and raises Composure.'
   }
 };
+
+/**
+ * Display name for a placed room (or room def + level).
+ * Spiral Stairs evolve visually and functionally per tier:
+ * Lv 1 = Spiral Stair, Lv 2 = Magical Elevator, Lv 3 = Teleportation Portal.
+ */
+export function roomDisplayName(
+  roomOrDefId: Pick<PlacedRoom, 'defId' | 'level'> | string,
+  level?: number
+): string {
+  const defId = typeof roomOrDefId === 'string' ? roomOrDefId : roomOrDefId.defId;
+  const lvl = level ?? (typeof roomOrDefId === 'string' ? 1 : roomOrDefId.level || 1);
+  if (defId === 'spiral_stair') {
+    if (lvl >= 3) return 'Teleportation Portal';
+    if (lvl === 2) return 'Magical Elevator';
+    return 'Spiral Stair';
+  }
+  return ROOM_DEFINITIONS[defId]?.name || defId;
+}
 
 // Key Furniture Definitions from GDD Section 17
 export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {

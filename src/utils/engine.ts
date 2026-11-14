@@ -21,6 +21,7 @@ import {
 } from '../types/ankicaster';
 import {
   ROOM_DEFINITIONS,
+  roomDisplayName,
   FURNITURE_DEFINITIONS,
   CREATURE_DEFINITIONS,
   RIFT_DESTINATIONS,
@@ -2756,9 +2757,9 @@ export class AnkicasterEngine {
     if (action === 'demolish') {
       const after = state.rooms.filter(r => r.id !== roomId);
       const unsupported = newlyUnsupportedRooms(state.rooms, after);
-      if (unsupported.length) return `${ROOM_DEFINITIONS[unsupported[0].defId]?.name || 'A room'} above needs it for support`;
+      if (unsupported.length) return `${roomDisplayName(unsupported[0])} above needs it for support`;
       const cut = newlyCutOffRooms(state.rooms, after);
-      if (cut.length) return `It would cut ${ROOM_DEFINITIONS[cut[0].defId]?.name || 'a room'} off from the Entrance Hall`;
+      if (cut.length) return `It would cut ${roomDisplayName(cut[0])} off from the Entrance Hall`;
     }
     return undefined;
   }
@@ -2776,11 +2777,11 @@ export class AnkicasterEngine {
     const after = state.rooms.map(r => (r.id === roomId ? { ...r, x, y: ny } : r));
     const unsupported = newlyUnsupportedRooms(state.rooms, after);
     if (unsupported.length) {
-      return { valid: false, errors: [`${ROOM_DEFINITIONS[unsupported[0].defId]?.name || 'A room'} above needs it for support`], warnings: [] };
+      return { valid: false, errors: [`${roomDisplayName(unsupported[0])} above needs it for support`], warnings: [] };
     }
     const cut = newlyCutOffRooms(state.rooms, after).filter(r => r.id !== roomId);
     if (cut.length) {
-      return { valid: false, errors: [`It would cut ${ROOM_DEFINITIONS[cut[0].defId]?.name || 'a room'} off from the Entrance Hall`], warnings: [] };
+      return { valid: false, errors: [`It would cut ${roomDisplayName(cut[0])} off from the Entrance Hall`], warnings: [] };
     }
     return check;
   }
@@ -2801,12 +2802,11 @@ export class AnkicasterEngine {
     const room = next.rooms.find(r => r.id === roomId)!;
     room.x = x;
     room.y = room.area === 'grounds' ? 0 : y;
-    const def = ROOM_DEFINITIONS[room.defId];
     next.notices.push({
       id: `move-${roomId}-${Date.now()}`,
       time: Date.now(),
       type: 'construction',
-      text: `Moved ${def?.name || 'room'} to ${room.area === 'castle' ? `Floor ${room.y}, column ${room.x}` : `plot ${room.x}`}.`,
+      text: `Moved ${roomDisplayName(room)} to ${room.area === 'castle' ? `Floor ${room.y}, column ${room.x}` : `plot ${room.x}`}.`,
       data: { roomId }
     });
     return { state: next, success: true, warnings: check.warnings };
@@ -2869,7 +2869,7 @@ export class AnkicasterEngine {
     if (block) return { state, success: false, error: block };
     const next = structuredClone(state);
     const room = next.rooms.find(r => r.id === roomId)!;
-    const def = ROOM_DEFINITIONS[room.defId];
+    const roomName = roomDisplayName(room);
     const refund = demolishRefund(room);
 
     const beforeRes = resourceSnapshot(next);
@@ -2880,7 +2880,7 @@ export class AnkicasterEngine {
       const n = (refund as unknown as Record<string, number>)[k] || 0;
       if (n) (next.resources as unknown as Record<string, number>)[k] = ((next.resources as unknown as Record<string, number>)[k] || 0) + n;
     }
-    logResourceDiff(next, beforeRes, `${refund.cancel ? 'Cancelled' : 'Demolished'} ${def?.name || 'room'}`);
+    logResourceDiff(next, beforeRes, `${refund.cancel ? 'Cancelled' : 'Demolished'} ${roomName}`);
 
     // Furniture -> inventory (damaged items are lost rather than silently repaired)
     next.furnitureInventory = { ...(next.furnitureInventory || {}) };
@@ -2924,7 +2924,7 @@ export class AnkicasterEngine {
       id: `demolish-${roomId}-${Date.now()}`,
       time: Date.now(),
       type: 'construction',
-      text: `${refund.cancel ? 'Cancelled' : 'Demolished'} ${def?.name || 'room'}${parts.length ? ` (returned ${parts.join(', ')})` : ''}${moved ? '; occupants reassigned' : ''}.`,
+      text: `${refund.cancel ? 'Cancelled' : 'Demolished'} ${roomName}${parts.length ? ` (returned ${parts.join(', ')})` : ''}${moved ? '; occupants reassigned' : ''}.`,
       data: { roomId: ehRoom?.id }
     });
     return { state: next, success: true, refund };
@@ -3322,7 +3322,9 @@ export class AnkicasterEngine {
     }
 
     next.mana -= upgradeCost;
+    const prevName = roomDisplayName(room);
     room.level = (room.level + 1) as 2 | 3;
+    const nextName = roomDisplayName(room);
     next.renown += 5;
     room.renownGranted = (room.renownGranted || 0) + 5;
 
@@ -3330,7 +3332,10 @@ export class AnkicasterEngine {
       id: `upg-${roomId}-${room.level}`,
       time: Date.now(),
       type: 'renovation',
-      text: `${def?.name || 'Room'} upgraded to Level ${room.level}! (+5 Renown)`,
+      text:
+        nextName !== prevName
+          ? `${prevName} upgraded to Level ${room.level} (${nextName})! (+5 Renown)`
+          : `${nextName} upgraded to Level ${room.level}! (+5 Renown)`,
       data: { roomId, level: room.level }
     });
 

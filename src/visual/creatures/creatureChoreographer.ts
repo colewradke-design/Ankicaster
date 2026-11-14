@@ -31,6 +31,7 @@ import {
 } from '../../utils/creatures';
 import { roomToWorldBox, getGroundY } from '../layout/gridToWorld';
 import { NavGraph, NavNode } from '../layout/navGraph';
+import { MOVE_SPEED } from '../agents/doll';
 import type { VisualAgent } from '../agents/Choreographer';
 import type { CreatureAnim } from './creatureArt';
 
@@ -645,11 +646,26 @@ export class CreatureChoreographer {
       if (agent.returnPath.length > 0 && agent.returnPathIdx < agent.returnPath.length) {
         agent.drawOffsetY = 0;
         const wp = agent.returnPath[agent.returnPathIdx];
+        const prevWp = agent.returnPathIdx > 0 ? agent.returnPath[agent.returnPathIdx - 1] : undefined;
+        const targetRoom = wp.roomId !== undefined ? rooms.find(r => r.id === wp.roomId) : undefined;
+        const prevRoom = prevWp?.roomId !== undefined ? rooms.find(r => r.id === prevWp.roomId) : undefined;
+        const portalJump =
+          prevRoom?.defId === 'spiral_stair' &&
+          (prevRoom.level || 1) >= 3 &&
+          targetRoom?.defId === 'spiral_stair' &&
+          (targetRoom.level || 1) >= 3 &&
+          prevRoom.id !== targetRoom.id;
         const dx = wp.x - agent.x;
         const dy = wp.y - agent.y;
         const dist = Math.hypot(dx, dy);
-        const speed = 34 * (gap / 1000);
-        if (dist <= 3) {
+        const onElevator =
+          Math.abs(dy) > 2 &&
+          wp.kind === 'stair' &&
+          (!prevWp || prevWp.kind === 'stair') &&
+          ((targetRoom?.defId === 'spiral_stair' && (targetRoom.level || 1) >= 2) ||
+            (prevRoom?.defId === 'spiral_stair' && (prevRoom.level || 1) >= 2));
+        const speed = (onElevator ? MOVE_SPEED.elevator : 34) * (gap / 1000);
+        if (portalJump || dist <= 3) {
           agent.x = wp.x;
           agent.y = wp.y;
           agent.returnPathIdx++;
@@ -662,8 +678,8 @@ export class CreatureChoreographer {
           if (Math.abs(dx) > 0.5) agent.facing = dx > 0 ? 'R' : 'L';
           agent.x += (dx / dist) * Math.min(speed, dist);
           agent.y += (dy / dist) * Math.min(speed, dist);
-          agent.anim = 'move';
-          agent.frame = Math.floor(this.clockMs / 150) % 6;
+          agent.anim = onElevator ? 'idle' : 'move';
+          agent.frame = Math.floor(this.clockMs / (onElevator ? 250 : 150)) % 6;
         }
         continue;
       }
@@ -816,11 +832,28 @@ export class CreatureChoreographer {
 
   private stepAlongRoamPath(agent: CreatureVisualAgent, dt: number, gapMs: number, state: FullGameState): void {
     const wp = agent.roamPath[agent.roamPathIdx];
+    const prevWp = agent.roamPathIdx > 0 ? agent.roamPath[agent.roamPathIdx - 1] : undefined;
+    const targetRoom = wp.roomId !== undefined ? state.rooms.find(r => r.id === wp.roomId) : undefined;
+    const prevRoom = prevWp?.roomId !== undefined ? state.rooms.find(r => r.id === prevWp.roomId) : undefined;
+    const portalJump =
+      prevRoom?.defId === 'spiral_stair' &&
+      (prevRoom.level || 1) >= 3 &&
+      targetRoom?.defId === 'spiral_stair' &&
+      (targetRoom.level || 1) >= 3 &&
+      prevRoom.id !== targetRoom.id;
+
     const dx = wp.x - agent.x;
     const dy = wp.y - agent.y;
     const dist = Math.hypot(dx, dy);
 
-    if (agent.movement === 'scurry') {
+    const onElevator =
+      Math.abs(dy) > 2 &&
+      wp.kind === 'stair' &&
+      (!prevWp || prevWp.kind === 'stair') &&
+      ((targetRoom?.defId === 'spiral_stair' && (targetRoom.level || 1) >= 2) ||
+        (prevRoom?.defId === 'spiral_stair' && (prevRoom.level || 1) >= 2));
+
+    if (agent.movement === 'scurry' && !onElevator && !portalJump) {
       if (agent.scurryRoamTimerMs === undefined) {
         agent.scurryRoamPaused = false;
         agent.scurryRoamTimerMs = 600;
@@ -846,10 +879,18 @@ export class CreatureChoreographer {
       }
     }
 
-    const baseSpeed = agent.movement === 'scurry' ? 50 : agent.movement === 'hop' ? 28 : agent.movement === 'hover' ? 24 : 26;
+    const baseSpeed = onElevator
+      ? MOVE_SPEED.elevator
+      : agent.movement === 'scurry'
+        ? 50
+        : agent.movement === 'hop'
+          ? 28
+          : agent.movement === 'hover'
+            ? 24
+            : 26;
     const speed = baseSpeed * dt;
 
-    if (dist <= 3) {
+    if (portalJump || dist <= 3) {
       agent.x = wp.x;
       agent.y = wp.y;
       agent.drawOffsetY = 0;
@@ -881,8 +922,8 @@ export class CreatureChoreographer {
     } else {
       agent.drawOffsetY = 0;
     }
-    agent.anim = 'move';
-    agent.frame = Math.floor(this.clockMs / (agent.movement === 'scurry' ? 90 : 160)) % 6;
+    agent.anim = onElevator ? 'idle' : 'move';
+    agent.frame = Math.floor(this.clockMs / (onElevator ? 250 : agent.movement === 'scurry' ? 90 : 160)) % 6;
   }
 
   /**

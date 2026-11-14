@@ -16,7 +16,7 @@
 
 import { Container, Graphics, Text, TextStyle } from 'pixi.js';
 import { FullGameState, FurniturePlane, PlacedRoom } from '../../types/ankicaster';
-import { ROOM_DEFINITIONS } from '../../data/content';
+import { ROOM_DEFINITIONS, roomDisplayName } from '../../data/content';
 import { Camera } from './Camera';
 import { NavGraph } from '../layout/navGraph';
 import { Choreographer } from '../agents/Choreographer';
@@ -339,8 +339,7 @@ export class VisualWorld {
         this.effects.push({ kind: 'reveal', box: roomToWorldBox(after, this.groundY), start: now, ms: EFFECT_MS.reveal });
       } else if (after.state === 'built') {
         if (after.level > before.level) {
-          const def = ROOM_DEFINITIONS[after.defId];
-          this.effects.push({ kind: 'level', box: roomToWorldBox(after, this.groundY), start: now, ms: after.level >= 3 ? EFFECT_MS.level3 : EFFECT_MS.level, level: after.level, name: def?.name, roomId: id });
+          this.effects.push({ kind: 'level', box: roomToWorldBox(after, this.groundY), start: now, ms: after.level >= 3 ? EFFECT_MS.level3 : EFFECT_MS.level, level: after.level, name: roomDisplayName(after), roomId: id });
         }
         if (before.state === 'built') {
           const delta = TIERS.indexOf(roomTier(after)) - TIERS.indexOf(roomTier(before));
@@ -514,8 +513,7 @@ export class VisualWorld {
       }
 
       // Render room name on the canvas (readable at 2x and never cut off)
-      const def = ROOM_DEFINITIONS[room.defId];
-      const roomName = def?.name || room.defId;
+      const roomName = roomDisplayName(room);
       const maxW = Math.max(28, box.width - 6);
 
       const zoom = this.camera.zoom;
@@ -976,7 +974,16 @@ export class VisualWorld {
           : fg.plane === 'wall'
           ? fl + (fg.wallY ?? DEFAULT_WALL_Y)
           : ceilingY;
-      const flipX = fg.defId === 'teachers_lectern' && fg.x >= box.width / 2;
+      const lectern = room.furniture.find(
+        f => f.defId === 'teachers_lectern' || f.slotKind === 'required:teachers_lectern'
+      );
+      const lecternX = (lectern ? resolved.get(lectern.id)?.x : undefined) ?? box.width / 2;
+      const flipX =
+        fg.defId === 'teachers_lectern'
+          ? fg.x >= box.width / 2
+          : fg.defId === 'student_desk'
+            ? fg.x > lecternX
+            : false;
       drawFurniture(this.ghostGraphics, fg.defId, worldX, worldY, { flipX });
       const spriteW = fg.defId === 'wooden_chair' && fg.tableId != null ? 8 : art.w;
       const sb = furnitureBox({ w: spriteW, h: art.h, anchor: fg.plane }, worldX, worldY);

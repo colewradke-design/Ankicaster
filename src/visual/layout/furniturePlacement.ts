@@ -8,7 +8,7 @@
  */
 
 import { FurniturePlane, PlacedFurniture, PlacedRoom } from '../../types/ankicaster';
-import { ROOM_DEFINITIONS } from '../../data/content';
+import { ROOM_DEFINITIONS, roomDisplayName } from '../../data/content';
 import { CELL_W } from './gridToWorld';
 import { getFurnitureArt } from '../rooms/furnitureArt';
 import { computeReachability } from '../../utils/reachability';
@@ -250,8 +250,7 @@ export interface RoomLabelKeepOut {
 export function roomLabelKeepOutRect(room: PlacedRoom): RoomLabelKeepOut | null {
   if (room.area !== 'castle') return null;
   const W = room.w * CELL_W;
-  const def = ROOM_DEFINITIONS[room.defId];
-  const nameLen = (def?.name || room.defId).length;
+  const nameLen = roomDisplayName(room).length;
   const halfW = Math.min(W / 2 - 4, Math.max(14, Math.round(nameLen * 2.0)));
   return {
     left: W / 2 - halfW,
