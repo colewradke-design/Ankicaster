@@ -417,7 +417,8 @@ test('creature caps enforce <=6 in 1x1 pen without hiding eggs/loose and <=40 gl
 
   assert.equal(cc.agents.has(9), true, 'egg is never hidden by pen cap');
   assert.equal(cc.agents.has(10), true, 'loose creature is never hidden by pen cap');
-  assert.equal(cc.hiddenCounts.get(hutch.id), 8 - penCreatureCapacity(hutch), '+N badge count matches collapsed extras');
+  const pennedInHutch = Array.from(cc.agents.values()).filter(a => a.roomId === hutch.id && !a.unhomed && a.status !== 'egg' && a.status !== 'loose');
+  assert.equal(pennedInHutch.length, penCreatureCapacity(hutch), 'hutch holds at most its penCreatureCapacity (2) penned creatures');
 
   // Global cap test: 50 creatures across a 3x2 menagerie -> <= 40 agents drawn
   const menagerie = makeRoom(60, 'menagerie', 0, 1);

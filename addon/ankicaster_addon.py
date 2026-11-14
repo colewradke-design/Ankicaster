@@ -51,7 +51,7 @@ def get_package_name() -> str:
 
 def get_config() -> Dict[str, Any]:
     if mw and mw.addonManager:
-        cfg = mw.addonManager.getConfig(__name__)
+        cfg = mw.addonManager.getConfig(get_package_name())
         if cfg:
             return cfg
     return DEFAULT_CONFIG
@@ -64,12 +64,13 @@ def get_or_create_install_baseline() -> int:
     if not mw or not mw.addonManager:
         return int(time.time() * 1000)
 
-    cfg = mw.addonManager.getConfig(__name__) or {}
+    pkg = get_package_name()
+    cfg = mw.addonManager.getConfig(pkg) or {}
     baseline = cfg.get("install_baseline_ms", 0)
     if not baseline or baseline <= 0:
         baseline = int(time.time() * 1000)
         cfg["install_baseline_ms"] = baseline
-        mw.addonManager.writeConfig(__name__, cfg)
+        mw.addonManager.writeConfig(pkg, cfg)
     return baseline
 
 def query_previous_interval(card_id: int) -> int:
@@ -132,7 +133,10 @@ def on_card_answered(reviewer: Any, card: Any, ease: int) -> None:
     STRICTLY READ-ONLY: Reads card state without altering database or scheduling.
     """
     answered_at_ms = int(time.time() * 1000)
-    elapsed_ms = int((time.time() - _card_shown_timestamp) * 1000)
+    if _card_shown_timestamp <= 0:
+        elapsed_ms = 0
+    else:
+        elapsed_ms = int((time.time() - _card_shown_timestamp) * 1000)
 
     config = get_config()
     min_time = config.get("min_answer_elapsed_ms", 800)
@@ -385,7 +389,7 @@ class AnkicasterDialog(QDialog):
             save_json = json.dumps(saved_state)
             js_load = f"if (window.ankicasterLoadSavedGame) {{ window.ankicasterLoadSavedGame({save_json}); }}"
         else:
-            js_load = "if (window.ankicasterLoadSavedGame) {{ window.ankicasterLoadSavedGame(null); }}"
+            js_load = "if (window.ankicasterLoadSavedGame) { window.ankicasterLoadSavedGame(null); }"
         self.web_view.page().runJavaScript(js_load)
 
         # 2. Send full collection snapshot

@@ -105,7 +105,8 @@ test('habitat set and cap fill are visible to the choreographer', () => {
   assert.ok(loose && pen.agents.has(loose.id), 'loose stays visible');
   const hutch = filled.state.rooms.find(r => r.defId === 'gloom_hutch');
   assert.ok(hutch);
-  assert.ok((pen.hiddenCounts.get(hutch.id) || 0) > 0, '1x1 pen reports +N');
+  const pennedInHutch = Array.from(pen.agents.values()).filter(a => a.roomId === hutch.id && !a.unhomed && a.status !== 'egg' && a.status !== 'loose');
+  assert.equal(pennedInHutch.length, 2, '1x1 gloom_hutch holds its capacity (2) penned creatures');
 
   const cleared = clearDebugCreatures(filled.state);
   assert.equal(cleared.state.creatures.length, 0);

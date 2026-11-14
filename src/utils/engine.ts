@@ -72,7 +72,7 @@ import {
   BellNote, commitBell, ensureLedger, glassworksConversion, logResourceChange, logResourceDiff,
   resourceSnapshot, storageCap as storageCapOf, weavingOutput
 } from './resourceReport';
-import { syncDiscoveredCreatures } from './creatures';
+import { penAcceptedHabitats, resolveAllCreatureRooms, syncDiscoveredCreatures } from './creatures';
 import {
   bestBuffScale,
   billCreatureMeals,
@@ -313,16 +313,45 @@ export class AnkicasterEngine {
       }
     }
 
-    // 5. Advance Active Creature Taming, and count down loose-creature captures
+    // 5. Advance Active Creature Taming & Hatching, and count down loose-creature captures
     tickCaptures(next, notifications);
+    const creatureRoomMap = resolveAllCreatureRooms(next.creatures, next.rooms);
+    const HATCH_REVIEWS: Record<string, number> = {
+      common: 20,
+      uncommon: 40,
+      rare: 60,
+      epic: 80,
+      legendary: 100
+    };
     for (const c of next.creatures) {
+      const cDef = CREATURE_DEFINITIONS[c.defId];
+      if (c.status === 'egg' && cDef) {
+        const res = creatureRoomMap.get(c.id);
+        if (
+          res &&
+          !res.unhomed &&
+          !res.roaming &&
+          res.room &&
+          res.room.state === 'built' &&
+          penAcceptedHabitats(res.room.defId).some(h => cDef.habitats.includes(h))
+        ) {
+          const required = HATCH_REVIEWS[cDef.rarity] ?? 20;
+          c.hatchProgress = Math.min(100, (c.hatchProgress || 0) + 100 / required);
+          if (c.hatchProgress >= 100 - 1e-6) {
+            c.hatchProgress = 100;
+            c.status = 'wary';
+            notifications.push(`🥚 ${c.nickname} (${cDef.name}) hatched and is now wary!`);
+          }
+        }
+        continue;
+      }
+
       const cRoom = c.roomId != null ? next.rooms.find(r => r.id === c.roomId) : undefined;
       if (c.status === 'wary' && c.tamerId !== undefined && c.tamerId !== null) {
         const tamingBonus = academyFurnitureEffect(next.rooms, 'taming_pct', cRoom);
         const tamerMastered = c.tamerId === 0
           ? wizardMasteredSchools(next.wizard.levels)
           : (next.characters.find(ch => ch.id === c.tamerId)?.masteredSchools || []);
-        const cDef = CREATURE_DEFINITIONS[c.defId];
         const tamerMult = careerAffinityMultiplier(tamerMastered, 'tamer', cDef?.school);
         c.tamingProgress += (1 + tamingBonus / 100) * tamerMult;
         if (cDef && c.tamingProgress >= cDef.tamingReviews) {
@@ -706,6 +735,7 @@ export class AnkicasterEngine {
           if (room.hazard?.type === 'spill_of_night') yieldMult *= 0.5; // efficiency halved
           const outPct = academyFurnitureEffect(state.rooms, 'output_pct', room);
           if (outPct !== 0) yieldMult *= 1 + outPct / 100;
+          if ((state.activeBuffs?.starlitConjunctionBells || 0) > 0) yieldMult *= 1.5;
 
           const moraleFactor = 0.6 + (0.6 * char.morale) / 100;
           const yieldAmount = 0.2 * moraleFactor * yieldMult;
@@ -757,7 +787,12 @@ export class AnkicasterEngine {
           const gardenerMult = Math.max(...gardeners.map(g => careerAffinityMultiplier(g.masteredSchools, 'gardener', roomSchool)));
           harvestMult *= gardenerMult;
         }
+        if ((state.activeBuffs?.rainDanceBells || 0) > 0) harvestMult *= 1.5;
+        if ((state.activeBuffs?.growthElixirBells || 0) > 0 && (!state.activeBuffs?.growthElixirRoomId || state.activeBuffs.growthElixirRoomId === room.id)) {
+          harvestMult *= 2;
+        }
       }
+      const verdantMult = (state.activeBuffs?.verdantSurgeBells || 0) > 0 ? 2 : 1;
 
       const insightBell = academyFurnitureEffect(state.rooms, 'insight_per_bell', room);
       if (insightBell > 0) {
@@ -775,14 +810,14 @@ export class AnkicasterEngine {
       if (room.defId === 'vegetable_patch') {
         const src = roomName(room.defId);
         let before = bag.provisions || 0;
-        bag.provisions = store(before, 1.0 * harvestMult);
+        bag.provisions = store(before, 1.0 * harvestMult * verdantMult);
         note('provisions', before, src);
         before = bag.greens || 0;
-        bag.greens = store(before, 0.2 * harvestMult);
+        bag.greens = store(before, 0.2 * harvestMult * verdantMult);
         note('greens', before, src);
       } else if (room.defId === 'herb_garden') {
         const before = bag.herbs || 0;
-        bag.herbs = before + 0.6 * harvestMult;
+        bag.herbs = before + 0.6 * harvestMult * verdantMult;
         note('herbs', before, roomName(room.defId));
       } else if (room.defId === 'woodlot') {
         const src = roomName(room.defId);
@@ -807,15 +842,15 @@ export class AnkicasterEngine {
       } else if (room.defId === 'greenhouse') {
         const src = roomName(room.defId);
         let before = bag.provisions || 0;
-        bag.provisions = store(before, 1.5 * harvestMult * greenhouseMult);
+        bag.provisions = store(before, 1.5 * harvestMult * greenhouseMult * verdantMult);
         note('provisions', before, src);
         before = bag.herbs || 0;
-        bag.herbs = before + 0.5 * harvestMult * greenhouseMult;
+        bag.herbs = before + 0.5 * harvestMult * greenhouseMult * verdantMult;
         note('herbs', before, src);
       } else if (room.defId === 'orchard') {
         const src = roomName(room.defId);
         let before = bag.provisions || 0;
-        bag.provisions = store(before, 0.8 * harvestMult);
+        bag.provisions = store(before, 0.8 * harvestMult * verdantMult);
         note('provisions', before, src);
         before = bag.nectar || 0;
         bag.nectar = store(before, 0.3 * harvestMult);
@@ -926,9 +961,16 @@ export class AnkicasterEngine {
       if (moraleFurn !== 0) {
         char.morale = Math.min(100, Math.max(0, char.morale + moraleFurn));
       }
+      if ((state.activeBuffs?.fellowshipBells || 0) > 0) {
+        char.morale = Math.min(100, char.morale + 10);
+      }
+      if ((state.activeBuffs?.dawnBlessingBells || 0) > 0) {
+        char.morale = Math.min(100, char.morale + 15);
+      }
 
       // Student Misbehavior driven by low morale (<40) or low composure (<40)
-      if (char.status === 'student' && (char.morale < 40 || char.needs.composure < 40) && Math.random() < 0.15) {
+      const misbehaviorChance = (state.activeBuffs?.moonlessNightBells || 0) > 0 ? 0.15 * 0.4 : 0.15;
+      if (char.status === 'student' && (char.morale < 40 || char.needs.composure < 40) && Math.random() < misbehaviorChance) {
         const incidents = [
           { text: `${char.name} skipped study hall to raid honey rolls from the refectory! (-5 Provisions, +10 Rest)`, apply: () => {
             const before = bag.provisions || 0;
@@ -959,7 +1001,31 @@ export class AnkicasterEngine {
     }
     for (const r of state.rooms) {
       const roomClean = academyFurnitureEffect(state.rooms, 'cleanliness_per_bell', r);
-      r.cleanliness = Math.min(100, r.cleanliness - 0.5 + cleanBonus + roomClean);
+      const isCleanImmune = (state.activeBuffs?.cleanImmuneBells || 0) > 0 && (!state.activeBuffs?.cleanImmuneRoomId || state.activeBuffs.cleanImmuneRoomId === r.id);
+      const decay = isCleanImmune ? 0 : 0.5;
+      r.cleanliness = Math.min(100, r.cleanliness - decay + cleanBonus + roomClean);
+    }
+
+    // 7. Tick down bell-based potion & spell buffs
+    if (state.activeBuffs) {
+      const bellKeys: Array<keyof NonNullable<FullGameState['activeBuffs']>> = [
+        'growthElixirBells',
+        'cleanImmuneBells',
+        'fireproofBells',
+        'fellowshipBells',
+        'starlitConjunctionBells',
+        'rainDanceBells',
+        'verdantSurgeBells',
+        'dawnBlessingBells',
+        'wardPulseBells',
+        'moonlessNightBells'
+      ];
+      for (const k of bellKeys) {
+        const val = state.activeBuffs[k];
+        if (typeof val === 'number' && val > 0) {
+          (state.activeBuffs as any)[k] = val - 1;
+        }
+      }
     }
     commitBell(state, bellNotes);
     processEscapes(state, notifications, note);
@@ -1091,24 +1157,31 @@ export class AnkicasterEngine {
 
       // Check thin Veil hazard spawn if Veil < 50%
       // Rule BR-25: While the player is away and the bank has hit the 10% floor, skip hazard rolls
-      if (!floorReached && next.mana > bankFloor) {
+      if (!floorReached && next.mana > bankFloor && (next.activeBuffs?.wardPulseBells || 0) <= 0) {
         const baseHazardChance = Math.max(0.02, 0.25 * Math.pow(0.7, warders));
         if (next.veil.strength < 50) {
           const eligibleRooms = next.rooms.filter(r => r.state === 'built' && !r.hazard);
           if (eligibleRooms.length > 0) {
             const target = eligibleRooms[Math.floor(Math.random() * eligibleRooms.length)];
-            const furnPct = academyFurnitureEffect(next.rooms, 'hazard_chance_pct', target);
-            const effectiveChance = Math.max(0.01, baseHazardChance * Math.max(0.1, 1 + furnPct / 100));
-            if (Math.random() < effectiveChance) {
-              const hazards = [
-                { type: 'spill_of_night' as const, name: 'Spill of Night', description: 'Gloom residue seeped through the thinning Veil.', effect: 'Halves room efficiency until dispelled.' },
-                { type: 'hex_fog' as const, name: 'Hex Fog', description: 'Corrosive mist clinging to the floorboards.', effect: 'Students in this room lose composure faster.' },
-                { type: 'echo_loop' as const, name: 'Echo Loop', description: 'A temporal chime repeating indefinitely.', effect: 'Suppresses classroom essence generation.' },
-                { type: 'cold_snap' as const, name: 'Cold Snap', description: 'Sub-zero frost crystallizing across furnishings.', effect: 'Room unusable until thawed.' }
-              ];
-              const chosenHazard = hazards[Math.floor(Math.random() * hazards.length)];
-              target.hazard = chosenHazard;
-              summary.push(`⚠️ Thin Veil hazard emerged: ${chosenHazard.name} in ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}!`);
+            const wardFloorIdx = next.activeBuffs?.wardwaterFloors?.indexOf(target.y) ?? -1;
+            if (wardFloorIdx >= 0) {
+              next.activeBuffs!.wardwaterFloors!.splice(wardFloorIdx, 1);
+              summary.push(`🛡️ Wardwater prevented a hazard on Floor ${target.y + 1}!`);
+            } else {
+              const furnPct = academyFurnitureEffect(next.rooms, 'hazard_chance_pct', target);
+              const moonMult = (next.activeBuffs?.moonlessNightBells || 0) > 0 ? 0.4 : 1;
+              const effectiveChance = Math.max(0.01, baseHazardChance * Math.max(0.1, 1 + furnPct / 100) * moonMult);
+              if (Math.random() < effectiveChance) {
+                const hazards = [
+                  { type: 'spill_of_night' as const, name: 'Spill of Night', description: 'Gloom residue seeped through the thinning Veil.', effect: 'Halves room efficiency until dispelled.' },
+                  { type: 'hex_fog' as const, name: 'Hex Fog', description: 'Corrosive mist clinging to the floorboards.', effect: 'Students in this room lose composure faster.' },
+                  { type: 'echo_loop' as const, name: 'Echo Loop', description: 'A temporal chime repeating indefinitely.', effect: 'Suppresses classroom essence generation.' },
+                  { type: 'cold_snap' as const, name: 'Cold Snap', description: 'Sub-zero frost crystallizing across furnishings.', effect: 'Room unusable until thawed.' }
+                ];
+                const chosenHazard = hazards[Math.floor(Math.random() * hazards.length)];
+                target.hazard = chosenHazard;
+                summary.push(`⚠️ Thin Veil hazard emerged: ${chosenHazard.name} in ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}!`);
+              }
             }
           }
         }
@@ -1232,6 +1305,29 @@ export class AnkicasterEngine {
         const chosen = availableEvents[Math.floor(Math.random() * availableEvents.length)];
         next.activeEvents.push({ eventId: chosen.id, dayArrived: next.day });
         summary.push(`📜 A new event has arrived at the Academy gates: ${chosen.name}.`);
+      }
+    }
+
+    // 4. Lure Musk guaranteed visitor
+    if (next.activeBuffs?.lureMuskPending) {
+      next.activeBuffs.lureMuskPending = false;
+      const allDefs = Object.values(CREATURE_DEFINITIONS);
+      if (allDefs.length > 0) {
+        const cDef = allDefs[Math.floor(Math.random() * allDefs.length)];
+        next.creatures.push({
+          id: Date.now() + Math.floor(Math.random() * 1000),
+          defId: cDef.id,
+          nickname: cDef.name,
+          status: 'wary',
+          hungry: false,
+          hatchProgress: 0,
+          tamingProgress: 0,
+          bondLevel: 1,
+          bondProgress: 0,
+          arrivedDay: next.day
+        });
+        syncDiscoveredCreatures(next);
+        summary.push(`🐾 Lure Musk attracted a wild ${cDef.name} to the Academy!`);
       }
     }
 
@@ -1804,7 +1900,11 @@ export class AnkicasterEngine {
     }
     const partySkillDays = cardCount > 0 ? totalCardsIvl / cardCount : 0;
 
-    const hasElixir = suppliesTaken.includes('rift_elixir');
+    let hasElixir = suppliesTaken.includes('rift_elixir');
+    if (!hasElixir && (next.activeBuffs?.riftElixirCharges || 0) > 0) {
+      hasElixir = true;
+      next.activeBuffs!.riftElixirCharges! -= 1;
+    }
     const isVeilThin = next.veil.strength < 50;
 
     const { chance } = calculateRiftChance(dest, partySkillDays, teamIds.length, hasElixir, isVeilThin);
@@ -1828,6 +1928,14 @@ export class AnkicasterEngine {
       if (hero) hero.status = 'away';
     }
 
+    const beaconBonus = next.activeBuffs?.riftBeaconActive ? 3 : 0;
+    const requiredReviews = next.activeBuffs?.riftBeaconActive
+      ? Math.max(1, Math.round(dest.reviews * 0.75))
+      : dest.reviews;
+    if (next.activeBuffs?.riftBeaconActive) {
+      next.activeBuffs.riftBeaconActive = false;
+    }
+
     const expedition: ActiveExpedition = {
       id: Date.now(),
       destinationId,
@@ -1836,10 +1944,10 @@ export class AnkicasterEngine {
       suppliesTaken,
       partySkillDays,
       chance,
-      fortune: 1 + academyFurnitureEffect(next.rooms, 'rift_fortune'),
+      fortune: 1 + academyFurnitureEffect(next.rooms, 'rift_fortune') + beaconBonus,
       roll,
       wrongRoll,
-      requiredReviews: dest.reviews,
+      requiredReviews,
       progressReviews: 0,
       state: 'active'
     };
@@ -1849,7 +1957,7 @@ export class AnkicasterEngine {
       id: `rift-launch-${expedition.id}`,
       time: Date.now(),
       type: 'expedition',
-      text: `Party stepped through the Rift towards ${dest.name}! (${dest.reviews} reviews to return)`
+      text: `Party stepped through the Rift towards ${dest.name}! (${requiredReviews} reviews to return)`
     });
 
     return { state: next, success: true };
@@ -1945,19 +2053,26 @@ export class AnkicasterEngine {
       const injuredHeroId = exp.teamIds[Math.floor(Math.random() * exp.teamIds.length)];
       const injuredHero = state.characters.find(c => c.id === injuredHeroId);
 
+      let hasCourage = exp.suppliesTaken.includes('courage_draught');
+      if (!hasCourage && (state.activeBuffs?.courageDraughtCharges || 0) > 0) {
+        hasCourage = true;
+        state.activeBuffs!.courageDraughtCharges! -= 1;
+      }
+      const recoveryMult = hasCourage ? 0.5 : 1;
+
       if (chosenOutcome === 'minor_injury') {
         notifications.push(`⚠️ Expedition to ${dest.name}: ${injuredHero?.name} suffered minor bruises, but brought back full loot!`);
-        if (injuredHero) injuredHero.injury = { type: 'bruised', points: 0, required: 30 };
+        if (injuredHero) injuredHero.injury = { type: 'bruised', points: 0, required: Math.round(30 * recoveryMult) };
         state.resources.timber += 25;
         loot.push('25 Timber', '10 Herbs');
       } else if (chosenOutcome === 'serious_injury') {
         notifications.push(`🚨 Serious Injury! ${injuredHero?.name} suffered a sprain/fracture. Half loot returned.`);
-        if (injuredHero) injuredHero.injury = { type: 'sprained', points: 0, required: 80 };
+        if (injuredHero) injuredHero.injury = { type: 'sprained', points: 0, required: Math.round(80 * recoveryMult) };
         state.resources.timber += 12;
         loot.push('12 Timber (Half Loot)');
       } else if (chosenOutcome === 'curse') {
         notifications.push(`🔮 Curse of the Rift! ${injuredHero?.name} was hexed by otherworldly energies.`);
-        if (injuredHero) injuredHero.injury = { type: 'hexed', points: 0, required: 120 };
+        if (injuredHero) injuredHero.injury = { type: 'hexed', points: 0, required: Math.round(120 * recoveryMult) };
         loot.push('Curio relic fragments');
       } else {
         notifications.push(`🏃 Party was forced to retreat empty-handed from ${dest.name}!`);
@@ -2682,72 +2797,209 @@ export class AnkicasterEngine {
     }
 
     next.resources.potions[potionId] -= 1;
+    if (!next.activeBuffs) next.activeBuffs = {};
     let message = 'Potion consumed.';
 
     switch (potionId) {
-      case 'healing_draught':
+      case 'mending_draught': {
         const injuredHero = targetId
-          ? next.characters.find(c => c.id === targetId)
+          ? next.characters.find(c => c.id === targetId && c.injury)
           : next.characters.find(c => c.injury);
         if (injuredHero && injuredHero.injury) {
           injuredHero.injury = undefined;
-          message = `💖 Healing Draught consumed! ${injuredHero.name}'s injuries are completely cured.`;
+          injuredHero.needs.health = 100;
+          message = `💖 Mending Draught consumed! ${injuredHero.name}'s injury is completely healed.`;
         } else {
-          message = 'Healing Draught consumed (all residents are healthy).';
+          message = 'Mending Draught consumed (all residents are healthy).';
         }
         break;
+      }
 
-      case 'draught_of_composure':
-        const targetStudent = targetId
-          ? next.characters.find(c => c.id === targetId)
-          : next.characters[0];
-        if (targetStudent) {
-          targetStudent.needs.composure = 100;
-          targetStudent.morale = Math.min(100, targetStudent.morale + 25);
-          message = `✨ Draught of Composure consumed by ${targetStudent.name}! Composure 100%, +25 Morale.`;
+      case 'calming_tonic': {
+        const targetChar = targetId ? next.characters.find(c => c.id === targetId) : undefined;
+        const targetRoomId = targetId && !targetChar
+          ? targetId
+          : targetChar?.seatRoomId ?? targetChar?.workplaceRoomId ?? targetChar?.bedRoomId;
+        const affected = targetRoomId
+          ? next.characters.filter(c => c.seatRoomId === targetRoomId || c.workplaceRoomId === targetRoomId || c.bedRoomId === targetRoomId)
+          : next.characters;
+        const list = affected.length > 0 ? affected : next.characters;
+        for (const c of list) {
+          c.needs.composure = Math.min(100, c.needs.composure + 30);
         }
+        message = `✨ Calming Tonic consumed! Composure +30 for ${list.length} resident(s); misbehavior calmed.`;
         break;
+      }
 
-      case 'beast_cordial':
-        const waryCreature = targetId
-          ? next.creatures.find(c => c.id === targetId)
-          : next.creatures.find(c => c.status === 'wary');
-        if (waryCreature) {
-          waryCreature.tamingProgress += 30;
-          const cDef = CREATURE_DEFINITIONS[waryCreature.defId];
-          if (cDef && waryCreature.tamingProgress >= cDef.tamingReviews) {
-            waryCreature.status = 'tamed';
-            message = `🐾 Beast Cordial administered! ${waryCreature.nickname} is now fully tamed!`;
+      case 'growth_elixir': {
+        const plot = (targetId ? next.rooms.find(r => r.id === targetId) : undefined)
+          || next.rooms.find(r => r.state === 'built' && ['greenhouse', 'vegetable_patch', 'herb_garden', 'woodlot', 'orchard'].includes(r.defId));
+        next.activeBuffs.growthElixirBells = 10;
+        next.activeBuffs.growthElixirRoomId = plot?.id;
+        message = `🌿 Growth Elixir poured! ${plot ? ROOM_DEFINITIONS[plot.defId]?.name || 'Plot' : 'Plots'} x2 output for 10 bells.`;
+        break;
+      }
+
+      case 'beast_biscuit': {
+        const loose = (targetId ? next.creatures.find(c => c.id === targetId && c.status === 'loose') : undefined)
+          || next.creatures.find(c => c.status === 'loose');
+        if (loose) {
+          loose.status = 'tamed';
+          message = `🐾 Beast Biscuit offered! ${loose.nickname} returned safely and is tamed.`;
+        } else {
+          const wary = (targetId ? next.creatures.find(c => c.id === targetId && c.status === 'wary') : undefined)
+            || next.creatures.find(c => c.status === 'wary');
+          if (wary) {
+            wary.tamingProgress += 30;
+            const cDef = CREATURE_DEFINITIONS[wary.defId];
+            if (cDef && wary.tamingProgress >= cDef.tamingReviews) {
+              wary.status = 'tamed';
+              message = `🐾 Beast Biscuit fed! ${wary.nickname} is now fully tamed!`;
+            } else {
+              message = `🐾 Beast Biscuit fed! +30 taming progress to ${wary.nickname}.`;
+            }
           } else {
-            message = `🐾 Beast Cordial administered! +30 taming progress to ${waryCreature.nickname}.`;
+            message = 'Beast Biscuit consumed, but no wary or loose creatures were found.';
           }
-        } else {
-          message = 'Beast Cordial consumed, but no wary creatures were found.';
         }
         break;
+      }
 
-      case 'veil_tincture':
-        next.veil.strength = Math.min(100, next.veil.strength + 25);
-        message = '🛡️ Veil Tincture poured into the reservoir! Veil strength surged by +25%.';
+      case 'lure_musk': {
+        next.activeBuffs.lureMuskPending = true;
+        message = '🦊 Lure Musk scattered! A wild creature is guaranteed to visit on the next day tick.';
         break;
+      }
 
-      case 'quickening_elixir':
-        const site = next.rooms.find(r => r.state === 'site');
+      case 'polishing_spirit': {
+        const room = (targetId ? next.rooms.find(r => r.id === targetId) : undefined)
+          || [...next.rooms].filter(r => r.state === 'built').sort((a, b) => a.cleanliness - b.cleanliness)[0];
+        if (room) {
+          room.cleanliness = 100;
+          next.activeBuffs.cleanImmuneBells = 20;
+          next.activeBuffs.cleanImmuneRoomId = room.id;
+          message = `✨ Polishing Spirit applied! ${ROOM_DEFINITIONS[room.defId]?.name || 'Room'} restored to 100 cleanliness and immune to dirt for 20 bells.`;
+        } else {
+          message = 'Polishing Spirit consumed.';
+        }
+        break;
+      }
+
+      case 'fireproof_salve': {
+        const room = (targetId ? next.rooms.find(r => r.id === targetId) : undefined)
+          || next.rooms.find(r => r.state === 'built' && r.defId === 'alchemy_lab')
+          || next.rooms.find(r => r.state === 'built');
+        next.activeBuffs.fireproofBells = 50;
+        next.activeBuffs.fireproofRoomId = room?.id;
+        message = `🛡️ Fireproof Salve coated ${room ? ROOM_DEFINITIONS[room.defId]?.name || 'room' : 'the academy'} for 50 bells.`;
+        break;
+      }
+
+      case 'dreamless_draught': {
+        const dorm = (targetId ? next.rooms.find(r => r.id === targetId) : undefined)
+          || next.rooms.find(r => r.state === 'built' && (r.defId === 'dormitory' || r.defId === 'grand_dormitory'));
+        const sleepers = dorm
+          ? next.characters.filter(c => c.bedRoomId === dorm.id)
+          : next.characters;
+        const list = sleepers.length > 0 ? sleepers : next.characters;
+        for (const c of list) {
+          c.needs.rest = Math.min(100, c.needs.rest + 20);
+        }
+        message = `🌙 Dreamless Draught shared! Rest +20 for ${list.length} resident(s).`;
+        break;
+      }
+
+      case 'veil_tonic': {
+        next.veil.strength = Math.min(100, next.veil.strength + 15);
+        message = '🛡️ Veil Tonic poured into the reservoir! Veil strength surged by +15%.';
+        break;
+      }
+
+      case 'wardwater': {
+        let clearedFog = 0;
+        for (const r of next.rooms) {
+          if (r.hazard?.type === 'hex_fog') {
+            r.hazard = undefined;
+            clearedFog++;
+          }
+        }
+        const targetRoom = targetId ? next.rooms.find(r => r.id === targetId) : undefined;
+        const floorY = targetRoom ? targetRoom.y : (next.rooms.find(r => r.state === 'built')?.y ?? 0);
+        next.activeBuffs.wardwaterFloors = [...(next.activeBuffs.wardwaterFloors || []), floorY];
+        message = `💧 Wardwater sprinkled on Floor ${floorY + 1}! Next hazard prevented${clearedFog > 0 ? ` and ${clearedFog} Hex Fog dispelled` : ''}.`;
+        break;
+      }
+
+      case 'quickmortar': {
+        const site = (targetId ? next.rooms.find(r => r.id === targetId && r.state === 'site') : undefined)
+          || next.rooms.find(r => r.state === 'site');
         if (site) {
-          site.buildProgress += 30;
+          site.buildProgress += 20;
           if (site.buildProgress >= site.buildRequired) AnkicasterEngine.completeSite(next, site);
-          message = `⚡ Quickening Elixir poured over construction site: +30 reviews progress!`;
+          message = '⚡ Quickmortar poured over construction site: +20 progress points!';
         } else {
-          message = 'Quickening Elixir consumed.';
+          message = 'Quickmortar consumed (no active construction site).';
         }
         break;
+      }
 
-      case 'phoenix_draught':
+      case 'rift_elixir': {
+        next.activeBuffs.riftElixirCharges = (next.activeBuffs.riftElixirCharges || 0) + 1;
+        message = '🧭 Rift Elixir prepared! Next expedition gains +10% safe odds (up to destination best odds).';
+        break;
+      }
+
+      case 'courage_draught': {
+        next.activeBuffs.courageDraughtCharges = (next.activeBuffs.courageDraughtCharges || 0) + 1;
+        message = '🦁 Courage Draught imbibed! Next expedition injury or curse requires half recovery.';
+        break;
+      }
+
+      case 'glass_flux': {
+        next.resources.glass += 20;
+        message = '🪟 Glass Flux catalyzed! +20 Glass added to stores.';
+        break;
+      }
+
+      case 'elixir_of_fellowship': {
+        next.activeBuffs.fellowshipBells = 30;
+        for (const c of next.characters) {
+          c.morale = Math.min(100, c.morale + 10);
+        }
+        message = '🤝 Elixir of Fellowship shared! Academy morale +10 for 30 bells.';
+        break;
+      }
+
+      case 'starlight_ink': {
+        next.draftRerollTokens = (next.draftRerollTokens || 0) + 3;
+        message = '🖋️ Starlight Ink uncorked! Granted +3 draft reroll tokens.';
+        break;
+      }
+
+      case 'transmutation_salts': {
+        const commonKeys = ['timber', 'stone', 'glass', 'cloth', 'provisions', 'greens', 'fish', 'nectar'] as const;
+        const bag = next.resources as unknown as Record<string, number>;
+        const sortedDesc = [...commonKeys].sort((a, b) => (bag[b] || 0) - (bag[a] || 0));
+        const src = sortedDesc[0];
+        const dst = sortedDesc[sortedDesc.length - 1];
+        if ((bag[src] || 0) >= 50 && src !== dst) {
+          bag[src] -= 50;
+          bag[dst] = (bag[dst] || 0) + 40;
+          message = `⚗️ Transmutation Salts applied! Converted 50 ${src} into 40 ${dst}.`;
+        } else {
+          message = '⚗️ Transmutation Salts fizzled (need at least 50 of a common material).';
+        }
+        break;
+      }
+
+      case 'phoenix_draught': {
         for (const c of next.characters) {
           c.injury = undefined;
+          c.needs.health = 100;
         }
-        message = '🔥 Phoenix Draught consumed! All injuries across the entire academy are instantly purged!';
+        message = '🔥 Phoenix Draught consumed! Every injury and curse across the academy is instantly healed!';
         break;
+      }
 
       default:
         message = `Drank ${potionId}! Energy and focus restored.`;
@@ -2911,8 +3163,22 @@ export class AnkicasterEngine {
     let targetLevel = 1;
     let cost = 250;
     let required = 50;
+    let spellName: string | undefined;
 
-    if (!isGrimoire) {
+    if (isGrimoire) {
+      const spDef = spellId ? SPELL_DEFINITIONS[spellId] : undefined;
+      if (!spDef) {
+        return { state, success: false, error: 'Unknown grimoire spell.' };
+      }
+      if (next.wizard.knownSpells.includes(spDef.id)) {
+        return { state, success: false, error: `${spDef.name} is already learned.` };
+      }
+      const tierReviews: Record<string, number> = { T1: 25, T2: 50, T3: 75, T4: 100, Cap: 150 };
+      required = tierReviews[spDef.tier] || 50;
+      const hasL3Library = next.rooms.some(r => r.defId === 'library' && r.state === 'built' && r.level >= 3);
+      cost = Math.max(10, Math.round(spDef.manaCost * (hasL3Library ? 0.9 : 1)));
+      spellName = spDef.name;
+    } else {
       const quote = wizardOrbQuote({
         foundingSchool: next.wizard.foundingSchool,
         levels: next.wizard.levels,
@@ -2965,7 +3231,9 @@ export class AnkicasterEngine {
       id: `study-${Date.now()}`,
       time: Date.now(),
       type: 'wizard',
-      text: `Pondering the Orb: Training towards ${school.toUpperCase()} Level ${targetLevel} (${required} reviews, cost ${cost === 0 ? 'free' : `${cost}m`}).`
+      text: isGrimoire
+        ? `Grimoire Study: Learning ${spellName} (${required} reviews, cost ${cost === 0 ? 'free' : `${cost}m`}).`
+        : `Pondering the Orb: Training towards ${school.toUpperCase()} Level ${targetLevel} (${required} reviews, cost ${cost === 0 ? 'free' : `${cost}m`}).`
     });
 
     return { state: next, success: true };
@@ -2983,68 +3251,288 @@ export class AnkicasterEngine {
     const spell = SPELL_DEFINITIONS[spellId];
     if (!spell) return { state, success: false, error: 'Unknown spell.' };
 
+    if (!next.wizard.knownSpells.includes(spellId)) {
+      return { state, success: false, error: `You have not learned ${spell.name} yet.` };
+    }
+
     if ((next.wizard.spellCooldowns[spellId] || 0) > 0) {
       return { state, success: false, error: `Spell on cooldown for ${next.wizard.spellCooldowns[spellId]} more reviews.` };
     }
 
-    if (next.mana < spell.manaCost) {
-      return { state, success: false, error: `Need ${spell.manaCost} Mana to cast ${spell.name}.` };
+    const hasL3Study = next.rooms.some(r => r.defId === 'wizard_study' && r.state === 'built' && r.level >= 3);
+    const manaCost = Math.max(1, Math.round(spell.manaCost * (hasL3Study ? 0.9 : 1)));
+
+    if (next.mana < manaCost) {
+      return { state, success: false, error: `Need ${manaCost} Mana to cast ${spell.name}.` };
     }
 
-    next.mana -= spell.manaCost;
+    // Validate transmute material availability BEFORE charging mana or setting cooldown
+    let transmuteSrc: string | undefined;
+    let transmuteDst: string | undefined;
+    if (spellId === 'transmute') {
+      const commonKeys = ['timber', 'stone', 'glass', 'cloth', 'provisions', 'greens', 'fish', 'nectar'] as const;
+      const bag = next.resources as unknown as Record<string, number>;
+      const sortedDesc = [...commonKeys].sort((a, b) => (bag[b] || 0) - (bag[a] || 0));
+      transmuteSrc = sortedDesc[0];
+      transmuteDst = sortedDesc[sortedDesc.length - 1];
+      if ((bag[transmuteSrc] || 0) < 60 || transmuteSrc === transmuteDst) {
+        return { state, success: false, error: 'Need at least 60 of a common material to cast Transmute.' };
+      }
+    }
+
+    next.mana -= manaCost;
     next.wizard.spellCooldowns[spellId] = spell.cooldownReviews;
+    if (!next.activeBuffs) next.activeBuffs = {};
 
     let notice = `${spell.name} cast! ${spell.effect}`;
 
     // Execute effect
     switch (spellId) {
-      case 'glow':
-      case 'dispel':
-        notice = `${spell.name} cast! Hazards dispelled.`;
-        break;
-      case 'beckon':
-        const loose = next.creatures.find(c => c.status === 'loose');
-        if (loose) recaptureCreature(next, loose, [], 'Beckon brought');
-        notice = 'Beckon cast! Escaped creature has returned home safely.';
-        break;
-      case 'rain_dance':
-      case 'verdant_surge':
-        next.resources.greens += 35;
-        next.resources.herbs += 20;
-        notice = `${spell.name} cast! Sacred plots flourish with bonus harvest.`;
-        break;
-      case 'mend':
-      case 'sunburst':
-        const injured = next.characters.find(c => c.injury);
-        if (injured && injured.injury) {
-          injured.injury.points += 40;
-          if (injured.injury.points >= injured.injury.required) injured.injury = undefined;
-          notice = `Mend cast! Healed injuries of ${injured.name}.`;
+      case 'glow': {
+        const target = next.rooms.find(r => r.hazard && (r.hazard.type === 'spill_of_night' || r.hazard.type === 'echo_loop'));
+        if (target) {
+          const floorY = target.y;
+          let count = 0;
+          for (const r of next.rooms) {
+            if (r.y === floorY && r.hazard && (r.hazard.type === 'spill_of_night' || r.hazard.type === 'echo_loop')) {
+              r.hazard = undefined;
+              count++;
+            }
+          }
+          notice = `Glow cast! Dispelled ${count} Spill of Night / Echo Loop hazard(s) on Floor ${floorY + 1}.`;
+        } else {
+          notice = 'Glow cast! Illuminated the halls (no Spill of Night or Echo Loop active).';
         }
         break;
-      case 'veil_stitch':
+      }
+      case 'dispel': {
+        const target = next.rooms.find(r => r.hazard && r.hazard.type !== 'breach');
+        if (target && target.hazard) {
+          const hName = target.hazard.name;
+          target.hazard = undefined;
+          notice = `Dispel cast! ${hName} cleared from ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}.`;
+        } else {
+          notice = 'Dispel cast! No non-breach hazards active.';
+        }
+        break;
+      }
+      case 'foresight': {
+        next.activeBuffs.foresightDays = 3;
+        next.activeBuffs.foresightSkips = (next.activeBuffs.foresightSkips || 0) + 1;
+        notice = "Foresight cast! Next 3 days' omens revealed and +1 event skip granted.";
+        break;
+      }
+      case 'rift_beacon': {
+        next.activeBuffs.riftBeaconActive = true;
+        notice = 'Rift Beacon lit! Next expedition gains +3 Rift Fortune and returns 25% sooner.';
+        break;
+      }
+      case 'starlit_conjunction': {
+        next.activeBuffs.starlitConjunctionBells = 50;
+        notice = 'Starlit Conjunction cast! All classroom essence yields x1.5 for 50 bells.';
+        break;
+      }
+      case 'beckon': {
+        const loose = next.creatures.find(c => c.status === 'loose');
+        if (loose) {
+          recaptureCreature(next, loose, [], 'Beckon brought');
+          notice = `Beckon cast! ${loose.nickname} has returned home safely.`;
+        } else {
+          notice = 'Beckon cast! (No loose creatures were wandering.)';
+        }
+        break;
+      }
+      case 'rain_dance': {
+        next.activeBuffs.rainDanceBells = 10;
+        notice = 'Rain Dance cast! All plots x1.5 output for 10 bells.';
+        break;
+      }
+      case 'clear_skies': {
+        let cleared = 0;
+        for (const r of next.rooms) {
+          if (r.hazard && (r.hazard.type === 'cold_snap' || r.hazard.type === 'hex_fog')) {
+            r.hazard = undefined;
+            cleared++;
+          }
+        }
+        notice = `Clear Skies cast! Dispelled ${cleared} Cold Snap / Hex Fog hazard(s).`;
+        break;
+      }
+      case 'wild_kinship': {
+        const waryList = next.creatures.filter(c => c.status === 'wary');
+        if (waryList.length > 0) {
+          const share = Math.max(1, Math.floor(50 / waryList.length));
+          let tamedCount = 0;
+          for (const w of waryList) {
+            w.tamingProgress += share;
+            const cDef = CREATURE_DEFINITIONS[w.defId];
+            if (cDef && w.tamingProgress >= cDef.tamingReviews) {
+              w.status = 'tamed';
+              tamedCount++;
+            }
+          }
+          notice = `Wild Kinship cast! +50 taming points split among ${waryList.length} wary creature(s)${tamedCount > 0 ? ` (${tamedCount} tamed!)` : ''}.`;
+        } else {
+          notice = 'Wild Kinship cast! (No wary creatures present.)';
+        }
+        break;
+      }
+      case 'verdant_surge': {
+        next.activeBuffs.verdantSurgeBells = 30;
+        notice = 'Verdant Surge cast! Food and Herbs output x2 for 30 bells.';
+        break;
+      }
+      case 'mend': {
+        const injured = next.characters.find(c => c.injury);
+        if (injured && injured.injury) {
+          injured.injury.points += 30;
+          if (injured.injury.points >= injured.injury.required) {
+            injured.injury = undefined;
+            injured.needs.health = 100;
+          }
+          notice = `Mend cast! +30 healing points to ${injured.name}.`;
+        } else {
+          notice = 'Mend cast! (All residents are healthy.)';
+        }
+        break;
+      }
+      case 'soothing_light': {
+        const builtFloors = [...new Set(next.rooms.filter(r => r.state === 'built').map(r => r.y))];
+        const targetFloor = builtFloors[0] ?? 0;
+        const floorRoomIds = new Set(next.rooms.filter(r => r.y === targetFloor).map(r => r.id));
+        const affected = next.characters.filter(c =>
+          (c.seatRoomId && floorRoomIds.has(c.seatRoomId)) ||
+          (c.workplaceRoomId && floorRoomIds.has(c.workplaceRoomId)) ||
+          (c.bedRoomId && floorRoomIds.has(c.bedRoomId))
+        );
+        const list = affected.length > 0 ? affected : next.characters;
+        for (const c of list) {
+          c.needs.composure = Math.min(100, c.needs.composure + 20);
+        }
+        notice = `Soothing Light cast! Composure +20 for ${list.length} resident(s) on Floor ${targetFloor + 1}.`;
+        break;
+      }
+      case 'mend_object': {
+        let repairedName: string | undefined;
+        for (const r of next.rooms) {
+          const dmg = r.furniture.find(f => f.damaged);
+          if (dmg) {
+            dmg.damaged = false;
+            repairedName = FURNITURE_DEFINITIONS[dmg.defId]?.name || dmg.defId;
+            break;
+          }
+        }
+        notice = repairedName
+          ? `Mend Object cast! Repaired damaged ${repairedName}.`
+          : 'Mend Object cast! (No damaged furniture found.)';
+        break;
+      }
+      case 'sunburst': {
+        let count = 0;
+        for (const c of next.characters) {
+          if (c.injury) {
+            c.injury.points += 60;
+            if (c.injury.points >= c.injury.required) {
+              c.injury = undefined;
+              c.needs.health = 100;
+            }
+            count++;
+          }
+        }
+        notice = `Sunburst cast! +60 healing points to ${count} injured character(s).`;
+        break;
+      }
+      case 'dawn_blessing': {
+        next.activeBuffs.dawnBlessingBells = 50;
+        let lifted = 0;
+        for (const c of next.characters) {
+          c.morale = Math.min(100, c.morale + 15);
+          if (c.injury?.type === 'hexed') {
+            c.injury = undefined;
+            c.needs.health = 100;
+            lifted++;
+          }
+        }
+        notice = `Dawn Blessing cast! Academy morale +15 for 50 bells${lifted > 0 ? ` and lifted ${lifted} Rift curse(s)` : ''}.`;
+        break;
+      }
+      case 'hush': {
+        for (const c of next.characters) {
+          c.needs.composure = Math.min(100, c.needs.composure + 5);
+        }
+        notice = 'Hush cast! Misbehavior calmed and Composure +5.';
+        break;
+      }
+      case 'ward_pulse': {
+        next.activeBuffs.wardPulseBells = 10;
+        notice = 'Ward Pulse cast! No hazards can emerge for 10 bells.';
+        break;
+      }
+      case 'banish': {
+        const breachRoom = next.rooms.find(r => r.hazard?.type === 'breach');
+        if (breachRoom) {
+          breachRoom.hazard = undefined;
+          notice = `Banish cast! Breach in ${ROOM_DEFINITIONS[breachRoom.defId]?.name || 'room'} resolved immediately.`;
+        } else {
+          notice = 'Banish cast! (No active breach found.)';
+        }
+        break;
+      }
+      case 'veil_stitch': {
         next.veil.strength = Math.min(100, next.veil.strength + 20);
         notice = 'Veil Stitch cast! Veil strength surged by +20%.';
         break;
-      case 'tidy_wind':
-        next.rooms.forEach(r => { r.cleanliness = 100; });
-        notice = 'Tidy Wind cast! Academy rooms restored to pristine cleanliness.';
+      }
+      case 'moonless_night': {
+        next.activeBuffs.moonlessNightBells = 50;
+        notice = 'Moonless Night cast! Hazards and misbehavior -60% for 50 bells.';
         break;
-      case 'quickening':
+      }
+      case 'tidy_wind': {
+        const built = next.rooms.filter(r => r.state === 'built');
+        const dirtiest = [...built].sort((a, b) => a.cleanliness - b.cleanliness)[0];
+        const floorY = dirtiest ? dirtiest.y : 0;
+        for (const r of next.rooms) {
+          if (r.y === floorY) r.cleanliness = 100;
+        }
+        notice = `Tidy Wind cast! Floor ${floorY + 1} restored to 100 cleanliness.`;
+        break;
+      }
+      case 'douse': {
+        const target = next.rooms.find(r => r.hazard) || next.rooms.find(r => r.state === 'built');
+        if (target) {
+          if (target.hazard) target.hazard = undefined;
+          next.activeBuffs.fireproofBells = Math.max(next.activeBuffs.fireproofBells || 0, 20);
+          next.activeBuffs.fireproofRoomId = target.id;
+          notice = `Douse cast! ${ROOM_DEFINITIONS[target.defId]?.name || 'Room'} fireproofed for 20 bells.`;
+        }
+        break;
+      }
+      case 'quickening': {
         const activeSite = next.rooms.find(r => r.state === 'site');
         if (activeSite) {
           activeSite.buildProgress += 25;
           if (activeSite.buildProgress >= activeSite.buildRequired) AnkicasterEngine.completeSite(next, activeSite);
           notice = `Quickening cast! +25 progress points granted to ${activeSite.defId}.`;
+        } else {
+          notice = 'Quickening cast! (No active construction site.)';
         }
         break;
-      case 'transmute':
-        if (next.resources.timber >= 30) {
-          next.resources.timber -= 30;
-          next.resources.stone += 30;
-          notice = 'Transmute cast! 30 Timber transmuted into 30 Stone.';
+      }
+      case 'transmute': {
+        if (transmuteSrc && transmuteDst) {
+          const bag = next.resources as unknown as Record<string, number>;
+          bag[transmuteSrc] -= 60;
+          bag[transmuteDst] = (bag[transmuteDst] || 0) + 50;
+          notice = `Transmute cast! 60 ${transmuteSrc} transmuted into 50 ${transmuteDst}.`;
         }
         break;
+      }
+      case 'philosophers_hour': {
+        next.activeBuffs.philosophersHourBrews = 3;
+        notice = "Philosopher's Hour cast! Next 3 brews complete instantly with x2 yield.";
+        break;
+      }
     }
 
     next.notices.push({
@@ -3068,27 +3556,46 @@ export class AnkicasterEngine {
     const next = structuredClone(state);
     const potion = next.potions.find(p => p.id === potionId);
     if (!potion) return { state, success: false, error: 'Potion recipe not found.' };
+    if (!potion.discovered) return { state, success: false, error: `${potion.name} recipe is not discovered yet.` };
 
-    const lab = next.rooms.find(r => r.defId === 'alchemy_lab' && r.state === 'built');
+    const lab = next.rooms.find(r => r.defId === 'alchemy_lab' && r.state === 'built' && !isRoomUnfinished(r));
+    if (!lab) {
+      return { state, success: false, error: 'Requires a built and furnished Alchemy Lab.' };
+    }
+
+    const bag = next.resources as unknown as Record<string, number>;
+    const missing = potion.ingredients.filter(ing => (bag[ing] || 0) < 1);
+    if (missing.length > 0) {
+      return { state, success: false, error: `Missing ingredients: ${missing.join(', ')}.` };
+    }
+
     const brewBonus = academyFurnitureEffect(next.rooms, 'brew_speed_pct', lab);
-    const alchemists = next.characters.filter(c => c.career === 'alchemist' && c.careerState === 'active' && (!lab || c.workplaceRoomId === lab.id));
+    const alchemists = next.characters.filter(c => c.career === 'alchemist' && c.careerState === 'active' && c.workplaceRoomId === lab.id);
     const alchMult = alchemists.length > 0
       ? Math.max(...alchemists.map(a => careerAffinityMultiplier(a.masteredSchools, 'alchemist', potion.school)))
       : 1;
     const baseManaCost = Math.max(10, Math.round(30 * Math.max(0.5, 1 - brewBonus / 100)));
-    const manaCost = Math.max(10, Math.round(baseManaCost / alchMult));
+    const hasPhilosophersHour = (next.activeBuffs?.philosophersHourBrews || 0) > 0;
+    const manaCost = hasPhilosophersHour ? 0 : Math.max(10, Math.round(baseManaCost / alchMult));
     if (next.mana < manaCost) {
       return { state, success: false, error: `Need ${manaCost} Mana for alchemical reagent catalyst.` };
     }
 
     next.mana -= manaCost;
-    next.resources.potions[potionId] = (next.resources.potions[potionId] || 0) + 1;
+    for (const ing of potion.ingredients) {
+      bag[ing] -= 1;
+    }
+    const yieldCount = hasPhilosophersHour ? 2 : 1;
+    if (hasPhilosophersHour && next.activeBuffs) {
+      next.activeBuffs.philosophersHourBrews = (next.activeBuffs.philosophersHourBrews || 1) - 1;
+    }
+    next.resources.potions[potionId] = (next.resources.potions[potionId] || 0) + yieldCount;
 
     next.notices.push({
       id: `brew-${Date.now()}`,
       time: Date.now(),
       type: 'alchemy',
-      text: `Brewed 1x ${potion.name}! (${potion.effect})`
+      text: `Brewed ${yieldCount}x ${potion.name}! (${potion.effect})`
     });
 
     return { state: next, success: true };
@@ -3165,9 +3672,9 @@ export class AnkicasterEngine {
         next.resources.glass += 10;
         message = 'Supply crate unpacked: +45 Timber, +30 Stone, +10 Glass!';
       } else if (card.name.includes('Astral')) {
-        next.resources.insight += 35;
-        next.mana += 150;
-        message = 'Astral Influx absorbed: +35 Insight, +150 Mana!';
+        next.resources.insight += 50;
+        next.resources.crystal += 2;
+        message = 'Astral Influx absorbed: +50 Insight, +2 Crystal!';
       } else if (card.name.includes('Dawn')) {
         next.resources.radiance += 30;
         const injured = next.characters.find(c => !!c.injury);
@@ -3407,8 +3914,9 @@ export class AnkicasterEngine {
         summary = 'Harmonic leyline pulse resonated with the Veil Dome (+20% Strength)!';
         break;
       case 'geyser_mana':
-        next.mana += 150;
-        summary = 'Condensed pure crystalline liquid mana (+150 Mana)!';
+        next.resources.insight += 25;
+        next.resources.crystal += 2;
+        summary = 'Condensed crystalline essence from the leyline spring (+25 Insight, +2 Crystal)!';
         break;
       case 'geyser_garden':
         next.resources.provisions += 30;
@@ -3557,8 +4065,9 @@ export class AnkicasterEngine {
         summary = 'Gathered fallen stardust nodules from the courtyard (+2 Starmetal)!';
         break;
       case 'starlight_mana':
-        next.mana += 120;
-        summary = 'Capacitor attuned to starlight pulse (+120 Mana)!';
+        next.resources.insight += 20;
+        next.resources.radiance += 20;
+        summary = 'Capacitor attuned to starlight pulse (+20 Insight, +20 Radiance)!';
         break;
       case 'starlight_picnic':
         next.characters.forEach(c => {
@@ -3568,8 +4077,9 @@ export class AnkicasterEngine {
         summary = 'Midnight meteor watching refreshed all students (+25 Rest & Morale)!';
         break;
       case 'grant_mana':
-        next.mana += 200;
-        summary = 'Received Arcanum endowment research fund (+200 Mana)!';
+        next.resources.insight += 40;
+        next.renown += 15;
+        summary = 'Received Arcanum research fellowship (+40 Insight, +15 Renown)!';
         break;
       case 'grant_mats':
         next.resources.timber += 40;
@@ -3623,8 +4133,9 @@ export class AnkicasterEngine {
         summary = 'Charted celestial migratory path in the library (+15 Insight)!';
         break;
       case 'bequest_mana':
-        next.mana += 150;
-        summary = 'Alumni scholarship bequest deposited (+150 Mana)!';
+        next.resources.insight += 30;
+        next.renown += 15;
+        summary = 'Alumni scholarship endowment deposited (+30 Insight, +15 Renown)!';
         break;
       case 'bequest_books':
         next.resources.insight += 25;

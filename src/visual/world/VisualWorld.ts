@@ -924,7 +924,7 @@ export class VisualWorld {
           } else {
             drawCreature(this.agentsGraphics, cAgent.defId, {
               x: cAgent.x,
-              y: cAgent.y,
+              y: cAgent.y + (cAgent.drawOffsetY ?? 0),
               facing: cAgent.facing,
               anim: cAgent.anim,
               frame: cAgent.frame,

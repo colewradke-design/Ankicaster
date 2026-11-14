@@ -336,7 +336,7 @@ test('roaming companions take 0 pen slots, walk floors/stairs/grounds via NavGra
     if (a.anim === 'sleep') napped = true;
   }
   assert.ok(climbedFloors, 'tamed roaming companion navigates across floors via NavGraph');
-  assert.ok(napped || cc.agents.get(1)!.roamPath.length >= 0, 'roamer traverses and naps in occupied rooms');
+  assert.ok(napped, 'roamer traverses and naps in occupied rooms');
 });
 
 test('Bestiary discovery persists across releaseCreature and startNextTerm and hides undiscovered details', () => {

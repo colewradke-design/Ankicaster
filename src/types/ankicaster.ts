@@ -648,4 +648,30 @@ export interface FullGameState {
   debugExpeditionIds?: number[];
   /** The debug panel locked the Rift Gate to preview the dormant arch. */
   debugRiftLock?: boolean;
+  /** Draft reroll tokens granted by Starlight Ink. */
+  draftRerollTokens?: number;
+  /** Active timed/charge buffs from potions and spells. */
+  activeBuffs?: {
+    growthElixirBells?: number;
+    growthElixirRoomId?: number;
+    cleanImmuneBells?: number;
+    cleanImmuneRoomId?: number;
+    fireproofBells?: number;
+    fireproofRoomId?: number;
+    fellowshipBells?: number;
+    lureMuskPending?: boolean;
+    wardwaterFloors?: number[];
+    riftElixirCharges?: number;
+    courageDraughtCharges?: number;
+    starlitConjunctionBells?: number;
+    rainDanceBells?: number;
+    verdantSurgeBells?: number;
+    dawnBlessingBells?: number;
+    wardPulseBells?: number;
+    moonlessNightBells?: number;
+    philosophersHourBrews?: number;
+    riftBeaconActive?: boolean;
+    foresightDays?: number;
+    foresightSkips?: number;
+  };
 }

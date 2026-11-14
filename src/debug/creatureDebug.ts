@@ -10,7 +10,7 @@ import type { Character, CreatureInstance, FullGameState, HabitatType, PlacedRoo
 import { AnkicasterEngine } from '../utils/engine';
 import { findAutoPlacement, getGridSize, validatePlacement } from '../utils/placement';
 import { allFurnitureIds, fillRequiredFixtures } from '../utils/requiredFurniture';
-import { ONE_BY_ONE_PEN_CAP, syncDiscoveredCreatures } from '../utils/creatures';
+import { ONE_BY_ONE_PEN_CAP, penCreatureCapacity, syncDiscoveredCreatures } from '../utils/creatures';
 
 export type DebugCreatureStatus = CreatureInstance['status'] | 'unhomed';
 
@@ -299,9 +299,10 @@ export function fillPensPastCap(state: FullGameState): DebugResult {
   add('egg', 1, 40, 'duskmouse');
   add('loose', 1, 100, 'duskmouse');
   add('tamed', 34, 100, 'bramblefox');
+  const cap = room ? penCreatureCapacity(room) : 2;
   return {
     state: next,
-    message: `Filled the Gloom Hutch past ${ONE_BY_ONE_PEN_CAP} and the map past 40. Eggs and loose stay visible; the rest show +N.`
+    message: `Filled the Gloom Hutch past ${cap} and the map past 40. Eggs and loose stay visible; the rest show +N.`
   };
 }
 

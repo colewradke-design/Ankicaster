@@ -131,7 +131,7 @@ const FOUNDATION_EXTRAS: DraftCard[] = [
 
 /** Non-room cards kept from the old school lists. */
 const MAGIC_EXTRAS: DraftCard[] = [
-  { id: 'extra-astral', deck: 'magic', rarity: 'rare', name: 'Astral Influx Boon', type: 'boon', school: 'arcane', description: 'Instant burst of knowledge: +35 Insight and +150 Mana.' },
+  { id: 'extra-astral', deck: 'magic', rarity: 'rare', name: 'Astral Influx Boon', type: 'boon', school: 'arcane', description: 'Instant burst of knowledge: +50 Insight and +2 Crystal.' },
   { id: 'extra-bramble', deck: 'magic', rarity: 'rare', name: 'Bramblefox Lure', type: 'lure', targetId: 'bramblefox', school: 'nature', description: 'Attracts an inquisitive Azure Bramblefox to your academy meadow habitat.' },
   { id: 'extra-seed', deck: 'magic', rarity: 'uncommon', name: 'Luminescent Seed Packet', type: 'seed', targetId: 'moonglow_fern', school: 'nature', description: 'Unlock Moonglow Fern crop in sacred plots.' },
   { id: 'extra-dawn', deck: 'magic', rarity: 'rare', name: 'Dawn Blessing Boon', type: 'boon', school: 'light', description: 'Radiant surge: +30 Radiance and fully cures one injured resident.' },

@@ -3106,7 +3106,7 @@ export const SCHOOL_EVENTS: SchoolEvent[] = [
     description: 'A latent spring of crystalline mana erupts gently beneath the outer courtyard flagstones.',
     options: [
       { text: 'Channel harmonic pulse into Veil Dome', reward: '+20% Veil Strength', action: 'geyser_veil' },
-      { text: 'Condense into pure liquid mana', reward: '+150 Mana', action: 'geyser_mana' },
+      { text: 'Condense into crystalline essence', reward: '+25 Insight & +2 Crystal', action: 'geyser_mana' },
       { text: 'Irrigate the herb and crop gardens', reward: '+30 Provisions & +15 Herbs', action: 'geyser_garden' }
     ]
   },
@@ -3196,7 +3196,7 @@ export const SCHOOL_EVENTS: SchoolEvent[] = [
     description: 'Luminous meteors leave sparkling silver trails that settle over the academy rooftops.',
     options: [
       { text: 'Scour grounds for starlight ore', reward: '+2 Starmetal', action: 'collect_starmetal' },
-      { text: 'Attune mana capacitor plates', reward: '+120 Mana', action: 'starlight_mana' },
+      { text: 'Attune starlight capacitor plates', reward: '+20 Insight & +20 Radiance', action: 'starlight_mana' },
       { text: 'Courtyard midnight picnic', reward: 'All students +25 Morale & Rest', action: 'starlight_picnic' }
     ]
   },
@@ -3205,7 +3205,7 @@ export const SCHOOL_EVENTS: SchoolEvent[] = [
     name: 'Arcanum Academic Endowment',
     description: 'The High Council of Sorcery reviews your curriculum and bestows an academic grant.',
     options: [
-      { text: 'Accept unrestricted mana research grant', reward: '+200 Mana', action: 'grant_mana' },
+      { text: 'Accept unrestricted research fellowship', reward: '+40 Insight & +15 Renown', action: 'grant_mana' },
       { text: 'Accept building materials shipment', reward: '+40 Timber & +40 Stone', action: 'grant_mats' },
       { text: 'Accept rare laboratory curios', reward: '+10 Reagents & +10 Insight', action: 'grant_curios' }
     ]
@@ -3235,7 +3235,7 @@ export const SCHOOL_EVENTS: SchoolEvent[] = [
     name: 'A Graduate’s Gratitude',
     description: 'An alumnus now serving as Court Astrologer sends an inscribed chest back to their alma mater.',
     options: [
-      { text: 'Accept endowment for scholarship', reward: '+150 Mana', action: 'bequest_mana' },
+      { text: 'Accept endowment for scholarship', reward: '+30 Insight & +15 Renown', action: 'bequest_mana' },
       { text: 'Unpack donated rare books and charts', reward: '+25 Insight', action: 'bequest_books' },
       { text: 'Display royal recognition plaque', reward: '+15 Renown', action: 'bequest_plaque' }
     ]

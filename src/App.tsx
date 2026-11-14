@@ -106,6 +106,10 @@ export default function App() {
 
   // Hydration flag: in addon mode, do NOT auto-save until saved game loads (or null is sent)
   const [hydrated, setHydrated] = useState(!isAddonMode);
+  const hydratedRef = useRef(hydrated);
+  useEffect(() => {
+    hydratedRef.current = hydrated;
+  }, [hydrated]);
 
   // Once hydrated (or immediately in standalone browser mode), check if appearance is missing
   useEffect(() => {
@@ -362,6 +366,7 @@ export default function App() {
           };
         });
       }
+      hydratedRef.current = true;
       setHydrated(true);
     };
 
@@ -371,7 +376,7 @@ export default function App() {
       setState(current => {
         const next = AnkicasterEngine.loadCardSnapshot(current, snapshot);
         // Persist immediately in addon mode if hydrated
-        if (isAddonMode && hydrated) {
+        if (isAddonMode && hydratedRef.current) {
           waitForPycmd().then(hasPycmd => {
             if (hasPycmd && typeof (window as any).pycmd === 'function') {
               try {

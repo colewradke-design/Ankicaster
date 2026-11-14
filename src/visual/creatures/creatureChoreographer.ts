@@ -24,6 +24,7 @@ import {
   ONE_BY_ONE_PEN_CAP,
   LARGE_PEN_CAP,
   HABITAT_TO_ROOM_DEF,
+  penAcceptedHabitats,
   penCreatureCapacity,
   resolveAllCreatureRooms,
   isRoamingCompanion
@@ -56,8 +57,10 @@ export interface CreatureVisualAgent {
   origin: CreatureOrigin;
   roaming: boolean;
   roomId?: number;
+  bay: number;
   x: number;
   y: number;
+  drawOffsetY?: number;
   anchorX: number;
   facing: 'L' | 'R';
   anim: CreatureAnim;
@@ -81,6 +84,8 @@ export interface CreatureVisualAgent {
   roamPath: NavNode[];
   roamPathIdx: number;
   roamNapTimerMs: number;
+  scurryRoamTimerMs?: number;
+  scurryRoamPaused?: boolean;
   /** Optional loose wandering switch timer. */
   looseNextSwitchMs: number;
   /** Real flight phases for fly / glide species (takeoff -> cruise -> land -> perch). */
@@ -324,7 +329,12 @@ export class CreatureChoreographer {
       const roaming = !!resolved?.roaming && isRoamingCompanion(c);
       const bay = resolved?.subBayIndex ?? 0;
 
-      if (room && !unhomed && !roaming && c.status !== 'egg') {
+      if (c.status === 'egg') {
+        visible.push({ creature: c, room, unhomed, roaming, bay });
+        continue;
+      }
+
+      if (room && !unhomed && !roaming) {
         const cap = penCreatureCapacity(room);
         const already = penVisibleCount.get(room.id) ?? 0;
         if (already >= cap) {
@@ -349,7 +359,13 @@ export class CreatureChoreographer {
       const c = item.creature;
       activeIds.add(c.id);
       const def = CREATURE_DEFINITIONS[c.defId];
-      const primaryHabitat: HabitatType = def?.habitats?.[0] ?? 'meadow';
+      const roomAccepted = item.room
+        ? (item.room.defId === 'menagerie' && item.room.settings?.modules?.[item.bay]
+            ? [item.room.settings.modules[item.bay] as HabitatType]
+            : penAcceptedHabitats(item.room.defId))
+        : [];
+      const primaryHabitat: HabitatType =
+        def?.habitats?.find(h => roomAccepted.includes(h)) ?? def?.habitats?.[0] ?? 'meadow';
       const movement: CreatureMovement = def?.movement ?? 'trot';
       const origin: CreatureOrigin = def?.origin ?? 'egg';
       const prevStatus = this.prevStatuses.get(c.id);
@@ -400,13 +416,13 @@ export class CreatureChoreographer {
         } else if (item.room) {
           const pen = getPenRect(item.room, this.groundY, primaryHabitat, item.bay);
           const span = Math.max(4, pen.right - pen.left);
-          if (c.status === 'wary') {
-            sx = tx = pen.right - Math.min(span * 0.25, 10 + hashSeed(c.id, 3) * 8);
-            sy = ty = pen.isWater ? (pen.topY + pen.floorY) / 2 : pen.floorY;
-          } else if ((movement === 'fly' || movement === 'glide') && pen.perches && pen.perches.length > 0) {
+          if ((movement === 'fly' || movement === 'glide') && pen.perches && pen.perches.length > 0) {
             const bar = pen.perches[Math.floor(hashSeed(c.id, 13) * pen.perches.length)];
             sx = tx = bar.x;
             sy = ty = bar.y;
+          } else if (c.status === 'wary' && movement !== 'rooted') {
+            sx = tx = pen.right - Math.min(span * 0.25, 10 + hashSeed(c.id, 3) * 8);
+            sy = ty = pen.isWater ? (pen.topY + pen.floorY) / 2 : pen.floorY;
           } else if (movement === 'rooted') {
             sx = tx = pen.left + span * (0.32 + 0.36 * hashSeed(c.id, 4));
             sy = ty = pen.isWater ? (pen.topY + pen.floorY) / 2 : pen.floorY;
@@ -417,7 +433,7 @@ export class CreatureChoreographer {
         }
         const isFlyer = movement === 'fly' || movement === 'glide';
         const spawnPerchY =
-          isFlyer && item.room && !item.unhomed && !item.roaming && c.status !== 'wary'
+          isFlyer && item.room && !item.unhomed && !item.roaming
             ? (() => {
                 const pen = getPenRect(item.room, this.groundY, primaryHabitat, item.bay);
                 return pen.perches && pen.perches.length > 0 ? sy : undefined;
@@ -434,8 +450,10 @@ export class CreatureChoreographer {
           origin,
           roaming: item.roaming,
           roomId: item.room?.id,
+          bay: item.bay,
           x: sx,
           y: sy,
+          drawOffsetY: 0,
           anchorX: sx,
           facing: hashSeed(c.id, 5) > 0.5 ? 'R' : 'L',
           anim: 'idle',
@@ -470,6 +488,7 @@ export class CreatureChoreographer {
         existing.origin = origin;
         existing.roaming = item.roaming;
         existing.roomId = item.room?.id;
+        existing.bay = item.bay;
         existing.unhomed = item.unhomed;
         existing.tamingProgress = c.tamingProgress ?? 0;
         existing.bondLevel = c.bondLevel ?? 1;
@@ -586,6 +605,7 @@ export class CreatureChoreographer {
       if (reduceMotion) {
         agent.anim = 'idle';
         agent.frame = 0;
+        agent.drawOffsetY = 0;
         if (agent.returnPath.length > 0) {
           const end = agent.returnPath[agent.returnPath.length - 1];
           agent.x = end.x;
@@ -600,7 +620,7 @@ export class CreatureChoreographer {
         if (agent.flightMode && agent.flightMode !== 'perch') {
           const r = agent.roomId !== undefined ? rooms.find(rm => rm.id === agent.roomId) : undefined;
           if (r) {
-            const pen = getPenRect(r, this.groundY, agent.habitat);
+            const pen = getPenRect(r, this.groundY, agent.habitat, agent.bay);
             if (pen.perches && pen.perches.length > 0) {
               const bar = pen.perches.reduce((best, b) => (Math.abs(b.x - agent.x) < Math.abs(best.x - agent.x) ? b : best), pen.perches[0]);
               agent.y = bar.y;
@@ -617,11 +637,13 @@ export class CreatureChoreographer {
       if (agent.status === 'egg') {
         agent.anim = 'idle';
         agent.frame = Math.floor(this.clockMs / 250) % 4;
+        agent.drawOffsetY = 0;
         continue;
       }
 
       // 1. Returning home from Loose state
       if (agent.returnPath.length > 0 && agent.returnPathIdx < agent.returnPath.length) {
+        agent.drawOffsetY = 0;
         const wp = agent.returnPath[agent.returnPathIdx];
         const dx = wp.x - agent.x;
         const dy = wp.y - agent.y;
@@ -650,11 +672,13 @@ export class CreatureChoreographer {
       if (agent.unhomed) {
         agent.anim = 'idle';
         agent.frame = Math.floor(this.clockMs / 350) % 4;
+        agent.drawOffsetY = 0;
         continue;
       }
 
       // 3. Loose creatures wander across reachable world inside strict bounds
       if (agent.status === 'loose') {
+        agent.drawOffsetY = 0;
         this.tickLooseCreature(agent, gap, topBound);
         continue;
       }
@@ -666,60 +690,28 @@ export class CreatureChoreographer {
       }
 
       // 5. Pen behaviour (per-species movement)
+      agent.drawOffsetY = 0;
       const room = agent.roomId !== undefined ? rooms.find(r => r.id === agent.roomId) : undefined;
       if (!room) continue;
-      const pen = getPenRect(room, this.groundY, agent.habitat, Math.floor(hashSeed(agent.creatureId, 9) * 3));
+      const pen = getPenRect(room, this.groundY, agent.habitat, agent.bay);
 
-      const tamerAgent = agent.tamerId !== undefined && agent.tamerId !== null ? charAgents?.get(`char-${agent.tamerId}`) : undefined;
+      const tamerAgent = agent.tamerId === 0
+        ? charAgents?.get('wizard')
+        : agent.tamerId !== undefined && agent.tamerId !== null
+          ? charAgents?.get(`char-${agent.tamerId}`)
+          : undefined;
       const tamerPresent = !!(tamerAgent && tamerAgent.currentRoomId === room.id);
 
+      let biasX: number | undefined;
       if (agent.status === 'wary') {
-        const backX = pen.right - Math.min(10, (pen.right - pen.left) * 0.25);
-        agent.targetX = backX;
-        agent.facing = 'L';
-        const dx = agent.targetX - agent.x;
-        if (Math.abs(dx) > 1.5) {
-          agent.x += Math.sign(dx) * Math.min(18 * (gap / 1000), Math.abs(dx));
-          agent.anim = 'move';
-        } else {
-          agent.anim = 'idle';
-        }
-        agent.y = pen.isWater ? (pen.topY + pen.floorY) / 2 + Math.sin(agent.phase + this.clockMs / 500) * 1.5 : pen.floorY;
-        agent.frame = Math.floor(this.clockMs / 240) % 4;
-        continue;
+        biasX = pen.right - Math.min(10, (pen.right - pen.left) * 0.25);
+      } else if (agent.hungry) {
+        biasX = pen.left + Math.min(14, (pen.right - pen.left) * 0.28);
+      } else if (tamerPresent && tamerAgent) {
+        biasX = Math.max(pen.left, Math.min(pen.right, tamerAgent.x));
       }
 
-      if (agent.hungry) {
-        const frontX = pen.left + Math.min(14, (pen.right - pen.left) * 0.28);
-        const dx = frontX - agent.x;
-        if (Math.abs(dx) > 2) {
-          agent.facing = dx > 0 ? 'R' : 'L';
-          agent.x += Math.sign(dx) * Math.min(20 * (gap / 1000), Math.abs(dx));
-          agent.anim = 'move';
-        } else {
-          agent.anim = 'idle';
-        }
-        agent.y = pen.isWater ? (pen.topY + pen.floorY) / 2 : pen.floorY;
-        agent.frame = Math.floor(this.clockMs / 250) % 4;
-        continue;
-      }
-
-      if (tamerPresent && tamerAgent) {
-        const approachX = Math.max(pen.left, Math.min(pen.right, tamerAgent.x));
-        const dx = approachX - agent.x;
-        if (Math.abs(dx) > 4) {
-          agent.facing = dx > 0 ? 'R' : 'L';
-          agent.x += Math.sign(dx) * Math.min(24 * (gap / 1000), Math.abs(dx));
-          agent.anim = 'move';
-        } else {
-          agent.anim = 'idle';
-        }
-        agent.y = pen.isWater ? (pen.topY + pen.floorY) / 2 : pen.floorY;
-        agent.frame = Math.floor(this.clockMs / 200) % 4;
-        continue;
-      }
-
-      this.tickMovementBehavior(agent, pen, gap);
+      this.tickMovementBehavior(agent, pen, gap, biasX);
     }
   }
 
@@ -735,6 +727,7 @@ export class CreatureChoreographer {
       // Hungry companion lingers near entrance hall or refectory
       agent.anim = 'idle';
       agent.frame = Math.floor(this.clockMs / 260) % 4;
+      agent.drawOffsetY = 0;
       if (agent.roamPath.length === 0) {
         const ref = state.rooms.find(r => r.state === 'built' && (r.defId === 'refectory' || r.defId === 'entrance_hall'));
         if (ref) agent.roamPath = this.computeReturnPath(agent.x, agent.y, ref);
@@ -750,6 +743,7 @@ export class CreatureChoreographer {
       agent.roamNapTimerMs -= gapMs;
       agent.anim = 'sleep';
       agent.frame = Math.floor(this.clockMs / 400) % 2;
+      agent.drawOffsetY = 0;
       return;
     }
 
@@ -761,6 +755,7 @@ export class CreatureChoreographer {
     agent.stateTimerMs -= gapMs;
     agent.anim = 'idle';
     agent.frame = Math.floor(this.clockMs / 300) % 4;
+    agent.drawOffsetY = 0;
     if (agent.stateTimerMs > 0) return;
 
     // Pick next roaming target across built castle rooms & grounds via NavGraph
@@ -770,14 +765,18 @@ export class CreatureChoreographer {
       return;
     }
 
-    const tamerAgent = agent.tamerId !== undefined && agent.tamerId !== null ? charAgents?.get(`char-${agent.tamerId}`) : undefined;
+    const tamerAgent = agent.tamerId === 0
+      ? charAgents?.get('wizard')
+      : agent.tamerId !== undefined && agent.tamerId !== null
+        ? charAgents?.get(`char-${agent.tamerId}`)
+        : undefined;
     const seed = Math.floor(this.clockMs / 400) + agent.creatureId * 13;
     const rPick = hashSeed(agent.creatureId, seed);
 
     let destNode: NavNode | undefined;
 
-    // Sometimes follow tamer to their current room
-    if (tamerAgent?.currentRoomId && rPick < 0.4) {
+    // Follow tamer to their current room most of the time when tamer is on the map
+    if (tamerAgent?.currentRoomId && rPick < 0.68) {
       const tamerNodes = Array.from(this.navGraph.nodes.values()).filter(n => n.roomId === tamerAgent.currentRoomId);
       if (tamerNodes.length > 0) {
         destNode = tamerNodes[Math.floor(hashSeed(agent.creatureId, seed + 1) * tamerNodes.length)];
@@ -797,7 +796,7 @@ export class CreatureChoreographer {
 
       const candidates = Array.from(this.navGraph.nodes.values()).filter(n => n.id !== startNode.id);
       const preferred = candidates.filter(n => n.roomId !== undefined && occupiedRoomIds.has(n.roomId));
-      const pool = preferred.length > 0 && rPick < 0.72 ? preferred : candidates;
+      const pool = preferred.length > 0 && rPick < 0.85 ? preferred : candidates;
       if (pool.length > 0) {
         destNode = pool[Math.floor(hashSeed(agent.creatureId, seed + 2) * pool.length)];
       }
@@ -820,12 +819,40 @@ export class CreatureChoreographer {
     const dx = wp.x - agent.x;
     const dy = wp.y - agent.y;
     const dist = Math.hypot(dx, dy);
-    const baseSpeed = agent.movement === 'scurry' ? 42 : agent.movement === 'hop' ? 28 : agent.movement === 'hover' ? 24 : 26;
+
+    if (agent.movement === 'scurry') {
+      if (agent.scurryRoamTimerMs === undefined) {
+        agent.scurryRoamPaused = false;
+        agent.scurryRoamTimerMs = 600;
+      }
+      agent.scurryRoamTimerMs -= gapMs;
+      if (agent.scurryRoamPaused) {
+        agent.anim = 'idle';
+        agent.frame = Math.floor(this.clockMs / 360) % 4;
+        agent.drawOffsetY = 0;
+        if (agent.scurryRoamTimerMs <= 0) {
+          agent.scurryRoamPaused = false;
+          agent.scurryRoamTimerMs = 550 + hashSeed(agent.creatureId, Math.floor(this.clockMs / 200)) * 350;
+        }
+        return;
+      }
+      if (agent.scurryRoamTimerMs <= 0) {
+        agent.scurryRoamPaused = true;
+        agent.scurryRoamTimerMs = 400 + hashSeed(agent.creatureId, Math.floor(this.clockMs / 200)) * 400;
+        agent.anim = 'idle';
+        agent.frame = Math.floor(this.clockMs / 360) % 4;
+        agent.drawOffsetY = 0;
+        return;
+      }
+    }
+
+    const baseSpeed = agent.movement === 'scurry' ? 50 : agent.movement === 'hop' ? 28 : agent.movement === 'hover' ? 24 : 26;
     const speed = baseSpeed * dt;
 
     if (dist <= 3) {
       agent.x = wp.x;
       agent.y = wp.y;
+      agent.drawOffsetY = 0;
       agent.roamPathIdx++;
       if (agent.roamPathIdx >= agent.roamPath.length) {
         agent.roamPath = [];
@@ -845,18 +872,24 @@ export class CreatureChoreographer {
 
     if (Math.abs(dx) > 0.4) agent.facing = dx > 0 ? 'R' : 'L';
     agent.x += (dx / dist) * Math.min(speed, dist);
-    const hopOffset = agent.movement === 'hop' && Math.abs(dy) < 2 ? -Math.abs(Math.sin(this.clockMs / 140)) * 4.5 : 0;
-    const hoverOffset = agent.movement === 'hover' && Math.abs(dy) < 2 ? -5 - Math.sin(this.clockMs / 250) * 1.5 : 0;
-    agent.y += (dy / dist) * Math.min(speed, dist) + hopOffset * 0 + hoverOffset * 0;
+    agent.y += (dy / dist) * Math.min(speed, dist);
+    const onStairs = Math.abs(dy) >= 2 || wp.kind === 'stair';
+    if (!onStairs && agent.movement === 'hop') {
+      agent.drawOffsetY = -Math.abs(Math.sin(this.clockMs / 140)) * 4.5;
+    } else if (!onStairs && agent.movement === 'hover') {
+      agent.drawOffsetY = -5 - Math.sin(this.clockMs / 250) * 1.5;
+    } else {
+      agent.drawOffsetY = 0;
+    }
     agent.anim = 'move';
-    agent.frame = Math.floor(this.clockMs / (agent.movement === 'scurry' ? 100 : 160)) % 6;
+    agent.frame = Math.floor(this.clockMs / (agent.movement === 'scurry' ? 90 : 160)) % 6;
   }
 
   /**
    * 11 distinct per-species movements:
    * scurry, hop, trot, waddle, slither, fly, glide, swim, hover, rooted, crawl
    */
-  private tickMovementBehavior(agent: CreatureVisualAgent, pen: PenRect, gapMs: number): void {
+  private tickMovementBehavior(agent: CreatureVisualAgent, pen: PenRect, gapMs: number, biasX?: number): void {
     const dt = gapMs / 1000;
     const cx = (pen.left + pen.right) / 2;
     const spanX = Math.max(8, pen.right - pen.left);
@@ -864,9 +897,12 @@ export class CreatureChoreographer {
 
     switch (agent.movement) {
       case 'rooted': {
-        // Stays planted in soil/spot: total displacement from home anchor <= 2px
+        // Stays planted in soil/spot: total displacement from home anchor <= 2px in every state
         const anchor = Math.max(pen.left + 2, Math.min(pen.right - 2, agent.anchorX || cx));
         agent.anchorX = anchor;
+        if (biasX !== undefined && Math.abs(biasX - anchor) > 1) {
+          agent.facing = biasX >= anchor ? 'R' : 'L';
+        }
         agent.x = anchor + Math.sin(this.clockMs / 900 + agent.phase) * 0.8;
         agent.y = pen.floorY;
         agent.anim = 'idle';
@@ -876,7 +912,9 @@ export class CreatureChoreographer {
 
       case 'swim': {
         agent.phase += dt * 1.45;
-        const nextX = cx + Math.sin(agent.phase) * rx;
+        const swimCx = biasX !== undefined ? Math.max(pen.left + 4, Math.min(pen.right - 4, biasX)) : cx;
+        const swimRx = biasX !== undefined ? Math.min(rx, 8) : rx;
+        const nextX = swimCx + Math.sin(agent.phase) * swimRx;
         const midY = (pen.topY + pen.floorY) / 2;
         const ry = Math.max(2, (pen.floorY - pen.topY) * 0.36);
         const nextY = midY + Math.sin(agent.phase * 2) * ry;
@@ -890,8 +928,10 @@ export class CreatureChoreographer {
 
       case 'hover': {
         agent.phase += dt * 1.65;
+        const hoverCx = biasX !== undefined ? Math.max(pen.left + 3, Math.min(pen.right - 3, biasX)) : cx;
+        const hoverRx = biasX !== undefined ? Math.min(rx, 6) : rx;
         const hoverY = pen.floorY - 9 - Math.sin(agent.phase * 1.4) * 3.5;
-        const orbitX = cx + Math.cos(agent.phase * 0.75) * rx;
+        const orbitX = hoverCx + Math.cos(agent.phase * 0.75) * hoverRx;
         if (Math.abs(orbitX - agent.x) > 0.05) agent.facing = orbitX > agent.x ? 'R' : 'L';
         agent.x = Math.max(pen.left, Math.min(pen.right, orbitX));
         agent.y = Math.max(pen.topY + 4, Math.min(pen.floorY - 2, hoverY));
@@ -1119,9 +1159,15 @@ export class CreatureChoreographer {
           agent.y = pen.floorY;
           agent.anim = 'idle';
           agent.frame = Math.floor(this.clockMs / 360) % 4;
-          if (agent.stateTimerMs <= 0) {
+          if (biasX !== undefined && Math.abs(biasX - agent.x) > 3) {
             agent.resting = false;
-            agent.targetX = agent.x < cx ? pen.right - 2 : pen.left + 2;
+            agent.targetX = Math.max(pen.left, Math.min(pen.right, biasX));
+            agent.stateTimerMs = 1100;
+          } else if (agent.stateTimerMs <= 0) {
+            agent.resting = false;
+            agent.targetX = biasX !== undefined
+              ? Math.max(pen.left, Math.min(pen.right, biasX))
+              : (agent.x < cx ? pen.right - 2 : pen.left + 2);
             agent.stateTimerMs = 1100;
           }
         } else {
@@ -1149,15 +1195,24 @@ export class CreatureChoreographer {
           agent.y = pen.floorY;
           agent.anim = 'idle';
           agent.frame = Math.floor(this.clockMs / 320) % 4;
-          if (agent.stateTimerMs <= 0) {
+          const needMoveToBias = biasX !== undefined && Math.abs(biasX - agent.x) > 4;
+          if (needMoveToBias || agent.stateTimerMs <= 0) {
+            if (biasX !== undefined && !needMoveToBias) {
+              agent.facing = agent.status === 'wary' ? 'L' : biasX >= agent.x ? 'R' : 'L';
+              agent.stateTimerMs = 800;
+              break;
+            }
             agent.resting = false;
             agent.hopProgress = 0;
             agent.hopStartX = agent.x;
             const hopSpan = Math.min(18, spanX * 0.35);
-            const goRight = agent.x < pen.left + 6 ? true : agent.x > pen.right - 6 ? false : hashSeed(agent.creatureId, Math.floor(this.clockMs / 300)) > 0.5;
+            const goRight = biasX !== undefined
+              ? biasX > agent.x
+              : (agent.x < pen.left + 6 ? true : agent.x > pen.right - 6 ? false : hashSeed(agent.creatureId, Math.floor(this.clockMs / 300)) > 0.5);
             agent.hopDir = goRight ? 1 : -1;
             agent.facing = goRight ? 'R' : 'L';
-            agent.targetX = Math.max(pen.left, Math.min(pen.right, agent.x + agent.hopDir * hopSpan));
+            const step = biasX !== undefined ? Math.min(hopSpan, Math.abs(biasX - agent.x)) : hopSpan;
+            agent.targetX = Math.max(pen.left, Math.min(pen.right, agent.x + agent.hopDir * step));
           }
         } else {
           agent.hopProgress = Math.min(1, (agent.hopProgress ?? 0) + dt / 0.42);
@@ -1178,6 +1233,22 @@ export class CreatureChoreographer {
 
       case 'slither': {
         // Smooth low floor wave patrol
+        if (biasX !== undefined) {
+          const clampedBias = Math.max(pen.left, Math.min(pen.right, biasX));
+          const dx = clampedBias - agent.x;
+          if (Math.abs(dx) > 2) {
+            agent.facing = dx >= 0 ? 'R' : 'L';
+            agent.x = Math.max(pen.left, Math.min(pen.right, agent.x + Math.sign(dx) * Math.min(18 * dt, Math.abs(dx))));
+            agent.anim = 'move';
+            agent.frame = Math.floor(this.clockMs / 140) % 6;
+          } else {
+            agent.facing = agent.status === 'wary' ? 'L' : agent.facing;
+            agent.anim = 'idle';
+            agent.frame = Math.floor(this.clockMs / 260) % 4;
+          }
+          agent.y = pen.floorY;
+          break;
+        }
         if (Math.abs(agent.targetX - agent.x) <= 2 || agent.targetX < pen.left || agent.targetX > pen.right) {
           agent.targetX = agent.x >= cx ? pen.left + 3 : pen.right - 3;
         }
@@ -1198,13 +1269,22 @@ export class CreatureChoreographer {
           agent.y = pen.floorY;
           agent.anim = agent.movement === 'waddle' && agent.stateTimerMs > 1000 ? 'eat' : 'idle';
           agent.frame = Math.floor(this.clockMs / 340) % 2;
-          if (agent.stateTimerMs <= 0) {
+          if (biasX !== undefined && Math.abs(biasX - agent.x) > 3) {
+            agent.resting = false;
+            agent.targetX = Math.max(pen.left, Math.min(pen.right, biasX));
+            agent.stateTimerMs = 5000;
+          } else if (agent.stateTimerMs <= 0) {
+            if (biasX !== undefined) {
+              agent.stateTimerMs = 1800;
+              break;
+            }
             agent.resting = false;
             const pick = hashSeed(agent.creatureId, Math.floor(this.clockMs / 700));
             agent.targetX = pen.left + pick * spanX;
             agent.stateTimerMs = 5000;
           }
         } else {
+          if (biasX !== undefined) agent.targetX = Math.max(pen.left, Math.min(pen.right, biasX));
           const dx = agent.targetX - agent.x;
           if (Math.abs(dx) <= 2 || agent.stateTimerMs <= 0) {
             agent.resting = true;
@@ -1228,13 +1308,22 @@ export class CreatureChoreographer {
           agent.y = pen.floorY;
           agent.anim = agent.stateTimerMs > 1100 ? 'eat' : 'idle';
           agent.frame = Math.floor(this.clockMs / 290) % 2;
-          if (agent.stateTimerMs <= 0) {
+          if (biasX !== undefined && Math.abs(biasX - agent.x) > 3) {
+            agent.resting = false;
+            agent.targetX = Math.max(pen.left, Math.min(pen.right, biasX));
+            agent.stateTimerMs = 3600;
+          } else if (agent.stateTimerMs <= 0) {
+            if (biasX !== undefined) {
+              agent.stateTimerMs = 1500;
+              break;
+            }
             agent.resting = false;
             const pick = hashSeed(agent.creatureId, Math.floor(this.clockMs / 650));
             agent.targetX = pen.left + pick * spanX;
             agent.stateTimerMs = 3600;
           }
         } else {
+          if (biasX !== undefined) agent.targetX = Math.max(pen.left, Math.min(pen.right, biasX));
           const dx = agent.targetX - agent.x;
           if (Math.abs(dx) <= 2 || agent.stateTimerMs <= 0) {
             agent.resting = true;

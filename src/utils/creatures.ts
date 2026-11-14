@@ -166,9 +166,17 @@ export function resolveAllCreatureRooms(
         const accepted = penAcceptedHabitats(explicit.defId);
         const isHabitatRoom = accepted.length > 0;
         const matchesHabitat = habitats.some(h => accepted.includes(h));
-        if (!isHabitatRoom || matchesHabitat) {
-          const bayIdx = explicit.defId === 'menagerie' ? Math.max(0, explicit.settings?.modules?.indexOf(habitats[0]) ?? 0) : 0;
-          occupancyCount.set(explicit.id, (occupancyCount.get(explicit.id) ?? 0) + 1);
+        const cap = penCreatureCapacity(explicit);
+        const count = occupancyCount.get(explicit.id) ?? 0;
+        if ((!isHabitatRoom || matchesHabitat) && (!isHabitatRoom || count < cap)) {
+          let bayIdx = 0;
+          if (explicit.defId === 'menagerie' && explicit.settings?.modules?.length) {
+            const foundIdx = explicit.settings.modules.findIndex(m => habitats.includes(m as HabitatType));
+            bayIdx = foundIdx >= 0 ? foundIdx : 0;
+          }
+          if (isHabitatRoom) {
+            occupancyCount.set(explicit.id, count + 1);
+          }
           result.set(c.id, { room: explicit, unhomed: false, roaming: false, subBayIndex: bayIdx });
           continue;
         }
@@ -191,7 +199,12 @@ export function resolveAllCreatureRooms(
           const cap = penCreatureCapacity(r);
           const count = occupancyCount.get(r.id) ?? 0;
           if (count < cap) {
-            const bay = r.defId === 'menagerie' ? Math.max(0, r.settings?.modules?.indexOf(h) ?? 0) : 0;
+            let bay = 0;
+            if (r.defId === 'menagerie' && r.settings?.modules?.length) {
+              const modIdx = r.settings.modules.indexOf(h);
+              if (modIdx < 0) continue;
+              bay = modIdx;
+            }
             matched = { room: r, bay };
             break outer;
           }

@@ -47,6 +47,7 @@ import {
   CREATURE_DEFINITIONS
 } from '../data/content';
 import {
+  academyFurnitureEffect,
   calculateStudentSkill,
   isMasteryReady,
   calculateTeacherDelay,
@@ -58,6 +59,7 @@ import {
   wizardMasteredSchools,
   wizardOrbQuote
 } from '../utils/formulas';
+import { isRoomUnfinished } from '../utils/requiredFurniture';
 import {
   Sparkles,
   BookOpen,
@@ -1318,16 +1320,35 @@ export const AlchemyPanel: React.FC<{
   onUsePotion?: (potionId: string) => void;
 }> = ({ state, onBrewPotion, onUsePotion }) => {
   const { resources, potions } = state;
+  const lab = state.rooms.find(r => r.defId === 'alchemy_lab' && r.state === 'built' && !isRoomUnfinished(r));
+  const brewBonus = academyFurnitureEffect(state.rooms, 'brew_speed_pct', lab);
+  const alchemists = state.characters.filter(c => c.career === 'alchemist' && c.careerState === 'active' && (!lab || c.workplaceRoomId === lab.id));
+  const bag = resources as unknown as Record<string, any>;
+  const freePhilosopherBrew = (state.activeBuffs?.philosophersHourBrews || 0) > 0;
 
   return (
     <div className="space-y-6">
       <div>
         <h3 className="text-sm font-bold text-amber-200" title="GDD 24: Combine 3 distinct ingredients into restorative and fortifying elixirs.">Recipes ⓘ</h3>
+        {!lab && (
+          <p className="text-xs text-amber-400/90 mt-1">Requires a built and furnished Alchemy Lab to brew potions.</p>
+        )}
+        {freePhilosopherBrew && (
+          <p className="text-xs text-emerald-300 mt-1">Philosopher&apos;s Hour active: {state.activeBuffs?.philosophersHourBrews} instant x2 brew(s) remaining.</p>
+        )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {potions.map(rec => {
           const count = resources.potions[rec.id] || 0;
+          const alchMult = alchemists.length > 0
+            ? Math.max(...alchemists.map(a => careerAffinityMultiplier(a.masteredSchools, 'alchemist', rec.school)))
+            : 1;
+          const baseManaCost = Math.max(10, Math.round(30 * Math.max(0.5, 1 - brewBonus / 100)));
+          const manaCost = freePhilosopherBrew ? 0 : Math.max(10, Math.round(baseManaCost / alchMult));
+          const hasIngredients = rec.ingredients.every(ing => (Number(bag[ing]) || 0) >= 1);
+          const canBrew = rec.discovered && !!lab && state.mana >= manaCost && hasIngredients;
+
           return (
             <div key={rec.id} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow space-y-3">
               <div>
@@ -1338,17 +1359,30 @@ export const AlchemyPanel: React.FC<{
                   </span>
                 </div>
                 <div className="text-xs text-slate-300 leading-relaxed mb-2">{rec.effect}</div>
-                <div className="text-xs text-slate-400 font-mono">
-                  Ingredients: {rec.ingredients.join(' + ')}
+                <div className="text-xs text-slate-400 font-mono flex flex-wrap gap-1.5">
+                  <span>Ingredients:</span>
+                  {rec.ingredients.map(ing => {
+                    const owned = Math.floor(Number(bag[ing]) || 0);
+                    return (
+                      <span key={ing} className={owned >= 1 ? 'text-slate-300' : 'text-rose-400'}>
+                        {ing} ({owned}/1)
+                      </span>
+                    );
+                  })}
                 </div>
               </div>
 
               <div className="flex items-center gap-2 pt-2 border-t border-slate-800">
                 <button
                   onClick={() => onBrewPotion(rec.id)}
-                  className="flex-1 py-2 bg-orange-600/20 hover:bg-orange-600/40 text-orange-200 border border-orange-500/30 rounded-xl text-xs font-bold transition shadow"
+                  disabled={!canBrew}
+                  className={`flex-1 py-2 rounded-xl text-xs font-bold transition shadow border ${
+                    canBrew
+                      ? 'bg-orange-600/20 hover:bg-orange-600/40 text-orange-200 border-orange-500/30'
+                      : 'bg-slate-800/60 text-slate-500 border-slate-700/50 cursor-not-allowed'
+                  }`}
                 >
-                  Brew ({rec.reviewsToBrew} revs)
+                  {!rec.discovered ? 'Undiscovered' : `Brew (${manaCost}m)`}
                 </button>
                 {count > 0 && onUsePotion && (
                   <button
