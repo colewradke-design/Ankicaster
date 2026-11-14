@@ -110,6 +110,7 @@ export class Choreographer {
 
   /** Last seen position of each room, to detect Move / Demolish. */
   private roomSignatures = new Map<number, string>();
+  private lastBuiltRoomSignature = '';
 
   private resettleAgentsForLayoutChange(state: FullGameState) {
     const sigs = new Map<number, string>();
@@ -235,6 +236,13 @@ export class Choreographer {
     // Rooms that moved or were demolished: put their agents back on a valid floor
     this.resettleAgentsForLayoutChange(state);
 
+    const builtSig = state.rooms
+      .filter(r => r.state === 'built')
+      .map(r => `${r.id}:${r.defId}`)
+      .join(',');
+    const builtRoomsChanged = this.lastBuiltRoomSignature !== '' && builtSig !== this.lastBuiltRoomSignature;
+    this.lastBuiltRoomSignature = builtSig;
+
     // 2. Sync Characters
     const activeCharIds = new Set<string>();
     for (const char of state.characters) {
@@ -243,9 +251,17 @@ export class Choreographer {
       activeCharIds.add(id);
 
       if (!this.agents.has(id)) {
-        // Spawn at Entrance Hall or bed or seat
-        const targetRoomId = char.seatRoomId || char.bedRoomId || 1;
-        const room = state.rooms.find(r => r.id === targetRoomId) || state.rooms[0];
+        // Spawn at assigned seat/workplace/bed, or a built classroom/dorm, or Entrance Hall
+        const fallbackClass = char.status === 'student'
+          ? (state.rooms.find(r => r.state === 'built' && r.defId === `class_${char.currentSchool || 'arcane'}`) ||
+             state.rooms.find(r => r.state === 'built' && r.defId.startsWith('class_')))
+          : undefined;
+        const fallbackBed = state.rooms.find(
+          r => r.state === 'built' && (r.defId === 'dormitory' || r.defId === 'grand_dormitory')
+        );
+        const targetRoomId =
+          char.seatRoomId || char.workplaceRoomId || char.bedRoomId || fallbackClass?.id || fallbackBed?.id || 1;
+        const room = state.rooms.find(r => r.id === targetRoomId && r.state === 'built') || state.rooms[0];
         let sx = 400;
         let sy = this.groundY - 4;
         let fl = 0;
@@ -298,6 +314,17 @@ export class Choreographer {
         });
       } else {
         const agent = this.agents.get(id)!;
+        const prevChar = agent.character;
+        const assignmentChanged =
+          builtRoomsChanged ||
+          prevChar?.seatRoomId !== char.seatRoomId ||
+          prevChar?.bedRoomId !== char.bedRoomId ||
+          prevChar?.workplaceRoomId !== char.workplaceRoomId ||
+          prevChar?.currentSchool !== char.currentSchool ||
+          prevChar?.status !== char.status ||
+          prevChar?.career !== char.career ||
+          prevChar?.injury?.type !== char.injury?.type;
+
         agent.character = char;
         const look = normalizeAppearance({ ...char.appearance, staff: 'oak' }, char.id);
         agent.hat = look.hat;
@@ -340,13 +367,18 @@ export class Choreographer {
               agent.pathIndex = 0;
               this.setArrivedAnim(agent);
             }
-          } else if (!targetReachable) {
-            // Target is unreachable: replan right away to a reachable room along the nav graph
+          } else if (!targetReachable || assignmentChanged) {
+            // Target is unreachable or character room/school/built rooms changed: replan right away
             agent.path = [];
             agent.pathIndex = 0;
             agent.freeTimeTargetRoomId = undefined;
             this.planAgentNextGoal(agent, state);
           }
+        } else if (assignmentChanged) {
+          agent.path = [];
+          agent.pathIndex = 0;
+          agent.freeTimeTargetRoomId = undefined;
+          this.planAgentNextGoal(agent, state);
         }
       }
     }
@@ -408,13 +440,22 @@ export class Choreographer {
       this.schedulePhase = 'sleep';
     }
 
+    const phaseChanged = this.schedulePhase !== this.lastSchedulePhase;
     // Track free-time block changes
     if (this.schedulePhase === 'free_time' && this.lastSchedulePhase !== 'free_time') {
       this.freeTimeBlockCounter++;
-    } else if (this.schedulePhase !== 'free_time') {
+    } else if (this.schedulePhase !== 'free_time' && this.lastSchedulePhase === 'free_time') {
       // Clear free-time destinations when leaving free time
       for (const agent of this.agents.values()) {
         agent.freeTimeTargetRoomId = undefined;
+      }
+    }
+    if (phaseChanged) {
+      for (const agent of this.agents.values()) {
+        if (!agent.isWizard) {
+          agent.path = [];
+          agent.pathIndex = 0;
+        }
       }
     }
     this.lastSchedulePhase = this.schedulePhase;
@@ -685,21 +726,57 @@ export class Choreographer {
       targetRoomId = refectory ? refectory.id : 1;
       targetActivity = 'meal';
     } else if (this.schedulePhase === 'sleep') {
-      // 3. Sleep phase -> bedRoomId
-      if (char.bedRoomId && this.isRoomReachable(char.bedRoomId)) {
-        targetRoomId = char.bedRoomId;
-      } else {
-        targetRoomId = 1; // Entrance Hall
-      }
+      // 3. Sleep phase -> bedRoomId (or fallback to any built reachable dormitory)
+      const assignedBed = char.bedRoomId != null
+        ? state.rooms.find(r => r.id === char.bedRoomId && r.state === 'built' && this.isRoomReachable(r.id))
+        : undefined;
+      const fallbackBed =
+        assignedBed ||
+        state.rooms.find(
+          r => r.state === 'built' &&
+            this.isRoomReachable(r.id) &&
+            (r.defId === 'dormitory' || r.defId === 'grand_dormitory' || (char.status === 'faculty' && r.defId === 'faculty_quarters'))
+        );
+      targetRoomId = fallbackBed ? fallbackBed.id : 1; // Entrance Hall
       targetActivity = 'sleep';
     } else if (this.schedulePhase === 'class_work') {
       // 4. Class or Work
-      if (char.status === 'student' && char.seatRoomId && this.isRoomReachable(char.seatRoomId)) {
-        targetRoomId = char.seatRoomId;
-        targetActivity = 'class';
+      if (char.status === 'student') {
+        const assignedSeat = char.seatRoomId != null
+          ? state.rooms.find(r => r.id === char.seatRoomId && r.state === 'built' && this.isRoomReachable(r.id))
+          : undefined;
+        const schoolClass = state.rooms.find(
+          r => r.state === 'built' && r.defId === `class_${char.currentSchool || 'arcane'}` && this.isRoomReachable(r.id)
+        );
+        const anyClass = state.rooms.find(
+          r => r.state === 'built' && r.defId.startsWith('class_') && this.isRoomReachable(r.id)
+        );
+        const classRoom =
+          (assignedSeat && assignedSeat.defId.startsWith('class_') ? assignedSeat : undefined) ||
+          schoolClass ||
+          anyClass ||
+          assignedSeat;
+        if (classRoom) {
+          targetRoomId = classRoom.id;
+          targetActivity = 'class';
+        } else {
+          targetActivity = 'free_time';
+        }
       } else if (char.workplaceRoomId && this.isRoomReachable(char.workplaceRoomId)) {
         targetRoomId = char.workplaceRoomId;
         targetActivity = 'work';
+      } else if (char.career && char.careerState !== 'sabbatical') {
+        const fallbackWp = state.rooms.find(
+          r => r.state === 'built' &&
+            this.isRoomReachable(r.id) &&
+            ROOM_DEFINITIONS[r.defId]?.workplace?.career === char.career
+        );
+        if (fallbackWp) {
+          targetRoomId = fallbackWp.id;
+          targetActivity = 'work';
+        } else {
+          targetActivity = 'free_time';
+        }
       } else {
         targetActivity = 'free_time';
       }
@@ -713,11 +790,21 @@ export class Choreographer {
       if (agent.freeTimeTargetRoomId && this.isRoomReachable(agent.freeTimeTargetRoomId) && agent.freeTimeBlockId === this.freeTimeBlockCounter) {
         targetRoomId = agent.freeTimeTargetRoomId;
       } else {
-        const reachableLeisureRooms = state.rooms.filter(
+        const indoorSocialRooms = state.rooms.filter(
           r => r.state === 'built' &&
             this.isRoomReachable(r.id) &&
-            (r.defId === 'common_room' || r.defId === 'library' || r.defId === 'courtyard_garden' || r.area === 'grounds')
+            (r.defId === 'common_room' ||
+              r.defId === 'library' ||
+              r.defId === 'courtyard_garden' ||
+              r.defId === 'faculty_lounge' ||
+              r.defId === 'bathhouse' ||
+              r.defId === 'refectory' ||
+              r.defId === 'dormitory' ||
+              r.defId === 'grand_dormitory' ||
+              r.defId === 'entrance_hall')
         );
+        const nonHallRooms = indoorSocialRooms.filter(r => r.defId !== 'entrance_hall');
+        const reachableLeisureRooms = nonHallRooms.length > 0 ? nonHallRooms : indoorSocialRooms;
 
         if (reachableLeisureRooms.length > 0) {
           const seed = (char.id * 37 + this.freeTimeBlockCounter) >>> 0;

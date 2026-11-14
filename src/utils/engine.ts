@@ -655,6 +655,79 @@ export class AnkicasterEngine {
       if (still) continue;
       c.workplaceRoomId = AnkicasterEngine.findOpenWorkplace(state, c.career, c.id, c)?.id;
     }
+
+    // Sync student classroom seats when missing or when a matching school classroom becomes available
+    const builtClassrooms = state.rooms.filter(r => r.state === 'built' && r.defId.startsWith('class_'));
+    if (builtClassrooms.length > 0) {
+      for (const c of state.characters) {
+        if (c.status !== 'student') continue;
+        const targetDefId = `class_${c.currentSchool || 'arcane'}`;
+        const currentSeat = c.seatRoomId != null ? state.rooms.find(r => r.id === c.seatRoomId && r.state === 'built') : undefined;
+        const schoolClassrooms = builtClassrooms.filter(r => r.defId === targetDefId);
+        const hasValidSeat =
+          !!currentSeat &&
+          currentSeat.defId.startsWith('class_') &&
+          (currentSeat.defId === targetDefId || schoolClassrooms.length === 0);
+        if (hasValidSeat) continue;
+
+        const seatOpen = (room: PlacedRoom) => {
+          const cap = ROOM_DEFINITIONS[room.defId]?.capacity?.seats || 5;
+          const used = state.characters.filter(s => s.id !== c.id && s.status === 'student' && s.seatRoomId === room.id).length;
+          return used < cap;
+        };
+        const chosen =
+          schoolClassrooms.find(r => !isRoomUnfinished(r) && seatOpen(r)) ||
+          schoolClassrooms.find(r => seatOpen(r)) ||
+          schoolClassrooms[0] ||
+          builtClassrooms.find(r => !isRoomUnfinished(r) && seatOpen(r)) ||
+          builtClassrooms[0];
+        if (chosen) {
+          c.seatRoomId = chosen.id;
+        }
+      }
+    }
+
+    // Sync character beds when bedRoomId is unset or points to a non-existent/unbuilt room
+    const builtBedRooms = state.rooms.filter(
+      r => r.state === 'built' && (r.defId === 'dormitory' || r.defId === 'grand_dormitory' || r.defId === 'faculty_quarters')
+    );
+    if (builtBedRooms.length > 0) {
+      const roomBedCapacity = (d: PlacedRoom) => {
+        if (d.defId === 'faculty_quarters') {
+          return (ROOM_DEFINITIONS.faculty_quarters?.capacity?.facultyBeds || 2) + (d.level - 1);
+        }
+        let beds = 0;
+        for (const f of d.furniture || []) {
+          if (f.damaged || !f.slotKind.includes('bed')) continue;
+          const eff = FURNITURE_EFFECTS[f.defId];
+          beds += eff?.kind === 'bed_slots' ? eff.value : 1;
+        }
+        return beds;
+      };
+      for (const c of state.characters) {
+        if (c.status === 'away') continue;
+        const currentBed = c.bedRoomId != null ? state.rooms.find(r => r.id === c.bedRoomId && r.state === 'built') : undefined;
+        if (c.bedRoomId != null && currentBed) continue;
+        const allowedDefs = c.status === 'faculty'
+          ? ['faculty_quarters', 'dormitory', 'grand_dormitory']
+          : ['dormitory', 'grand_dormitory'];
+        const candidates = builtBedRooms.filter(r => allowedDefs.includes(r.defId));
+        if (candidates.length === 0) continue;
+        const bedOpen = (room: PlacedRoom) => {
+          const cap = roomBedCapacity(room);
+          const used = state.characters.filter(s => s.id !== c.id && s.bedRoomId === room.id).length;
+          return used < cap;
+        };
+        const chosenBed =
+          candidates.find(r => !isRoomUnfinished(r) && bedOpen(r)) ||
+          candidates.find(r => bedOpen(r)) ||
+          candidates.find(r => !isRoomUnfinished(r)) ||
+          candidates[0];
+        if (chosenBed) {
+          c.bedRoomId = chosenBed.id;
+        }
+      }
+    }
   }
 
   private static roomIsStaffed(state: FullGameState, room: PlacedRoom): boolean {
@@ -2866,7 +2939,7 @@ export class AnkicasterEngine {
       });
       out.requiredFixturesVersion = 1;
     }
-    if (Array.isArray(out.characters) && Array.isArray(out.rooms) && (out.staffingVersion ?? 0) < 1) {
+    if (Array.isArray(out.characters) && Array.isArray(out.rooms)) {
       AnkicasterEngine.syncWorkplaces(out);
       out.staffingVersion = 1;
     }
@@ -3063,6 +3136,7 @@ export class AnkicasterEngine {
       text: `Installed ${fDef.name} into ${roomDef?.name}.`,
       data: { roomId }
     });
+    AnkicasterEngine.syncWorkplaces(next);
     logResourceDiff(next, beforeRes, `Installed ${fDef.name}`);
 
     return { state: next, success: true };

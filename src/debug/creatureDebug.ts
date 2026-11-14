@@ -591,7 +591,10 @@ export function debugForceEnrollStudent(
     cardIds: fakeCards
   });
 
-  const classroom = next.rooms.find(r => r.state === 'built' && r.defId.startsWith('classroom_'));
+  const schoolClassDef = `class_${school}`;
+  const classroom =
+    next.rooms.find(r => r.state === 'built' && r.defId === schoolClassDef) ||
+    next.rooms.find(r => r.state === 'built' && r.defId.startsWith('class_'));
   const dorm = next.rooms.find(r => r.state === 'built' && (r.defId === 'dormitory' || r.defId === 'grand_dormitory'));
   const hall = next.rooms.find(r => r.state === 'built' && r.defId === 'entrance_hall');
 
@@ -619,6 +622,7 @@ export function debugForceEnrollStudent(
 
   next.characters.push(student);
   next.debugCharacterIds = [...(next.debugCharacterIds || []), charId];
+  AnkicasterEngine.syncWorkplaces(next);
   next.notices.push({
     id: `enroll-debug-${charId}-${Date.now()}`,
     time: Date.now(),
@@ -626,7 +630,7 @@ export function debugForceEnrollStudent(
     text: `🎓 ${student.name} enrolled in ${school.toUpperCase()} (Debug)!`,
     data: {
       characterIds: [charId],
-      roomId: hall?.id ?? classroom?.id,
+      roomId: student.seatRoomId ?? hall?.id ?? classroom?.id,
       school,
       visualEventType: 'student_enrolled'
     }
@@ -683,6 +687,12 @@ export function debugUpdateCharacter(
   }
   if (patch.currentSchool !== undefined) {
     char.currentSchool = patch.currentSchool;
+    if (char.status === 'student') {
+      const matchingClass = next.rooms.find(r => r.state === 'built' && r.defId === `class_${patch.currentSchool}`);
+      if (matchingClass) {
+        char.seatRoomId = matchingClass.id;
+      }
+    }
   }
   if (patch.toggleMasteredSchool !== undefined) {
     const s = patch.toggleMasteredSchool;
@@ -707,6 +717,20 @@ export function debugUpdateCharacter(
   if (patch.workplaceRoomId !== undefined) {
     if (patch.workplaceRoomId === null) delete char.workplaceRoomId;
     else char.workplaceRoomId = patch.workplaceRoomId;
+  }
+  // When assigning a teacher to a classroom via Debug Tools, ensure they have the classroom's school mastered
+  if (char.career === 'teacher' && char.workplaceRoomId != null) {
+    const wpRoom = next.rooms.find(r => r.id === char.workplaceRoomId);
+    if (wpRoom && wpRoom.defId.startsWith('class_')) {
+      const classSch = wpRoom.defId.slice('class_'.length) as SchoolType;
+      if (ALL_SCHOOLS.includes(classSch) && !char.masteredSchools.includes(classSch)) {
+        char.masteredSchools = [...char.masteredSchools, classSch];
+      }
+    }
+  }
+  AnkicasterEngine.syncWorkplaces(next);
+  if (patch.workplaceRoomId !== undefined && patch.workplaceRoomId !== null) {
+    char.workplaceRoomId = patch.workplaceRoomId;
   }
   if (patch.readySchool !== undefined && patch.readyDays !== undefined) {
     char.readyDays = { ...(char.readyDays || {}), [patch.readySchool]: Math.max(0, Math.min(60, patch.readyDays)) };

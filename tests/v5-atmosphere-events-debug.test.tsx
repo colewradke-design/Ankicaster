@@ -526,3 +526,68 @@ test('Part C: Debug Tools actions (People, Events & Hazards, Atmosphere, Academy
   assert.doesNotThrow(() => drawMessengerOwl(g, owlState, 500, false));
   assert.equal(JSON.stringify(frozenState), frozenJson, 'FullGameState was never mutated by visual event preview');
 });
+
+test('Force-enrolled students stay indoors and move to classroom, dormitory, and refectory when built afterwards', () => {
+  let state = createNewAcademy();
+  state = debugGrantAllResources(state).state;
+  state = debugUnlockAllBlueprintsAndRecipes(state).state;
+
+  // 1. Force-enroll students before any dorm or classroom exists
+  state = debugForceEnrollFiveStudents(state, 'arcane').state;
+  const vegPatch = state.rooms.find(r => r.defId === 'vegetable_patch')!;
+  const hall = state.rooms.find(r => r.defId === 'entrance_hall')!;
+
+  const world = new VisualWorld();
+  world.setSnapshot(state);
+  world.update(100, 1000);
+
+  for (const ch of state.characters) {
+    const agent = world.choreographer.agents.get(`char-${ch.id}`);
+    assert.ok(agent, `Agent for ${ch.name} exists`);
+    assert.notEqual(agent.targetRoomId, vegPatch.id, 'Students must not run outside to the vegetable patch');
+    assert.equal(agent.targetRoomId, hall.id, 'With only starting rooms built, students stay in Entrance Hall');
+  }
+
+  // 2. Build Dormitory, Refectory, and Classroom afterwards, complete construction, and install required fixtures
+  state = AnkicasterEngine.placeRoom(state, 'dormitory').state;
+  state = AnkicasterEngine.placeRoom(state, 'class_arcane').state;
+  state = AnkicasterEngine.placeRoom(state, 'refectory').state;
+  state = debugCompleteAllConstruction(state).state;
+
+  const dorm = state.rooms.find(r => r.defId === 'dormitory')!;
+  const classroom = state.rooms.find(r => r.defId === 'class_arcane')!;
+  const refectory = state.rooms.find(r => r.defId === 'refectory')!;
+
+  state = AnkicasterEngine.installRequiredFixture(state, dorm.id, 0).state;
+  state = AnkicasterEngine.installRequiredFixture(state, classroom.id, 0).state;
+  state = AnkicasterEngine.installRequiredFixture(state, classroom.id, 1).state;
+  state = AnkicasterEngine.installRequiredFixture(state, refectory.id, 0).state;
+  state = AnkicasterEngine.installRequiredFixture(state, refectory.id, 1).state;
+
+  // Give the classroom a teacher via debug tools
+  const teacherId = state.characters[4].id;
+  state = debugUpdateCharacter(state, teacherId, { career: 'teacher', workplaceRoomId: classroom.id }).state;
+  const teacherChar = state.characters.find(c => c.id === teacherId)!;
+  assert.ok(teacherChar.masteredSchools.includes('arcane'), 'Debug teacher has arcane mastered');
+  assert.equal(teacherChar.workplaceRoomId, classroom.id, 'Debug teacher stays assigned to classroom');
+
+  // Existing students now have bedRoomId and seatRoomId synced
+  const students = state.characters.filter(c => c.status === 'student');
+  assert.equal(students.length, 4);
+  for (const st of students) {
+    assert.equal(st.bedRoomId, dorm.id, 'Existing student received bedRoomId when dorm was built');
+    assert.equal(st.seatRoomId, classroom.id, 'Existing student received seatRoomId when classroom was built');
+  }
+
+  // Choreographer routes students to classroom during class_work and teacher to classroom
+  world.setSnapshot(state);
+  world.update(100, 2000);
+  for (const st of students) {
+    const agent = world.choreographer.agents.get(`char-${st.id}`)!;
+    assert.equal(agent.targetRoomId, classroom.id, 'Student targets built classroom during class_work');
+    assert.equal(agent.activity, 'class');
+  }
+  const teacherAgent = world.choreographer.agents.get(`char-${teacherId}`)!;
+  assert.equal(teacherAgent.targetRoomId, classroom.id, 'Teacher targets classroom during class_work');
+});
+
