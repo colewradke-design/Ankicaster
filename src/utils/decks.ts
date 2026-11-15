@@ -3,8 +3,9 @@
  * Rarity weights are fixed (the old draft shuffled a flat list). Wizard level only
  * changes the Magic deck, via the school multiplier.
  */
-import { DraftCard, FullGameState, FurnitureDefinition, SchoolType } from '../types/ankicaster';
+import { CreatureInstance, DraftCard, FullGameState, FurnitureDefinition, PlacedRoom, SchoolType } from '../types/ankicaster';
 import { FURNITURE_DEFINITIONS, POTION_RECIPES, ROOM_DEFINITIONS } from '../data/content';
+import { creatureCategoryBonus } from './creatures';
 
 export type DraftDeckId = 'foundation' | 'grounds' | 'magic';
 
@@ -138,6 +139,11 @@ const MAGIC_EXTRAS: DraftCard[] = [
   { id: 'extra-astral', deck: 'magic', rarity: 'rare', name: 'Astral Influx Boon', type: 'boon', school: 'arcane', description: 'Instant burst of knowledge: +50 Insight and +2 Crystal.' },
   { id: 'extra-bramble', deck: 'magic', rarity: 'rare', name: 'Bramblefox Lure', type: 'lure', targetId: 'bramblefox', school: 'nature', description: 'Attracts an inquisitive Azure Bramblefox to your academy meadow habitat.' },
   { id: 'extra-seed', deck: 'magic', rarity: 'uncommon', name: 'Luminescent Seed Packet', type: 'seed', targetId: 'moonglow_fern', school: 'nature', description: 'Unlock Moonglow Fern crop in sacred plots.' },
+  { id: 'extra-seed-glimmer', deck: 'magic', rarity: 'uncommon', name: 'Glimmerberry Seeds', type: 'seed', targetId: 'glimmerberry', school: 'nature', description: 'Unlock Glimmerberry crop in the Greenhouse (+Provisions & Nectar).' },
+  { id: 'extra-seed-dream', deck: 'magic', rarity: 'uncommon', name: 'Dreamthistle Seeds', type: 'seed', targetId: 'dreamthistle', school: 'arcane', description: 'Unlock Dreamthistle crop in the Greenhouse (+Herbs & Insight).' },
+  { id: 'extra-seed-ember', deck: 'magic', rarity: 'uncommon', name: 'Emberpepper Seeds', type: 'seed', targetId: 'emberpepper', school: 'alchemy', description: 'Unlock Emberpepper crop in the Greenhouse (+Provisions & Reagents).' },
+  { id: 'extra-seed-shade', deck: 'magic', rarity: 'uncommon', name: 'Shadecap Spores', type: 'seed', targetId: 'shadecap', school: 'shadow', description: 'Unlock Shadecap crop in the Greenhouse (Ground floor or adjacent Gloom -> +Herbs & Umbra).' },
+  { id: 'extra-seed-sun', deck: 'magic', rarity: 'uncommon', name: 'Sunwheat Seeds', type: 'seed', targetId: 'sunwheat', school: 'light', description: 'Unlock Sunwheat crop in the Greenhouse (with Rain Cistern -> +1.2 Provisions/bell).' },
   { id: 'extra-dawn', deck: 'magic', rarity: 'rare', name: 'Dawn Blessing Boon', type: 'boon', school: 'light', description: 'Radiant surge: +30 Radiance and fully cures one injured resident.' },
   { id: 'extra-veil', deck: 'magic', rarity: 'rare', name: 'Veil Tether Boon', type: 'boon', school: 'shadow', description: 'Instant +35% Veil Strength and +25 Umbra.' },
   { id: 'extra-elixir', deck: 'magic', rarity: 'rare', name: 'Elixir of Fellowship Recipe', type: 'recipe_page', targetId: 'elixir_of_fellowship', school: 'alchemy', description: 'Learn to brew Elixir of Fellowship (+10 morale to all students and faculty).' }
@@ -176,10 +182,28 @@ export function isRoomUnlocked(state: { roomPlans?: Record<string, number> }, de
   return plansFor(state, defId) > 0;
 }
 
-export function deckPrice(state: { draftHistory?: Record<string, number> }, deck: DraftDeckId): number {
+export function deckPrice(
+  state: {
+    draftHistory?: Record<string, number>;
+    creatures?: CreatureInstance[];
+    rooms?: PlacedRoom[];
+    spellbooks?: string[];
+    bellIndex?: number;
+  },
+  deck: DraftDeckId
+): number {
   const base = DECK_LIST.find(d => d.id === deck)!.basePrice;
-  const k = state.draftHistory?.[deck] || 0;
-  return Math.round(base * Math.pow(1.05, k));
+  const rawK = state.draftHistory?.[deck] || 0;
+  const k = state.spellbooks?.includes('the_eternal_index') ? rawK * 0.5 : rawK;
+  const growthRate = state.spellbooks?.includes('primer_of_patience') ? 1.03 : 1.05;
+  const disc = state.creatures?.length
+    ? creatureCategoryBonus(
+        { creatures: state.creatures, rooms: state.rooms || [], spellbooks: state.spellbooks, bellIndex: state.bellIndex },
+        [{ defId: 'aether_serpent', perCopy: 0.08 }],
+        0.4
+      )
+    : 0;
+  return Math.max(1, Math.round(base * Math.pow(growthRate, k) * Math.max(0.4, 1 - disc)));
 }
 
 /** 1 + 0.5 × level in that school, capped at ×3. An unstudied school stays at ×1. */
@@ -236,10 +260,14 @@ function recipeRarity(tier: string): DraftCard['rarity'] {
   return 'common';
 }
 
-export function deckPool(deck: DraftDeckId, state?: { knownPatterns?: string[]; potions?: Array<{ id: string; discovered: boolean }> }): DraftCard[] {
+export function deckPool(
+  deck: DraftDeckId,
+  state?: { knownPatterns?: string[]; potions?: Array<{ id: string; discovered: boolean }>; resources?: { seedsUnlocked?: string[] } }
+): DraftCard[] {
   const discoveredPotions = new Set(
     (state?.potions || []).filter(p => p.discovered).map(p => p.id)
   );
+  const unlockedSeeds = new Set(state?.resources?.seedsUnlocked || []);
   const base =
     deck === 'foundation'
       ? [...FOUNDATION_ROOMS.map(r => roomCard(r, deck)), ...FOUNDATION_EXTRAS.map(c => ({ ...c, deck }))]
@@ -247,7 +275,11 @@ export function deckPool(deck: DraftDeckId, state?: { knownPatterns?: string[]; 
       ? [...GROUNDS_ROOMS.map(r => roomCard(r, deck)), ...FOUNDATION_EXTRAS.map(c => ({ ...c, deck, id: `grounds-${c.id}` }))]
       : [
           ...MAGIC_ROOMS.map(r => roomCard(r, deck)),
-          ...MAGIC_EXTRAS.filter(c => !(c.type === 'recipe_page' && c.targetId && discoveredPotions.has(c.targetId))).map(c => ({ ...c })),
+          ...MAGIC_EXTRAS.filter(
+            c =>
+              !(c.type === 'recipe_page' && c.targetId && discoveredPotions.has(c.targetId)) &&
+              !(c.type === 'seed' && c.targetId && unlockedSeeds.has(c.targetId))
+          ).map(c => ({ ...c })),
           ...POTION_RECIPES
             .filter(p => !p.discovered && p.id !== 'elixir_of_fellowship' && !discoveredPotions.has(p.id))
             .map((p): DraftCard => ({
@@ -307,7 +339,12 @@ export const DRAFT_TUTORIAL = 'Three decks: Foundation (rooms of the living acad
  * Three different cards. Founding draws and bad-luck protection reserve a slot first.
  * Known patterns are excluded, and at most 1 pattern card or recipe page is offered per draw unless nothing else remains.
  */
-export function dealDraft(state: FullGameState, deck: DraftDeckId, rng: () => number = Math.random): DraftCard[] {
+export function dealDraft(
+  state: FullGameState,
+  deck: DraftDeckId,
+  rng: () => number = Math.random,
+  cardCount: number = 3
+): DraftCard[] {
   const levels = state.wizard?.levels;
   const pool = deckPool(deck, state);
   const chosen: DraftCard[] = [];
@@ -331,7 +368,7 @@ export function dealDraft(state: FullGameState, deck: DraftDeckId, rng: () => nu
   }
 
   let guard = 0;
-  while (chosen.length < 3 && guard < 40) {
+  while (chosen.length < cardCount && guard < 40) {
     guard++;
     const left = pool.filter(c => !chosen.some(k => k.id === c.id));
     if (!left.length) break;

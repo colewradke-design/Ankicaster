@@ -471,8 +471,8 @@ test('Dead effects wired in engine: tea_service, silent_quill, stewpot, tool_wal
     s.rooms.push(bath, sanctum);
     const after = AnkicasterEngine.applyHonestReview(s, cardId, 3, 2400).state;
     const healed = after.characters.find(c => c.id === 200)!;
-    // Base 1.0 * (1 + 20/100) = 1.2
-    assert.equal(Math.round(healed.injury!.points * 100) / 100, 1.2, 'bathhouse + sunlit_sanctum heal_pct accelerates recovery');
+    // Base 1.0 * (1 + (Bathhouse 10 + Healing Basin 10 + Remedy Cabinet 10)/100) = 1.3
+    assert.equal(Math.round(healed.injury!.points * 100) / 100, 1.3, 'bathhouse + sunlit_sanctum heal_pct accelerates recovery');
   }
 });
 

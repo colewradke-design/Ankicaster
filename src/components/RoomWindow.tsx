@@ -28,8 +28,8 @@ import { AnkicasterEngine, HAZARD_DISPEL_MANA_COST } from '../utils/engine';
 import { WizardPortrait } from './WizardPortrait';
 import { CharacterPortrait } from './CharacterPortrait';
 import { CreaturePortrait } from './CreaturePortrait';
-import { FullGameState, PlacedRoom, RoomDefinition } from '../types/ankicaster';
-import { ROOM_DEFINITIONS, roomDisplayName, FURNITURE_DEFINITIONS, SPELL_DEFINITIONS, CREATURE_DEFINITIONS } from '../data/content';
+import { FullGameState, HabitatType, PlacedRoom, RoomDefinition, ScrollId } from '../types/ankicaster';
+import { ROOM_DEFINITIONS, roomDisplayName, FURNITURE_DEFINITIONS, SPELL_DEFINITIONS, CREATURE_DEFINITIONS, TRAIT_DEFINITIONS, GREENHOUSE_CROPS, SCROLL_DEFINITIONS } from '../data/content';
 import {
   calculateRoomQuality, wizardOrbQuote, academyFurnitureEffect,
   furnitureEffectForRoom, formatFurnitureEffect, FurnitureEffectKind, roomFurnitureEffects,
@@ -39,6 +39,8 @@ import { isPatternKnown } from '../utils/decks';
 import {
   buildAcademySchedule,
   classroomDeskCount,
+  effectiveWorkplaceSlots,
+  libraryReaderCapacity,
   libraryReadingDeskCount,
   refectoryChairCount,
   refectoryTableCount
@@ -46,13 +48,16 @@ import {
 import { ScreenId, SCREEN_DEFS, getRoomScreens } from '../ui/screens';
 import { ScreenIcon } from './ScreenIcon';
 import {
+  ALL_HABITATS,
   HABITAT_LABELS,
   arrivalStage,
   arrivalStageLabel,
   getPenOccupants,
+  menagerieModuleCap,
+  menagerieModules,
   originLabel,
-  penAcceptedHabitats,
-  penCreatureCapacity
+  penCreatureCapacity,
+  roomAcceptedHabitats
 } from '../utils/creatures';
 
 export const Chip: React.FC<{
@@ -110,7 +115,7 @@ function roomDefinitionSummaryLine(room: PlacedRoom, def: RoomDefinition | undef
   if (!def) return null;
   const parts: string[] = [];
   if (def.workplace) {
-    parts.push(`${capWord(def.workplace.career)}, ${def.workplace.slots}`);
+    parts.push(`${capWord(def.workplace.career)}, ${effectiveWorkplaceSlots(room)}`);
   }
   const cap = def.capacity;
   if (cap) {
@@ -118,11 +123,11 @@ function roomDefinitionSummaryLine(room: PlacedRoom, def: RoomDefinition | undef
     if (cap.facultyBeds) parts.push(`${cap.facultyBeds} faculty beds`);
     if (cap.seats) parts.push(`${cap.seats} seats`);
     if (cap.leisureSeats) parts.push(`${cap.leisureSeats} lounge seats`);
-    if (cap.cropBeds) parts.push(`${cap.cropBeds} crop beds`);
+    if (cap.cropBeds) parts.push(`${room.defId === 'greenhouse' && (room.level || 1) >= 3 ? 3 : cap.cropBeds} crop beds`);
     if (cap.creatures) parts.push(`${cap.creatures} creatures`);
     if (cap.adventurers) parts.push(`${cap.adventurers} adventurers`);
     if (cap.plinths) parts.push(`${cap.plinths} plinths`);
-    if (cap.readers) parts.push(`${cap.readers} readers`);
+    if (cap.readers) parts.push(`${room.defId === 'library' ? libraryReaderCapacity(room) : cap.readers} readers`);
   }
   if ((room.level || 1) >= 3 && def.level3Perk) {
     parts.push(`Lv 3: ${def.level3Perk}`);
@@ -164,7 +169,18 @@ const RoomSummary: React.FC<{
   }
   if (id === 'entrance_hall') {
     chips.push(<Chip key="r" icon={<Award className="w-3.5 h-3.5 text-amber-400" />} label="Renown" value={state.renown} />);
+    chips.push(<Chip key="ch" label="Charm" value="×2" tone="text-emerald-300" title="Furniture Charm in Entrance Hall counts double toward Academy Charm & Renown." />);
     if (state.activeEvents.length) chips.push(<Chip key="v" label="Visitors" value={state.activeEvents.length} tone="text-amber-300" />);
+  }
+  if (id === 'courtyard_garden') {
+    chips.push(<Chip key="cg-l" icon={<Armchair className="w-3.5 h-3.5 text-emerald-300" />} label="Leisure" value="3 seats" />);
+    chips.push(<Chip key="cg-c" label="Charm" value="+3" tone="text-amber-300" />);
+  }
+  if (id === 'library') {
+    chips.push(<Chip key="lib-l" icon={<Armchair className="w-3.5 h-3.5 text-sky-300" />} label="Readers" value={libraryReaderCapacity(room)} />);
+  }
+  if (id === 'menagerie') {
+    chips.push(<Chip key="men-l" icon={<Armchair className="w-3.5 h-3.5 text-emerald-300" />} label="Leisure" value="6 seats" />);
   }
 
   if (id === 'wizard_study') {
@@ -268,6 +284,28 @@ export interface RoomWindowProps {
   onMoveFurniture?: (roomId: number, furnitureId: number) => void;
   /** Return an unplaced optional piece back to storage. */
   onCancelUnplacedFurniture?: (roomId: number, furnitureId: number) => void;
+  /** Warding Chamber: Reinforce the Veil (1x daily upkeep -> +15% strength). */
+  onReinforceVeil?: () => void;
+  /** Wanderer from Beyond breach resolution ('feed' 20 Provisions or 'tame' via Tamer). */
+  onResolveWanderer?: (roomId: number, method: 'feed' | 'tame') => void;
+  /** Observatory / Foresight: Skip a forecasted incoming event. */
+  onSkipForecastEvent?: (day: number) => void;
+  /** Sunlit Sanctum: Perform Rite of Renewal to remove 1 troublesome trait (50 Radiance, 7d cooldown). */
+  onPerformRiteOfRenewal?: (characterId: number, traitId: string) => void;
+  /** Furnishings tab: Repair damaged furniture (25% material cost). */
+  onRepairFurniture?: (roomId: number, furnitureId: number) => void;
+  /** Menagerie: Configure accepted habitat modules (2/3/4 slots by level). */
+  onSetMenagerieModules?: (roomId: number, modules: HabitatType[]) => void;
+  /** Workshop: Awaken a Geode Golem (3 Golem Cores). */
+  onAwakenGeodeGolem?: () => void;
+  /** Greenhouse: Configure crop beds (2 at Lv 1-2, 3 at Lv 3). */
+  onSetGreenhouseCrops?: (roomId: number, crops: string[]) => void;
+  /** Glassworks: Toggle active Stone-to-Glass conversion. */
+  onSetGlassworksActive?: (roomId: number, active: boolean) => void;
+  /** Library: Spend Insight to research a recipe ingredient hint. */
+  onResearchRecipe?: (roomId: number, recipeId?: string) => void;
+  /** Scriptorium: Start crafting a scroll. */
+  onStartScrollCraft?: (roomId: number, scrollId: ScrollId) => void;
   /** Initial tab for tests or pre-selected navigation. */
   initialTab?: 'room' | 'furnishings';
   /** Guided tour override to open a specific tab when spotlighting its controls. */
@@ -297,6 +335,17 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
   onPlaceFurniture,
   onMoveFurniture,
   onCancelUnplacedFurniture,
+  onReinforceVeil,
+  onResolveWanderer,
+  onSkipForecastEvent,
+  onPerformRiteOfRenewal,
+  onRepairFurniture,
+  onSetMenagerieModules,
+  onAwakenGeodeGolem,
+  onSetGreenhouseCrops,
+  onSetGlassworksActive,
+  onResearchRecipe,
+  onStartScrollCraft,
   initialTab = 'room',
   forcedTab,
   initialAssignOpen = false
@@ -339,7 +388,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
   const usedSlots = optionalSlotsUsed(room);
   const tableTotal = refectoryTableTotal(room);
 
-  const acceptedHabitats = penAcceptedHabitats(room.defId);
+  const acceptedHabitats = roomAcceptedHabitats(room);
   const penOccupants = acceptedHabitats.length > 0 ? getPenOccupants(state, room) : [];
   const penCap = acceptedHabitats.length > 0 ? penCreatureCapacity(room) : 0;
 
@@ -617,10 +666,49 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                     <span className="font-bold text-[13px] capitalize" title={room.hazard?.description || 'This room is temporarily locked'}>
                       {room.hazard ? room.hazard.type.replace(/_/g, ' ') : 'Room Locked'}
                     </span>
-                    <span className="text-[12px] bg-rose-900/60 px-2 py-0.5 rounded font-mono" title="Room locked for this many honest reviews">
-                      🔒 {Math.max(0, (room.lockedUntilReviewIndex || 0) - state.reviewIndex)} reviews
-                    </span>
+                    {((room.lockedUntilReviewIndex || 0) > state.reviewIndex || (room.hazard?.expiresAtReviewIndex || 0) > state.reviewIndex) && (
+                      <span className="text-[12px] bg-rose-900/60 px-2 py-0.5 rounded font-mono" title="Honest reviews remaining">
+                        🔒 {Math.max(
+                          0,
+                          (room.lockedUntilReviewIndex || 0) - state.reviewIndex,
+                          (room.hazard?.expiresAtReviewIndex || 0) - state.reviewIndex
+                        )} reviews
+                      </span>
+                    )}
                   </div>
+                  {(room.hazard?.effect || room.hazard?.description) && (
+                    <div className="text-[12px] text-rose-100/90" data-testid="hazard-effect">
+                      {room.hazard.effect || room.hazard.description}
+                    </div>
+                  )}
+                  {room.hazard?.type === 'wanderer' && (
+                    <div className="space-y-1.5 pt-1 border-t border-rose-500/30" data-testid="wanderer-controls">
+                      <div className="text-[12px] font-mono text-amber-200">
+                        Taming progress: {Math.round(room.hazard.tamingProgress || 0)}/{room.hazard.tamingRequired || 160} reviews
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          data-action="wanderer-feed"
+                          onClick={() => onResolveWanderer?.(room.id, 'feed')}
+                          disabled={state.resources.provisions < 20}
+                          className="flex-1 min-h-[32px] px-3 py-1.5 bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white font-bold text-[12px] rounded-lg"
+                          title="Offer 20 Provisions so the Wanderer leaves peacefully"
+                        >
+                          Feed (20 Provisions)
+                        </button>
+                        <button
+                          type="button"
+                          data-action="wanderer-tame"
+                          onClick={() => onResolveWanderer?.(room.id, 'tame')}
+                          className="flex-1 min-h-[32px] px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-[12px] rounded-lg"
+                          title="Assign an active Tamer to coax the Wanderer into a rare familiar"
+                        >
+                          Tame (Tamer)
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {room.hazard && (
                     <div className="flex gap-2">
                       <button
@@ -628,7 +716,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                         className="flex-1 min-h-[32px] px-3 py-1.5 bg-rose-800 hover:bg-rose-700 text-white font-bold text-[13px] rounded-lg"
                         title="Send an active Warder to cleanse the room"
                       >
-                        Dispel (Warder)
+                        {room.hazard.isBreach ? 'Contain (Warder)' : 'Dispel (Warder)'}
                       </button>
                       <button
                         onClick={() => onResolveHazard(room.id, 'spell')}
@@ -718,6 +806,371 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                 );
               })()}
 
+              {/* 4b. Warding Chamber & Observatory room actions */}
+              {!isSite && room.defId === 'warding_chamber' && (
+                <div className="bg-indigo-950/35 border border-indigo-500/40 rounded-xl p-3 space-y-2" data-testid="warding-chamber-controls">
+                  <div className="flex items-center justify-between text-[12px]">
+                    <span className="font-bold text-indigo-200">Veil Defense</span>
+                    <span className="font-mono text-indigo-300">
+                      Strength {state.veil.strength}% · Upkeep {Math.max(1, state.veil.costToday)} Mana/day
+                    </span>
+                  </div>
+                  <div className="text-[12px] text-slate-300">
+                    Reduces daily Veil upkeep (-5% per chamber, max 3) and wards nearby rooms within 3 steps (-20% hazard chance).
+                  </div>
+                  <button
+                    type="button"
+                    data-action="reinforce-veil"
+                    onClick={() => onReinforceVeil?.()}
+                    disabled={!onReinforceVeil || unfinished || state.mana < Math.max(1, state.veil.costToday)}
+                    className="w-full min-h-[34px] px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-bold text-[12px]"
+                    title="Spend 1x today's Veil upkeep Mana to restore +15% Veil strength and seal Veil Rents"
+                  >
+                    Reinforce Veil ({Math.max(1, state.veil.costToday)} Mana → +15% Strength)
+                  </button>
+                </div>
+              )}
+
+              {!isSite && room.defId === 'observatory' && (() => {
+                const forecast = AnkicasterEngine.getVisibleForecast(state);
+                const depth = AnkicasterEngine.getForecastDepth(state);
+                const skips = state.activeBuffs?.foresightSkips || 0;
+                return (
+                  <div className="bg-indigo-950/35 border border-indigo-500/40 rounded-xl p-3 space-y-2" data-testid="observatory-forecast">
+                    <div className="flex items-center justify-between text-[12px]">
+                      <span className="font-bold text-indigo-200">Astral Event Forecast</span>
+                      <span className="font-mono text-indigo-300">Horizon: {depth}d</span>
+                    </div>
+                    {unfinished ? (
+                      <div className="text-[12px] text-amber-300">Install required fixtures to reveal tomorrow&apos;s incoming visitors and events.</div>
+                    ) : forecast.length === 0 ? (
+                      <div className="text-[12px] text-slate-400">No forecasted events queued yet.</div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {forecast.map(item => (
+                          <div key={item.day} className="flex items-center justify-between gap-2 bg-slate-950/60 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[12px]">
+                            <div className="min-w-0">
+                              <div className="font-bold text-indigo-100">Day {item.day}: {item.eventName}</div>
+                              <div className="text-slate-400 truncate">{item.description}</div>
+                            </div>
+                            {skips > 0 && item.eventId !== 'none' && (
+                              <button
+                                type="button"
+                                data-action="skip-forecast-event"
+                                onClick={() => onSkipForecastEvent?.(item.day)}
+                                disabled={!onSkipForecastEvent}
+                                className="shrink-0 px-2 py-1 rounded bg-purple-700 hover:bg-purple-600 disabled:opacity-40 text-white font-bold text-[11px]"
+                              >
+                                Skip (Foresight)
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {!isSite && room.defId === 'sunlit_sanctum' && (() => {
+                const lastDay = state.sanctumRenewalLastDay;
+                const cooldownLeft = lastDay !== undefined ? Math.max(0, 7 - (state.day - lastDay)) : 0;
+                const charsWithTroublesome = state.characters
+                  .map(c => ({
+                    char: c,
+                    troublesome: (c.traits || []).filter(t => TRAIT_DEFINITIONS[t]?.category === 'troublesome')
+                  }))
+                  .filter(x => x.troublesome.length > 0);
+                return (
+                  <div className="bg-amber-950/30 border border-amber-500/40 rounded-xl p-3 space-y-2" data-testid="sunlit-sanctum-rite">
+                    <div className="flex items-center justify-between text-[12px]">
+                      <span className="font-bold text-amber-200">Rite of Renewal</span>
+                      <span className="font-mono text-amber-300">
+                        50 Radiance · {cooldownLeft > 0 ? `${cooldownLeft}d cooldown` : 'Ready'}
+                      </span>
+                    </div>
+                    <div className="text-[12px] text-slate-300">
+                      Purifies one troublesome trait from a resident (once every 7 days).
+                    </div>
+                    {unfinished ? (
+                      <div className="text-[12px] text-amber-300">Install required fixtures to perform the Rite of Renewal.</div>
+                    ) : charsWithTroublesome.length === 0 ? (
+                      <div className="text-[12px] text-slate-400">No residents currently carry troublesome traits.</div>
+                    ) : (
+                      <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                        {charsWithTroublesome.map(({ char: ch, troublesome }) => (
+                          <div key={ch.id} className="bg-slate-950/60 border border-slate-800 rounded-lg px-2.5 py-1.5 flex items-center justify-between gap-2 flex-wrap">
+                            <span className="text-[12px] font-semibold text-slate-200">{ch.name}</span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {troublesome.map(tr => (
+                                <button
+                                  key={tr}
+                                  type="button"
+                                  data-action="rite-of-renewal"
+                                  data-char-id={ch.id}
+                                  data-trait-id={tr}
+                                  disabled={!onPerformRiteOfRenewal || cooldownLeft > 0 || state.resources.radiance < 50}
+                                  onClick={() => onPerformRiteOfRenewal?.(ch.id, tr)}
+                                  title={TRAIT_DEFINITIONS[tr]?.effect || tr}
+                                  className="px-2 py-0.5 rounded bg-amber-600/80 hover:bg-amber-500 disabled:opacity-40 text-slate-950 font-bold text-[11px]"
+                                >
+                                  Purify &ldquo;{tr}&rdquo;
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {!isSite && room.defId === 'menagerie' && (() => {
+                const modCap = menagerieModuleCap(room.level);
+                const currentMods = menagerieModules(room);
+                const toggleMod = (h: HabitatType) => {
+                  if (!onSetMenagerieModules) return;
+                  if (currentMods.includes(h)) {
+                    if (currentMods.length <= 1) return;
+                    onSetMenagerieModules(room.id, currentMods.filter(m => m !== h));
+                  } else {
+                    if (currentMods.length >= modCap) return;
+                    onSetMenagerieModules(room.id, [...currentMods, h]);
+                  }
+                };
+                return (
+                  <div className="bg-emerald-950/25 border border-emerald-500/40 rounded-xl p-3 space-y-2" data-testid="menagerie-modules">
+                    <div className="flex items-center justify-between text-[12px]">
+                      <span className="font-bold text-emerald-200">Habitat Modules</span>
+                      <span className="font-mono text-emerald-300">{currentMods.length} / {modCap} slots (Lv {room.level})</span>
+                    </div>
+                    <div className="text-[11px] text-slate-300">
+                      Select which biomes this Grand Menagerie supports. Philosopher&apos;s Chimera requires both Ember and Crystal active. Creatures housed here gain +10% buff strength.
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {ALL_HABITATS.map(h => {
+                        const checked = currentMods.includes(h);
+                        const disabled = !onSetMenagerieModules || (!checked && currentMods.length >= modCap) || (checked && currentMods.length <= 1);
+                        return (
+                          <label
+                            key={h}
+                            className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border text-[12px] cursor-pointer transition ${
+                              checked
+                                ? 'bg-emerald-900/40 border-emerald-500/50 text-emerald-100 font-semibold'
+                                : 'bg-slate-950/60 border-slate-800 text-slate-400'
+                            } ${disabled && !checked ? 'opacity-45 cursor-not-allowed' : ''}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={disabled}
+                              onChange={() => toggleMod(h)}
+                              className="accent-emerald-400"
+                            />
+                            <span>{HABITAT_LABELS[h].badge} {HABITAT_LABELS[h].label}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {!isSite && room.defId === 'workshop' && (() => {
+                const cores = state.resources.golem_core || 0;
+                const canAwaken = !unfinished && cores >= 3 && !!onAwakenGeodeGolem;
+                return (
+                  <div className="bg-sky-950/25 border border-sky-500/40 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap" data-testid="workshop-golem">
+                    <div className="space-y-0.5 min-w-0">
+                      <div className="text-[12px] font-bold text-sky-200">Awaken Geode Golem</div>
+                      <div className="text-[11px] text-slate-300">
+                        Forge a wary Geode Golem (+10% construction speed &amp; storage cap when tamed) from 3 Golem Cores ({cores} owned). Requires an open Crystal habitat.
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      data-action="awaken-geode-golem"
+                      disabled={!canAwaken}
+                      onClick={() => onAwakenGeodeGolem?.()}
+                      className="shrink-0 px-3 py-1.5 rounded-lg bg-sky-600/85 hover:bg-sky-500 disabled:opacity-40 text-white font-bold text-[12px]"
+                    >
+                      Awaken (3 Cores)
+                    </button>
+                  </div>
+                );
+              })()}
+
+              {!isSite && room.defId === 'greenhouse' && (() => {
+                const bedCap = (room.level || 1) >= 3 ? 3 : 2;
+                const defaultBeds = (room.level || 1) >= 3 ? ['hearthroot', 'silverleaf', 'moonbeans'] : ['hearthroot', 'silverleaf'];
+                const currentBeds = room.settings?.crops?.length
+                  ? room.settings.crops.slice(0, bedCap)
+                  : room.settings?.crop
+                  ? Array(bedCap).fill(room.settings.crop)
+                  : [...defaultBeds];
+                while (currentBeds.length < bedCap) {
+                  currentBeds.push(defaultBeds[currentBeds.length] || 'hearthroot');
+                }
+                const natureLvl = state.wizard?.levels?.nature || 0;
+                const unlockedSeeds = new Set(state.resources?.seedsUnlocked || []);
+                const availableCrops = Object.values(GREENHOUSE_CROPS).filter(c => {
+                  if (c.unlock === 'start') return true;
+                  if (c.unlock === 'nature_l3') return natureLvl >= 3;
+                  return unlockedSeeds.has(c.id);
+                });
+                const updateBed = (idx: number, cropId: string) => {
+                  if (!onSetGreenhouseCrops) return;
+                  const nextBeds = [...currentBeds];
+                  nextBeds[idx] = cropId;
+                  onSetGreenhouseCrops(room.id, nextBeds);
+                };
+                return (
+                  <div className="bg-emerald-950/25 border border-emerald-500/40 rounded-xl p-3 space-y-2" data-testid="greenhouse-crops">
+                    <div className="flex items-center justify-between text-[12px]">
+                      <span className="font-bold text-emerald-200">Greenhouse Crop Beds</span>
+                      <span className="font-mono text-emerald-300">{bedCap} beds (Lv {room.level})</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {currentBeds.map((cropId, idx) => {
+                        const chosenDef = GREENHOUSE_CROPS[cropId];
+                        return (
+                          <div key={idx} className="space-y-1">
+                            <label className="block text-[11px] font-semibold text-slate-300">
+                              Bed {idx + 1}
+                            </label>
+                            <select
+                              aria-label={`Greenhouse Bed ${idx + 1}`}
+                              data-testid={`greenhouse-bed-${idx}`}
+                              value={cropId}
+                              disabled={!onSetGreenhouseCrops || unfinished}
+                              onChange={e => updateBed(idx, e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-[12px] text-slate-100 disabled:opacity-40"
+                            >
+                              {availableCrops.map(c => (
+                                <option key={c.id} value={c.id}>
+                                  {c.name} ({Object.entries(c.outputs).map(([k, v]) => `+${v} ${k}`).join(', ')})
+                                </option>
+                              ))}
+                            </select>
+                            {chosenDef?.conditionNote && (
+                              <div className="text-[10px] text-amber-300/90">{chosenDef.conditionNote}</div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {!isSite && room.defId === 'glassworks' && (() => {
+                const isActive = room.settings?.glassworksActive !== false;
+                return (
+                  <div className="bg-cyan-950/25 border border-cyan-500/40 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap" data-testid="glassworks-controls">
+                    <div className="space-y-0.5 min-w-0">
+                      <div className="text-[12px] font-bold text-cyan-200">Glassworks Furnace</div>
+                      <div className="text-[11px] text-slate-300">
+                        {isActive ? 'Active: converting Stone into Glass every bell.' : 'Paused: furnace banked (preserving Stone).'}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      data-action="toggle-glassworks"
+                      disabled={!onSetGlassworksActive || unfinished}
+                      onClick={() => onSetGlassworksActive?.(room.id, !isActive)}
+                      className={`shrink-0 px-3 py-1.5 rounded-lg font-bold text-[12px] disabled:opacity-40 ${
+                        isActive
+                          ? 'bg-emerald-600/80 hover:bg-emerald-500 text-white'
+                          : 'bg-slate-700 hover:bg-slate-600 text-slate-200'
+                      }`}
+                    >
+                      {isActive ? 'Conversion Active' : 'Conversion Paused'}
+                    </button>
+                  </div>
+                );
+              })()}
+
+              {!isSite && room.defId === 'library' && (() => {
+                const activeLibScholars = state.characters.filter(
+                  c => c.career === 'scholar' && c.careerState === 'active' && c.status !== 'away' && !c.injury && c.workplaceRoomId === room.id
+                ).length;
+                const insightCost = Math.max(21, Math.round(30 * (1 - Math.min(0.3, activeLibScholars * 0.1))));
+                const hintsMap = state.discoveredHints || {};
+                const canResearchTarget = state.potions.some(
+                  p => !p.discovered && p.ingredients.some(ing => !(hintsMap[p.id] || []).includes(ing))
+                );
+                const canAfford = (state.resources.insight || 0) >= insightCost;
+                return (
+                  <div className="bg-sky-950/25 border border-sky-500/40 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap" data-testid="library-research">
+                    <div className="space-y-0.5 min-w-0">
+                      <div className="text-[12px] font-bold text-sky-200">Recipe Research</div>
+                      <div className="text-[11px] text-slate-300">
+                        Spend {insightCost} Insight ({Math.floor(state.resources.insight || 0)} owned) to uncover 1 ingredient of an undiscovered potion.
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      data-action="research-recipe"
+                      disabled={!onResearchRecipe || unfinished || !canResearchTarget || !canAfford}
+                      onClick={() => onResearchRecipe?.(room.id)}
+                      className="shrink-0 px-3 py-1.5 rounded-lg bg-sky-600/85 hover:bg-sky-500 disabled:opacity-40 text-white font-bold text-[12px]"
+                    >
+                      {canResearchTarget ? `Research (${insightCost} Insight)` : 'All Recipes Hinted'}
+                    </button>
+                  </div>
+                );
+              })()}
+
+              {!isSite && room.defId === 'scriptorium' && (() => {
+                const activeJob = (state.scrollQueue || []).find(j => j.roomId === room.id);
+                const bag = state.resources as unknown as Record<string, number>;
+                return (
+                  <div className="bg-purple-950/25 border border-purple-500/40 rounded-xl p-3 space-y-2" data-testid="scriptorium-controls">
+                    <div className="flex items-center justify-between text-[12px]">
+                      <span className="font-bold text-purple-200">Scriptorium Scroll Desk</span>
+                      <span className="text-[11px] text-purple-300 font-mono">
+                        {activeJob ? `${SCROLL_DEFINITIONS[activeJob.scrollId]?.name || activeJob.scrollId}: ${Math.round(activeJob.progress * 10) / 10}/${activeJob.required}r` : 'Desk Idle'}
+                      </span>
+                    </div>
+                    {activeJob ? (
+                      <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                        <div
+                          className="bg-purple-500 h-full transition-all"
+                          style={{ width: `${Math.min(100, (activeJob.progress / Math.max(1, activeJob.required)) * 100)}%` }}
+                        />
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                        {Object.values(SCROLL_DEFINITIONS).map(sc => {
+                          const canPay = Object.entries(sc.cost).every(([k, amt]) => (bag[k] || 0) >= amt);
+                          const owned = state.scrolls?.[sc.id] || 0;
+                          return (
+                            <button
+                              key={sc.id}
+                              type="button"
+                              data-action={`craft-scroll-${sc.id}`}
+                              disabled={!onStartScrollCraft || unfinished || !canPay}
+                              onClick={() => onStartScrollCraft?.(room.id, sc.id)}
+                              title={`${sc.effect} · ${sc.craftReviews} reviews`}
+                              className="text-left px-2.5 py-1.5 rounded-lg bg-slate-950/70 hover:bg-purple-900/40 border border-slate-800 hover:border-purple-500/50 disabled:opacity-40 transition"
+                            >
+                              <div className="flex items-center justify-between text-[12px] font-bold text-slate-100">
+                                <span>{sc.name}</span>
+                                <span className="text-[11px] font-mono text-amber-300">×{owned}</span>
+                              </div>
+                              <div className="text-[10px] text-slate-400">
+                                {Object.entries(sc.cost).map(([k, v]) => `${v} ${k}`).join(' + ')} · {sc.craftReviews}r
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* 5. Who is here: Residents + classroom line, then Staff block if workplace */}
               {!isSite && (() => {
                 const schedule = classSch ? buildAcademySchedule(state) : undefined;
@@ -741,7 +1194,8 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                       c => c.workplaceRoomId === room.id && c.career === wp.career && c.careerState !== 'sabbatical'
                     )
                   : [];
-                const staffCap = wp ? Math.max(wp.slots, staff.length) : 0;
+                const wpMax = wp ? effectiveWorkplaceSlots(room) : 0;
+                const staffCap = wp ? Math.max(wpMax, staff.length) : 0;
                 const eligibleStaff = wp
                   ? state.characters.filter(
                       c =>
@@ -752,7 +1206,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                         (wp.career !== 'teacher' || (!!classSch && c.masteredSchools.includes(classSch)))
                     )
                   : [];
-                const isStaffFull = wp ? staff.length >= wp.slots : false;
+                const isStaffFull = wp ? staff.length >= wpMax : false;
                 const hasClassLine = !hasQualifyingTeacher || !!roomSched?.coveredByHeadmaster || (!!roomSched && roomSched.teacherIds.length > 0);
                 if (!residents.length && !hasClassLine && !wp) return null;
 
@@ -1284,12 +1738,28 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                                       Required
                                     </span>
                                   )}
+                                  {f.damaged && (
+                                    <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.2 rounded bg-rose-500/20 border border-rose-500/40 text-rose-200 font-bold">
+                                      Damaged (-50%)
+                                    </span>
+                                  )}
                                 </div>
                                 {effText && (
                                   <div className="text-[11px] text-emerald-300/90 truncate">{effText}</div>
                                 )}
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0">
+                                {f.damaged && onRepairFurniture && (
+                                  <button
+                                    data-action="repair-furniture"
+                                    onClick={() => onRepairFurniture(room.id, f.id)}
+                                    className="px-2 py-1 min-h-[26px] rounded border border-amber-500/50 bg-amber-950/40 text-amber-200 hover:bg-amber-900/60 text-[11px] font-semibold inline-flex items-center gap-1"
+                                    aria-label={`Repair ${pieceName}`}
+                                    title="Repair at 25% material cost"
+                                  >
+                                    Repair (25%)
+                                  </button>
+                                )}
                                 {onMoveFurniture && (
                                   <button
                                     data-action="move-furniture"

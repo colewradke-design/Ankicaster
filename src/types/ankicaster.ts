@@ -121,6 +121,16 @@ export interface Character {
   careerSetIds: number[];
   /** Hunger drifts toward this every bell. 100 seated, 50 standing, 25 no food. New characters start at 50. */
   mealTarget?: number;
+  /** Temporary cosmetic prank status (e.g. Green Hair, Floating Boots) expiring after 1 day. */
+  cosmeticStatus?: { label: string; expiresDay: number };
+  /** Active misbehavior chains associated with a room until calmed or cleaned. */
+  misbehaviorChains?: Array<{ roomId: number; incidentId: string; penaltyCharm?: number; expiresBell?: number }>;
+  /** Student is sneaking out or otherwise absent from lessons until this reviewIndex. */
+  absentUntilReviewIndex?: number;
+  /** Bell index until which Secret Club raises misbehavior odds (x1.2). */
+  secretClubUntilBell?: number;
+  /** One-time Rift Fortune bonus earned from a Hallway Hex Duel. */
+  hexDuelFortuneBonus?: number;
 }
 
 export interface RoomDefinition {
@@ -209,6 +219,7 @@ export interface PlacedRoom {
   troubleMalus?: { untilReview: number; outputFactor: number; reason: string };
   settings: {
     crop?: string;
+    crops?: string[];
     modules?: string[];
     glassworksActive?: boolean;
   };
@@ -237,13 +248,48 @@ export interface PlacedRoom {
   renownGranted?: number;
   /** True when placing this room spent a room plan. Demolish gives the plan back. */
   fromPlan?: boolean;
-  hazard?: {
-    type: 'spill_of_night' | 'hex_fog' | 'echo_loop' | 'cold_snap' | 'breach';
-    name: string;
-    description: string;
-    effect: string;
-  };
+  misbehaviorCharmMalus?: number;
+  hazard?: RoomHazard;
 }
+
+export type HazardType =
+  | 'mana_static'
+  | 'poltergeist'
+  | 'wild_growth'
+  | 'hex_fog'
+  | 'gravity_hiccup'
+  | 'imp_infestation'
+  | 'echo_loop'
+  | 'wisp_swarm'
+  | 'cold_snap'
+  | 'night_ink'
+  | 'spill_of_night'
+  | 'bubbling_cauldron'
+  | 'kitchen_fire'
+  | 'drafty_window'
+  | 'rift_tremor'
+  | 'shade_breach'
+  | 'gloom_pack'
+  | 'veil_rent'
+  | 'wanderer'
+  | 'breach';
+
+export interface RoomHazard {
+  type: HazardType;
+  name: string;
+  description: string;
+  effect: string;
+  expiresAtReviewIndex?: number;
+  expiresAtBellIndex?: number;
+  floorY?: number;
+  areaScope?: 'room' | 'floor' | 'grounds' | 'academy';
+  isBreach?: boolean;
+  locksRoom?: boolean;
+  hiddenResource?: { key: string; amount: number };
+  tamingProgress?: number;
+  tamingRequired?: number;
+}
+
 
 export interface FurnitureDefinition {
   id: string;
@@ -385,6 +431,12 @@ export interface CreatureInstance {
   stashed?: Record<string, number>;
   /** Adventurer character id this tamed creature is paired with for Rift expeditions. */
   adventurerId?: number;
+  /** Companion returns tired for 10 bells on non-safe expedition outcome (§27.11). */
+  tiredUntilBell?: number;
+  /** True once Gilded Pangolin +5 Renown taming bonus has been awarded. */
+  tamedRenownGranted?: boolean;
+  /** Temporary creature injury (treated at full speed in Lv 3 Infirmary, half speed in habitat). */
+  injury?: InjuryState;
 }
 
 export interface PotionRecipe {
@@ -396,6 +448,35 @@ export interface PotionRecipe {
   reviewsToBrew: number;
   effect: string;
   discovered: boolean;
+}
+
+export interface BrewingJob {
+  id: number;
+  recipeId: string;
+  stationIndex: number;
+  roomId: number;
+  progress: number;
+  required: number;
+  usedAlchemist: boolean;
+}
+
+export type ScrollId = 'rift_map' | 'ward_scroll' | 'recipe_notes' | 'calming_verse';
+
+export interface ScrollCraftingJob {
+  id: number;
+  scrollId: ScrollId;
+  roomId: number;
+  progress: number;
+  required: number;
+}
+
+export interface AlchemyTarget {
+  characterId?: number;
+  roomId?: number;
+  creatureId?: number;
+  expeditionId?: number;
+  fromResource?: string;
+  toResource?: string;
 }
 
 export interface DraftCard {
@@ -667,6 +748,9 @@ export interface FullGameState {
     portrait: string;
     titles: string[];
     retiredDay: number;
+    career?: CareerType | 'resident';
+    extraSchoolsMastered?: number;
+    retiredAgeDays?: number;
     bonusType: string;
     bonusValue: number;
   }>;
@@ -716,6 +800,7 @@ export interface FullGameState {
     fireproofRoomId?: number;
     fellowshipBells?: number;
     lureMuskPending?: boolean;
+    lureMuskRoomId?: number;
     wardwaterFloors?: number[];
     riftElixirCharges?: number;
     courageDraughtCharges?: number;
@@ -729,5 +814,60 @@ export interface FullGameState {
     riftBeaconActive?: boolean;
     foresightDays?: number;
     foresightSkips?: number;
+    riftMapPending?: boolean;
   };
+  /** Provisions temporarily hidden by Imp Infestation hazards (restored when cleared). */
+  hiddenProvisions?: number;
+  /** Pre-rolled 3-day upcoming daily gate event forecast queue. */
+  upcomingEvents?: Array<{ day: number; eventId: string }>;
+  /** Floors (0-indexed) protected against the next hazard by Ward Scroll or Wardwater. */
+  preventFloorHazard?: number[];
+  /** Day index of the last Sunlit Sanctum Rite of Renewal (7-day cooldown). */
+  sanctumRenewalLastDay?: number;
+  /** Next bell multiplier on Alchemy Lab explosion chance (set x3 by Alchemy Dare). */
+  nextBellLabExplosionMult?: number;
+  /** Extra Provisions added to the next Refectory meal (set +5 by Food Fight). */
+  nextBellMealExtraProvisions?: number;
+  /** Active timed Alchemy Lab brewing jobs queued at stations (§24.2). */
+  brewingQueue?: BrewingJob[];
+  /** Fractional potion yield carryover per recipe ID. */
+  fractionalPotionYields?: Record<string, number>;
+  /** Completed brews staffed by an Alchemist (+1 bonus potion every 4th brew). */
+  alchemistBrewCount?: number;
+  /** Accumulated Moonsheep bell-units toward 1 Moonsilk per 40 bells. */
+  moonsilkProgress?: number;
+  /** Accumulated Prism Beetle bell-units toward 1 Crystal per 25 bells. */
+  crystalProgress?: number;
+  /** Last Academy day Chronoflare Owl granted a 4-card draft. */
+  lastChronoflareDraftDay?: number;
+  /** Scriptorium scroll inventory (§25.4). */
+  scrolls?: Partial<Record<ScrollId, number>>;
+  /** Active Scriptorium scroll crafting jobs. */
+  scrollQueue?: ScrollCraftingJob[];
+  /** Partial potion recipe ingredient hints unlocked via Recipe Notes / Library research. */
+  discoveredHints?: Record<string, string[]>;
+  /** Renown already granted from Academy Charm (floor(charm / 50), §32.3). */
+  charmRenownGranted?: number;
+  /** Pending 3-choice Spellbook draft from Commencement or Endless Renown milestone (§31.1). */
+  pendingSpellbookDraft?: {
+    choices: string[];
+    tier: 1 | 2 | 3;
+    source: string;
+    allowPlanPick?: boolean;
+  };
+  /** Last Academy day an alumnus visited with a gift (§13.3, max 1/day). */
+  lastAlumniVisitDay?: number;
+  /** Highest Renown milestone threshold already awarded a Spellbook in Endless mode. */
+  lastRenownSpellbookThreshold?: number;
+  /** Last star rating (0-3) earned at Timed Term Commencement. */
+  lastTermStars?: number;
+  /** Map of Anki cardId -> Academy day when it was first observed suspended (queue === -1). */
+  suspendedSinceDay?: Record<number, number>;
+  /** Unpaid Veil upkeep awaiting confirmation when settings.veilPayment === 'ask'. */
+  pendingVeilPayment?: {
+    totalCost: number;
+    days: number;
+  };
+  /** Bonus Known Plan pick unlocked by The Founder's Testament at start of Timed Term. */
+  pendingFoundersPlanChoice?: boolean;
 }

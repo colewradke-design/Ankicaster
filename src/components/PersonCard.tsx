@@ -9,7 +9,7 @@
 import React from 'react';
 import { X, AlertTriangle } from 'lucide-react';
 import type { Character, FullGameState, PlacedRoom, SchoolType } from '../types/ankicaster';
-import { roomDisplayName } from '../data/content';
+import { roomDisplayName, PERSONALITY_DEFINITIONS, TRAIT_DEFINITIONS } from '../data/content';
 import { wizardMasteredSchools } from '../utils/formulas';
 import { describePersonActivity } from '../visual/agents/personActivity';
 import type { VisualAgent } from '../visual/agents/Choreographer';
@@ -175,9 +175,47 @@ export const PersonCard: React.FC<PersonCardProps> = ({
                   </div>
                 )}
 
-                <div className="text-slate-300" data-testid="person-personality">
-                  {char.personality}
-                  {char.traits && char.traits.length > 0 && ` · ${char.traits.join(', ')}`}
+                <div className="text-slate-300 space-y-1" data-testid="person-personality">
+                  <div title={PERSONALITY_DEFINITIONS[char.personality]?.flavour}>
+                    <span className="font-semibold text-slate-200">
+                      {`${char.personality}${char.traits && char.traits.length > 0 ? ` · ${char.traits.join(', ')}` : ''}`}
+                    </span>
+                    {PERSONALITY_DEFINITIONS[char.personality] && (
+                      <div className="text-[11px] text-slate-400">{PERSONALITY_DEFINITIONS[char.personality].flavour}</div>
+                    )}
+                  </div>
+                  {char.traits && char.traits.length > 0 && (
+                    <div className="flex flex-wrap gap-1 pt-0.5">
+                      {char.traits.map(t => {
+                        const tDef = TRAIT_DEFINITIONS[t];
+                        const tone =
+                          tDef?.category === 'positive'
+                            ? 'bg-emerald-950/70 border-emerald-700/50 text-emerald-300'
+                            : tDef?.category === 'troublesome'
+                            ? 'bg-rose-950/70 border-rose-700/50 text-rose-300'
+                            : 'bg-slate-800/80 border-slate-700 text-slate-300';
+                        return (
+                          <span
+                            key={t}
+                            title={tDef?.effect || t}
+                            className={`text-[11px] px-1.5 py-0.5 rounded border ${tone}`}
+                          >
+                            {t}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {char.cosmeticStatus && (
+                    <div className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-fuchsia-950/60 border border-fuchsia-600/50 text-fuchsia-200" data-testid="person-cosmetic">
+                      ✨ {char.cosmeticStatus.label}
+                    </div>
+                  )}
+                  {char.misbehaviorChains && char.misbehaviorChains.length > 0 && (
+                    <div className="text-[11px] text-amber-300" data-testid="person-misbehavior-chain">
+                      ⚠️ Active prank trail ({char.misbehaviorChains.length}) — clear with Calming Tonic or Hush
+                    </div>
+                  )}
                 </div>
               </>
             )}

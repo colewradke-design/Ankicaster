@@ -519,6 +519,30 @@ export const HAZARD_VIGNETTE_REGISTRY: Record<string, HazardVignetteSpec> = {
     secondaryColor: 0x4c5ba3,
     description: 'Dark night_ink blotches and rising shadow droplets'
   },
+  mana_static: {
+    id: 'mana_static',
+    kind: 'hazard',
+    visualLook: 'static_arcs',
+    primaryColor: 0x60a5fa,
+    secondaryColor: 0xe0f2fe,
+    description: 'Crackling arcane static arcs disrupting enchantments'
+  },
+  poltergeist: {
+    id: 'poltergeist',
+    kind: 'hazard',
+    visualLook: 'phantom_gusts',
+    primaryColor: 0xc084fc,
+    secondaryColor: 0xe9d5ff,
+    description: 'Swirling mischievous phantom wisps'
+  },
+  wild_growth: {
+    id: 'wild_growth',
+    kind: 'hazard',
+    visualLook: 'thorn_vines',
+    primaryColor: 0x3f7a2c,
+    secondaryColor: 0x7db861,
+    description: 'Overgrown thorny vines creeping over floorboards'
+  },
   hex_fog: {
     id: 'hex_fog',
     kind: 'hazard',
@@ -526,6 +550,22 @@ export const HAZARD_VIGNETTE_REGISTRY: Record<string, HazardVignetteSpec> = {
     primaryColor: 0x7d5ba6,
     secondaryColor: 0x9c86e0,
     description: 'Low purple-green mist banks drifting across the floorboards'
+  },
+  gravity_hiccup: {
+    id: 'gravity_hiccup',
+    kind: 'hazard',
+    visualLook: 'floating_motes',
+    primaryColor: 0x38bdf8,
+    secondaryColor: 0xfef08a,
+    description: 'Upward drifting dust motes and bobbing sparkles'
+  },
+  imp_infestation: {
+    id: 'imp_infestation',
+    kind: 'hazard',
+    visualLook: 'imp_sparks',
+    primaryColor: 0xe07a3a,
+    secondaryColor: 0xfde047,
+    description: 'Mischievous glowing imp eyes and scurrying sparks'
   },
   echo_loop: {
     id: 'echo_loop',
@@ -535,6 +575,14 @@ export const HAZARD_VIGNETTE_REGISTRY: Record<string, HazardVignetteSpec> = {
     secondaryColor: 0x7dd3fc,
     description: 'Concentric temporal chime rings pulsing in place'
   },
+  wisp_swarm: {
+    id: 'wisp_swarm',
+    kind: 'hazard',
+    visualLook: 'lantern_wisps',
+    primaryColor: 0x5eead4,
+    secondaryColor: 0xfef9c3,
+    description: 'Orbiting glowing marsh-lights across the grounds'
+  },
   cold_snap: {
     id: 'cold_snap',
     kind: 'hazard',
@@ -542,6 +590,70 @@ export const HAZARD_VIGNETTE_REGISTRY: Record<string, HazardVignetteSpec> = {
     primaryColor: 0xd8eef7,
     secondaryColor: 0xffffff,
     description: 'Crystalline frost needles and pale ice glaze'
+  },
+  bubbling_cauldron: {
+    id: 'bubbling_cauldron',
+    kind: 'hazard',
+    visualLook: 'cauldron_fumes',
+    primaryColor: 0x4ade80,
+    secondaryColor: 0xfacc15,
+    description: 'Frothing alchemical bubbles and rising fumes'
+  },
+  kitchen_fire: {
+    id: 'kitchen_fire',
+    kind: 'hazard',
+    visualLook: 'hearth_flames',
+    primaryColor: 0xef4444,
+    secondaryColor: 0xfb923c,
+    description: 'Crackling embers and bright hearth flames'
+  },
+  drafty_window: {
+    id: 'drafty_window',
+    kind: 'hazard',
+    visualLook: 'wind_streaks',
+    primaryColor: 0xbae6fd,
+    secondaryColor: 0xf8fafc,
+    description: 'Gusting silver-white wind streaks'
+  },
+  rift_tremor: {
+    id: 'rift_tremor',
+    kind: 'hazard',
+    visualLook: 'rift_shockwaves',
+    primaryColor: 0x9333ea,
+    secondaryColor: 0xf472b6,
+    description: 'Rippling dimensional tremor fractures'
+  },
+  shade_breach: {
+    id: 'shade_breach',
+    kind: 'hazard',
+    visualLook: 'violet_crack_wisps',
+    primaryColor: 0x581c87,
+    secondaryColor: 0xc084fc,
+    description: 'Creeping shadow breach tear with drifting wisps'
+  },
+  gloom_pack: {
+    id: 'gloom_pack',
+    kind: 'hazard',
+    visualLook: 'gloom_eyes',
+    primaryColor: 0x312e81,
+    secondaryColor: 0xf43f5e,
+    description: 'Glowing crimson hound eyes prowling in gloom mist'
+  },
+  veil_rent: {
+    id: 'veil_rent',
+    kind: 'hazard',
+    visualLook: 'violet_crack_wisps',
+    primaryColor: 0x6b21a8,
+    secondaryColor: 0xe879f9,
+    description: 'Wide jagged tear in the Veil dome'
+  },
+  wanderer: {
+    id: 'wanderer',
+    kind: 'hazard',
+    visualLook: 'star_wanderer',
+    primaryColor: 0x0f766e,
+    secondaryColor: 0x99f6e4,
+    description: 'Curious otherworldly shimmer sitting in the hall'
   },
   breach: {
     id: 'breach',
@@ -1647,8 +1759,14 @@ export function drawHazardVignette(
       const lift = (Math.sin(phase + i * 1.3) + 1) * 4;
       g.circle(dx, B - 5 - lift, 1.4).fill({ color: spec.secondaryColor, alpha: 0.78 });
     }
-  } else if (hazardId === 'breach') {
-    // Small violet crack and drifting wisps
+  } else if (
+    hazardId === 'breach' ||
+    hazardId === 'shade_breach' ||
+    hazardId === 'veil_rent' ||
+    hazardId === 'gloom_pack' ||
+    hazardId === 'wanderer'
+  ) {
+    // Violet crack and drifting wisps
     line(g, cx - 2, cy - 9, cx + 1.5, cy - 2, spec.secondaryColor, 1.4, 0.95);
     line(g, cx + 1.5, cy - 2, cx - 1.5, cy + 5, 0xd8b4fe, 1.4, 0.95);
     line(g, cx - 1.5, cy + 5, cx + 2, cy + 10, spec.secondaryColor, 1.2, 0.9);
@@ -1666,7 +1784,12 @@ export function drawHazardVignette(
         alpha: 0.32
       });
     }
-  } else if (hazardId === 'echo_loop') {
+  } else if (
+    hazardId === 'echo_loop' ||
+    hazardId === 'mana_static' ||
+    hazardId === 'gravity_hiccup' ||
+    hazardId === 'rift_tremor'
+  ) {
     const pulse = (phase % 1) * 6;
     g.circle(cx, cy, 5 + pulse).stroke({ color: spec.primaryColor, width: 1.1, alpha: 0.7 });
     g.circle(cx, cy, 10 + pulse * 0.6).stroke({ color: spec.secondaryColor, width: 0.9, alpha: 0.5 });
@@ -1674,6 +1797,27 @@ export function drawHazardVignette(
     for (let x = L + 6; x < L + W - 4; x += 10) {
       line(g, x, B - 1, x, B - 6, spec.secondaryColor, 1, 0.85);
       line(g, x - 2, B - 4, x + 2, B - 4, spec.primaryColor, 0.8, 0.8);
+    }
+  } else if (hazardId === 'kitchen_fire' || hazardId === 'bubbling_cauldron') {
+    for (let i = 0; i < 5; i++) {
+      const fx = L + ((i + 0.5) / 5) * W;
+      const fy = B - 4 - ((phase * 6 + i * 3) % 10);
+      g.circle(fx, fy, 1.8).fill({ color: spec.secondaryColor, alpha: 0.85 });
+      g.circle(fx, fy + 2, 2.2).fill({ color: spec.primaryColor, alpha: 0.6 });
+    }
+  } else if (
+    hazardId === 'wild_growth' ||
+    hazardId === 'wisp_swarm' ||
+    hazardId === 'imp_infestation' ||
+    hazardId === 'drafty_window' ||
+    hazardId === 'poltergeist'
+  ) {
+    for (let i = 0; i < 4; i++) {
+      const a = phase + i * 1.4;
+      const sx = cx + Math.cos(a) * (W * 0.25);
+      const sy = cy + Math.sin(a * 1.2) * (box.height * 0.22);
+      g.circle(sx, sy, 1.6).fill({ color: spec.secondaryColor, alpha: 0.85 });
+      line(g, cx, B - 2, sx, sy, spec.primaryColor, 0.9, 0.45);
     }
   } else {
     // Incident vignettes

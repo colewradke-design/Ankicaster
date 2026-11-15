@@ -9,21 +9,27 @@ import {
   CareerType,
   Character,
   FullGameState,
+  HazardType,
   PlacedRoom,
   RiftDestination,
   SchoolType
 } from '../types/ankicaster';
-import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS } from '../data/content';
+import { ROOM_DEFINITIONS, FURNITURE_DEFINITIONS, ALUMNI_BONUS_CAPS } from '../data/content';
 import { isRoomUnfinished } from './requiredFurniture';
 
 /**
  * F1: Mana per honest review
- * Base 10 mana. Arcane level 6-10 grants +2% per level (max +10%). Combined mana mult capped at +25%.
+ * Base mana (default 10, configurable 1..20). Arcane level 6-10 grants +2% per level (max +10%). Combined mana mult capped at +25%.
  */
-export function calculateReviewMana(arcaneLevel: number, additionalMults: number = 0): number {
+export function calculateReviewMana(
+  arcaneLevel: number,
+  additionalMults: number = 0,
+  baseManaPerReview: number = 10
+): number {
+  const baseMana = Math.min(20, Math.max(1, Number.isFinite(baseManaPerReview) ? baseManaPerReview : 10));
   const arcaneBuff = 0.02 * Math.max(0, arcaneLevel - 5);
   const totalMult = Math.min(0.25, arcaneBuff + additionalMults);
-  return 10 * (1 + totalMult);
+  return baseMana * (1 + totalMult);
 }
 
 /**
@@ -74,6 +80,72 @@ export function wizardOrbQuote(input: {
     free,
     capped
   };
+}
+
+export const SPELL_TIER_MIN_LEVEL: Record<string, number> = {
+  T1: 1,
+  T2: 3,
+  T3: 5,
+  T4: 8,
+  Cap: 10
+};
+
+export interface WizardSchoolBuffs {
+  arcaneSteps: number;
+  natureSteps: number;
+  lightSteps: number;
+  shadowSteps: number;
+  alchemySteps: number;
+  manaMult: number;
+  natureMult: number;
+  lightRecoveryMult: number;
+  lightTeachDelayMult: number;
+  lightEssenceMult: number;
+  shadowMult: number;
+  alchemyCostMult: number;
+  alchemyPotionYieldBonus: number;
+}
+
+/**
+ * GDD §7.6: Wizard school buffs at levels 6-10 (0-5 steps per school).
+ */
+export function wizardSchoolBuffs(levels: Partial<Record<string, number>>): WizardSchoolBuffs {
+  const step = (k: SchoolType) => Math.min(5, Math.max(0, (levels?.[k] || 0) - 5));
+  const arcaneSteps = step('arcane');
+  const natureSteps = step('nature');
+  const lightSteps = step('light');
+  const shadowSteps = step('shadow');
+  const alchemySteps = step('alchemy');
+  return {
+    arcaneSteps,
+    natureSteps,
+    lightSteps,
+    shadowSteps,
+    alchemySteps,
+    manaMult: 1 + 0.02 * arcaneSteps,
+    natureMult: 1 + 0.03 * natureSteps,
+    lightRecoveryMult: 1 + 0.03 * lightSteps,
+    lightTeachDelayMult: 1 - 0.03 * lightSteps,
+    lightEssenceMult: 1 + 0.03 * lightSteps,
+    shadowMult: 1 - 0.03 * shadowSteps,
+    alchemyCostMult: 1 - 0.03 * alchemySteps,
+    alchemyPotionYieldBonus: 0.03 * alchemySteps
+  };
+}
+
+/** GDD §7.5: Study level unlocks at total wizard levels 15 (Lv 2) and 30 (Lv 3). */
+export function computeStudyLevel(levels: Partial<Record<string, number>>): 1 | 2 | 3 {
+  const total = Object.values(levels || {}).reduce<number>((sum, v) => sum + (v || 0), 0);
+  if (total >= 30) return 3;
+  if (total >= 15) return 2;
+  return 1;
+}
+
+/** GDD §7.3: 1 active + (1 / 2 / 4 queued) = 2 / 3 / 5 total sessions by Study level. */
+export function maxStudySessionsForWizard(studyLevel: number): number {
+  if (studyLevel >= 3) return 5;
+  if (studyLevel >= 2) return 3;
+  return 2;
 }
 
 /**
@@ -206,6 +278,13 @@ export function calculateRoomQuality(room: PlacedRoom): { q: number; tier: 'bare
     }
   }
 
+  if (room.misbehaviorCharmMalus) {
+    const malus = room.misbehaviorCharmMalus;
+    if (primaryStats.includes('charm')) q += malus;
+    else if (secondaryStat === 'charm') q += 0.5 * malus;
+  }
+  q = Math.max(0, q);
+
   let tier: 'bare' | 'plain' | 'cozy' | 'fine' | 'splendid' = 'bare';
   if (q >= 70) tier = 'splendid';
   else if (q >= 45) tier = 'fine';
@@ -250,7 +329,9 @@ export function calculateDailyVeilCost(
   hasBatSwarm: boolean = false,
   hasUmbralWyrm: boolean = false,
   batScale = 1,
-  wyrmScale = 1
+  wyrmScale = 1,
+  wardingChambersCount: number = 0,
+  extraReductions: Array<{ label: string; pct: number }> = []
 ): { cost: number; sizePoints: number; reductions: Array<{ label: string; pct: number }> } {
   let sizePoints = 0;
   for (const r of rooms) {
@@ -269,6 +350,12 @@ export function calculateDailyVeilCost(
     reductions.push({ label: `Shadow Level ${shadowLevel}`, pct: 0.03 * shadowSteps });
   }
 
+  // Warding Chambers (5% each, max 3 counted -> max 15%)
+  const activeChambers = Math.min(3, Math.max(0, wardingChambersCount));
+  if (activeChambers > 0) {
+    reductions.push({ label: `${activeChambers} Warding Chamber(s)`, pct: 0.05 * activeChambers });
+  }
+
   // Warders (3% each, max 3)
   const activeWarders = Math.min(3, wardersCount);
   if (activeWarders > 0) {
@@ -283,6 +370,10 @@ export function calculateDailyVeilCost(
   if (hasBatSwarm) reductions.push({ label: 'Velvet Bat Swarm', pct: 0.02 * batScale });
   if (hasUmbralWyrm) reductions.push({ label: 'Umbral Wyrmling', pct: 0.05 * wyrmScale });
 
+  for (const extra of extraReductions) {
+    if (extra.pct > 0) reductions.push(extra);
+  }
+
   const totalReductionPct = Math.min(0.5, reductions.reduce((sum, item) => sum + item.pct, 0));
   const rawCost = (40 + 3 * sizePoints) * (1 - totalReductionPct);
 
@@ -291,6 +382,27 @@ export function calculateDailyVeilCost(
     sizePoints,
     reductions
   };
+}
+
+/**
+ * §19.2: Per-bell hazard probability.
+ * p_hazard = 0.02 * band_multiplier * (1 + size_points / 200) * (1 - min(0.75, reduction)),
+ * scaled by Moonless Night (0.4x) outside the 75% reduction cap, capped at 75%.
+ */
+export function calculateHazardRollChance(
+  veilStrength: number,
+  sizePoints: number,
+  totalReduction: number,
+  hasMoonlessNight: boolean = false
+): number {
+  const bandMult =
+    veilStrength >= 80 ? 1.0 :
+    veilStrength >= 50 ? 1.5 :
+    veilStrength >= 20 ? 2.5 : 4.0;
+  const cappedReduction = Math.min(0.75, Math.max(0, totalReduction));
+  const raw = 0.02 * bandMult * (1 + sizePoints / 200) * (1 - cappedReduction);
+  const adjusted = raw * (hasMoonlessNight ? 0.4 : 1);
+  return Math.min(0.75, Math.max(0, adjusted));
 }
 
 /**
@@ -372,7 +484,8 @@ export type FurnitureEffectKind =
   | 'brew_speed_pct'
   | 'rift_fortune'
   | 'rift_supply_slots'
-  | 'renown_bonus';
+  | 'renown_bonus'
+  | 'misbehavior_pct';
 
 export type FurnitureEffectScope = 'room' | 'adjacent' | 'grounds' | 'academy';
 
@@ -483,7 +596,7 @@ export function furnitureEffectForRoom(defId: string, roomDefId?: string): Furni
  */
 export function roomFurnitureEffects(room: PlacedRoom): Partial<Record<FurnitureEffectKind, number>> {
   const out: Partial<Record<FurnitureEffectKind, number>> = {};
-  if (room.state !== 'built' || isRoomUnfinished(room) || !room.furniture?.length) return out;
+  if (room.state !== 'built' || isRoomUnfinished(room) || room.hazard?.type === 'mana_static' || !room.furniture?.length) return out;
   const counts: Record<string, number> = {};
   const sorted = [...room.furniture].sort((a, b) => (a.damaged ? 1 : 0) - (b.damaged ? 1 : 0));
   for (const f of sorted) {
@@ -521,7 +634,7 @@ export function academyFurnitureEffect(
 ): number {
   let total = 0;
   for (const r of rooms) {
-    if (r.state !== 'built' || isRoomUnfinished(r) || !r.furniture?.length) continue;
+    if (r.state !== 'built' || isRoomUnfinished(r) || r.hazard?.type === 'mana_static' || !r.furniture?.length) continue;
     const counts: Record<string, number> = {};
     const sorted = [...r.furniture].sort((a, b) => (a.damaged ? 1 : 0) - (b.damaged ? 1 : 0));
     for (const f of sorted) {
@@ -565,7 +678,8 @@ const EFFECT_LABELS: Record<FurnitureEffectKind, (v: number) => string> = {
   brew_speed_pct: v => `Brewing +${v}%`,
   rift_fortune: v => `Rift Fortune +${v}`,
   rift_supply_slots: v => `Expedition slots +${v}`,
-  renown_bonus: v => `Renown +${v}`
+  renown_bonus: v => `Renown +${v}`,
+  misbehavior_pct: v => `Misbehavior ${v}%`
 };
 
 export function formatFurnitureEffect(kind: FurnitureEffectKind, value: number): string {
@@ -575,11 +689,26 @@ export function formatFurnitureEffect(kind: FurnitureEffectKind, value: number):
 /**
  * School tags for room hazards so Warder affinity applies.
  */
-export const HAZARD_SCHOOL: Record<NonNullable<PlacedRoom['hazard']>['type'], SchoolType> = {
-  spill_of_night: 'shadow',
+export const HAZARD_SCHOOL: Record<HazardType, SchoolType> = {
+  mana_static: 'arcane',
+  poltergeist: 'shadow',
+  wild_growth: 'nature',
   hex_fog: 'shadow',
+  gravity_hiccup: 'arcane',
+  imp_infestation: 'shadow',
   echo_loop: 'arcane',
+  wisp_swarm: 'light',
   cold_snap: 'nature',
+  spill_of_night: 'shadow',
+  night_ink: 'shadow',
+  bubbling_cauldron: 'alchemy',
+  kitchen_fire: 'alchemy',
+  drafty_window: 'arcane',
+  rift_tremor: 'shadow',
+  shade_breach: 'shadow',
+  gloom_pack: 'shadow',
+  veil_rent: 'shadow',
+  wanderer: 'arcane',
   breach: 'shadow'
 };
 
@@ -717,3 +846,223 @@ export function getVeilBand(strength: number): VeilBand {
   if (s >= 20) return 'thin';
   return 'torn';
 }
+
+export function alumniRetirementScale(retirementAgeDays?: number): number {
+  const days = Number.isFinite(retirementAgeDays) && (retirementAgeDays as number) > 0
+    ? (retirementAgeDays as number)
+    : 90;
+  return Math.min(2.0, Math.max(0.67, days / 90));
+}
+
+export interface AlumniBonusesSummary {
+  teacherClassroomPct: number;
+  scholarManaPct: number;
+  gardenerFoodHerbsPct: number;
+  tamerTamingPct: number;
+  tamerCreatureBuffPct: number;
+  healerHealingPct: number;
+  warderVeilReductionPct: number;
+  alchemistPotionPct: number;
+  builderBuildTimePct: number;
+  adventurerFortuneRaw: number;
+  adventurerFortune: number;
+  residentSchoolEssencePct: Record<SchoolType, number>;
+  totalExtraSchoolsRenown: number;
+}
+
+const ALL_SCHOOLS_LIST: SchoolType[] = ['arcane', 'nature', 'light', 'shadow', 'alchemy'];
+
+function schoolsFromAlumnusTitles(titles: string[] = []): SchoolType[] {
+  const out: SchoolType[] = [];
+  for (const t of titles) {
+    const low = t.toLowerCase();
+    for (const sch of ALL_SCHOOLS_LIST) {
+      if (low.includes(sch) && !out.includes(sch)) {
+        out.push(sch);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * GDD §31.3: Aggregate Career Alumni Bonuses (capped per category).
+ */
+export function computeAlumniBonuses(alumniGallery: FullGameState['alumniGallery'] = []): AlumniBonusesSummary {
+  const summary: AlumniBonusesSummary = {
+    teacherClassroomPct: 0,
+    scholarManaPct: 0,
+    gardenerFoodHerbsPct: 0,
+    tamerTamingPct: 0,
+    tamerCreatureBuffPct: 0,
+    healerHealingPct: 0,
+    warderVeilReductionPct: 0,
+    alchemistPotionPct: 0,
+    builderBuildTimePct: 0,
+    adventurerFortuneRaw: 0,
+    adventurerFortune: 0,
+    residentSchoolEssencePct: { arcane: 0, nature: 0, light: 0, shadow: 0, alchemy: 0 },
+    totalExtraSchoolsRenown: 0
+  };
+
+  for (const a of alumniGallery || []) {
+    const scale = alumniRetirementScale(a.retiredAgeDays);
+    const val = Number.isFinite(a.bonusValue) && a.bonusValue > 0 ? a.bonusValue : 0;
+    const career = a.career || a.bonusType;
+    summary.totalExtraSchoolsRenown += Math.max(0, a.extraSchoolsMastered || 0) * 5;
+
+    switch (career) {
+      case 'teacher':
+      case 'teacher_classroom':
+        summary.teacherClassroomPct += val > 0 ? val : 0.01 * scale;
+        break;
+      case 'scholar':
+      case 'scholar_mana':
+        summary.scholarManaPct += val > 0 ? val : 0.005 * scale;
+        break;
+      case 'gardener':
+      case 'gardener_yield':
+        summary.gardenerFoodHerbsPct += val > 0 ? val : 0.02 * scale;
+        break;
+      case 'tamer':
+      case 'tamer_bond':
+        summary.tamerTamingPct += val > 0 ? val : 0.02 * scale;
+        summary.tamerCreatureBuffPct += 0.01 * scale;
+        break;
+      case 'healer':
+      case 'healer_recovery':
+        summary.healerHealingPct += val > 0 ? val : 0.02 * scale;
+        break;
+      case 'warder':
+      case 'warder_veil':
+        summary.warderVeilReductionPct += val > 0 ? val : 0.01 * scale;
+        break;
+      case 'alchemist':
+      case 'alchemist_yield':
+        summary.alchemistPotionPct += val > 0 ? val : 0.02 * scale;
+        break;
+      case 'builder':
+      case 'builder_speed':
+        summary.builderBuildTimePct += val > 0 ? val : 0.01 * scale;
+        break;
+      case 'adventurer':
+      case 'adventurer_fortune':
+        summary.adventurerFortuneRaw += val > 0 ? val : 0.2 * scale;
+        break;
+      case 'resident':
+      case 'resident_essence': {
+        const schools = schoolsFromAlumnusTitles(a.titles);
+        const perSchool = val > 0 ? val : 0.01 * scale;
+        if (schools.length > 0) {
+          for (const sch of schools) {
+            summary.residentSchoolEssencePct[sch] += perSchool;
+          }
+        } else {
+          // Legacy fallback if titles lacked school names
+          summary.teacherClassroomPct += perSchool;
+        }
+        break;
+      }
+      case 'renown_resonance': {
+        // Legacy pre-M7 alumnus migrated cleanly as resident essence / scholar if no career
+        const schools = schoolsFromAlumnusTitles(a.titles);
+        const perSchool = 0.01 * scale;
+        if (schools.length > 0) {
+          for (const sch of schools) {
+            summary.residentSchoolEssencePct[sch] += perSchool;
+          }
+        } else {
+          summary.scholarManaPct += 0.005 * scale;
+        }
+        break;
+      }
+      default: {
+        // Check legacy prefix resident_<school>
+        if (typeof career === 'string' && career.startsWith('resident_')) {
+          const sch = career.slice('resident_'.length) as SchoolType;
+          if (ALL_SCHOOLS_LIST.includes(sch)) {
+            summary.residentSchoolEssencePct[sch] += val > 0 ? val : 0.01 * scale;
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  summary.teacherClassroomPct = Math.min(ALUMNI_BONUS_CAPS.teacher, summary.teacherClassroomPct);
+  summary.scholarManaPct = Math.min(ALUMNI_BONUS_CAPS.scholar, summary.scholarManaPct);
+  summary.gardenerFoodHerbsPct = Math.min(ALUMNI_BONUS_CAPS.gardener, summary.gardenerFoodHerbsPct);
+  summary.tamerTamingPct = Math.min(ALUMNI_BONUS_CAPS.tamer_taming, summary.tamerTamingPct);
+  summary.tamerCreatureBuffPct = Math.min(ALUMNI_BONUS_CAPS.tamer_creature, summary.tamerCreatureBuffPct);
+  summary.healerHealingPct = Math.min(ALUMNI_BONUS_CAPS.healer, summary.healerHealingPct);
+  summary.warderVeilReductionPct = Math.min(ALUMNI_BONUS_CAPS.warder, summary.warderVeilReductionPct);
+  summary.alchemistPotionPct = Math.min(ALUMNI_BONUS_CAPS.alchemist, summary.alchemistPotionPct);
+  summary.builderBuildTimePct = Math.min(ALUMNI_BONUS_CAPS.builder, summary.builderBuildTimePct);
+  summary.adventurerFortune = Math.min(ALUMNI_BONUS_CAPS.adventurer_fortune, Math.floor(summary.adventurerFortuneRaw + 1e-9));
+  for (const sch of ALL_SCHOOLS_LIST) {
+    summary.residentSchoolEssencePct[sch] = Math.min(ALUMNI_BONUS_CAPS.resident_per_school, summary.residentSchoolEssencePct[sch]);
+  }
+  return summary;
+}
+
+export interface SpellbookBonusesSummary {
+  plotOutputPct: number;
+  weatherPenaltyMult: number;
+  reducedDraftGrowth: boolean;
+  hazardReductionPct: number;
+  dirtReductionPct: number;
+  tamingPct: number;
+  mealProvisionsReductionPct: number;
+  furnitureCostReductionPct: number;
+  veilCostReductionPct: number;
+  labExplosionReductionPct: number;
+  potionYieldPct: number;
+  openDoorActive: boolean;
+  riftFortuneBonus: number;
+  supplySlotBonus: number;
+  persistPlansAndPatterns: boolean;
+  buildTimeReductionPct: number;
+  healingPct: number;
+  misbehaviorReductionPct: number;
+  halveDraftDraws: boolean;
+  extraFullRewardLootRoll: number;
+  manaPct: number;
+  breachesOnlyAtTorn: boolean;
+  creatureBuffPct: number;
+  maxSpeciesCopiesForBuff: number;
+  foundersTestament: boolean;
+  spellCooldownReductionPct: number;
+}
+
+export function computeSpellbookBonuses(spellbooks: string[] = []): SpellbookBonusesSummary {
+  const has = (id: string) => spellbooks.includes(id);
+  return {
+    plotOutputPct: has('almanac_of_kind_weather') ? 0.1 : 0,
+    weatherPenaltyMult: has('almanac_of_kind_weather') ? 0.5 : 1,
+    reducedDraftGrowth: has('primer_of_patience'),
+    hazardReductionPct: has('little_book_of_wards') ? 0.1 : 0,
+    dirtReductionPct: has('housekeepers_hymnal') ? 0.25 : 0,
+    tamingPct: has('the_tamers_pocketbook') ? 0.15 : 0,
+    mealProvisionsReductionPct: has('cookery_for_fifty') ? 0.1 : 0,
+    furnitureCostReductionPct: has('notes_on_furnishing') ? 0.1 : 0,
+    veilCostReductionPct: (has('treatise_on_thin_places') ? 0.1 : 0) + (has('covenant_of_the_veil') ? 0.1 : 0),
+    labExplosionReductionPct: has('codex_of_careful_hands') ? 0.5 : 0,
+    potionYieldPct: has('codex_of_careful_hands') ? 0.1 : 0,
+    openDoorActive: has('the_open_door'),
+    riftFortuneBonus: has('field_guide_to_elsewhere') ? 1 : 0,
+    supplySlotBonus: has('field_guide_to_elsewhere') ? 1 : 0,
+    persistPlansAndPatterns: has('architects_folio'),
+    buildTimeReductionPct: has('architects_folio') ? 0.05 : 0,
+    healingPct: has('healers_compendium') ? 0.2 : 0,
+    misbehaviorReductionPct: has('the_quiet_corridor') ? 0.15 : 0,
+    halveDraftDraws: has('the_eternal_index'),
+    extraFullRewardLootRoll: has('atlas_of_the_unmapped') ? 1 : 0,
+    manaPct: has('book_of_bright_mornings') ? 0.03 : 0,
+    breachesOnlyAtTorn: has('covenant_of_the_veil'),
+    creatureBuffPct: has('menagerie_royale') ? 0.15 : 0,
+    maxSpeciesCopiesForBuff: has('menagerie_royale') ? 3 : 2,
+    foundersTestament: has('the_founders_testament'),
+    spellCooldownReductionPct: has('grimoire_of_swift_hands') ? 0.3 : 0
+  };
+}
+

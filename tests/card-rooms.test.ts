@@ -154,6 +154,7 @@ test('hunger settles near 84 when seated and stays above 25 when standing', () =
   const run = (withRef: boolean) => {
     const s = stocked();
     s.resources.provisions = 10000;
+    s.activeBuffs = { ...(s.activeBuffs || {}), wardPulseBells: 100 };
     // The next bell is a meal, so the stored target is set before hunger drifts.
     s.bellIndex = 4;
     s.characters = Array.from({ length: 15 }, (_, i) => student(100 + i));

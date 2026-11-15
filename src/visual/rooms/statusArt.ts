@@ -51,7 +51,6 @@ export function drawLockHazard(g: Painter, room: PlacedRoom, box: Box) {
   const kind = (room.hazard?.type || room.lockReason || '').toLowerCase();
   const L = box.left, W = box.width, B = box.floorLineY, T = box.top;
   if (kind.includes('spill') || kind.includes('night')) {
-    // night_ink look: dark indigo-violet ink pool + blotches + rising ink droplets
     g.rect(L, T, W, box.height).fill({ color: 0x151a38, alpha: 0.28 });
     g.ellipse(L + W / 2, B - 1.5, W * 0.38, 3.2).fill({ color: 0x12152e, alpha: 0.92 });
     g.ellipse(L + W * 0.32, B - 2, W * 0.16, 2.2).fill({ color: 0x222b57, alpha: 0.85 });
@@ -63,19 +62,29 @@ export function drawLockHazard(g: Painter, room: PlacedRoom, box: Box) {
   } else if (kind.includes('cold') || kind.includes('frost')) {
     g.rect(L, T, W, box.height).fill({ color: 0xd8eef7, alpha: 0.25 });
     for (let x = L + 4; x < L + W; x += 8) line(g, x, T + 3, x + 2, T + 7, 0xffffff, 0.75, 0.8);
-  } else if (kind.includes('breach')) {
-    // Small violet crack and drifting wisps
+  } else if (kind.includes('fire') || kind.includes('cauldron')) {
+    g.rect(L, T, W, box.height).fill({ color: kind.includes('fire') ? 0xef4444 : 0x22c55e, alpha: 0.2 });
+    for (let i = 0; i < 4; i++) {
+      g.circle(L + (i + 0.5) * (W / 4), B - 5 - (i % 2) * 4, 2.2).fill({
+        color: kind.includes('fire') ? 0xfb923c : 0x86efac,
+        alpha: 0.8
+      });
+    }
+  } else if (kind.includes('growth') || kind.includes('vine')) {
+    g.rect(L, T, W, box.height).fill({ color: 0x3f7a2c, alpha: 0.22 });
+    line(g, L + 4, B - 2, L + W * 0.45, T + 6, 0x7db861, 1.4, 0.85);
+    line(g, L + W - 4, B - 2, L + W * 0.55, T + 8, 0x4e8b3a, 1.4, 0.85);
+  } else if (kind.includes('breach') || kind.includes('veil_rent') || kind.includes('gloom') || kind.includes('wanderer')) {
     const cx = L + W / 2;
     const cy = T + box.height / 2;
-    g.ellipse(cx, cy, 7, 12).fill({ color: 0x3d2856, alpha: 0.65 });
+    g.ellipse(cx, cy, 7, 12).fill({ color: kind.includes('wanderer') ? 0x0f766e : 0x3d2856, alpha: 0.65 });
     line(g, cx - 2, cy - 10, cx + 1, cy - 3, 0xb9a6ff, 1.4, 0.95);
     line(g, cx + 1, cy - 3, cx - 2, cy + 4, 0xd8b4fe, 1.4, 0.95);
     line(g, cx - 2, cy + 4, cx + 2, cy + 10, 0xb9a6ff, 1.2, 0.9);
-    // Drifting wisps
     g.circle(cx - 8, cy - 5, 1.8).fill({ color: 0xb9a6ff, alpha: 0.78 });
     g.circle(cx + 9, cy - 2, 1.5).fill({ color: 0x9bd4ff, alpha: 0.72 });
     g.circle(cx - 6, cy + 6, 1.4).fill({ color: 0xd8b4fe, alpha: 0.75 });
-  } else if (kind.includes('echo')) {
+  } else if (kind.includes('echo') || kind.includes('static') || kind.includes('gravity') || kind.includes('tremor')) {
     g.rect(L, T, W, box.height).fill({ color: 0x1e254d, alpha: 0.28 });
     const cx = L + W / 2;
     const cy = T + box.height / 2;

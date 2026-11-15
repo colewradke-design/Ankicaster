@@ -17,7 +17,14 @@ import {
   ActiveExpedition,
   InjuryType,
   AnkiCardSnapshot,
-  PlacedFurniture
+  PlacedFurniture,
+  HazardType,
+  PersonalityType,
+  AlchemyTarget,
+  BrewingJob,
+  HabitatType,
+  ScrollId,
+  ScrollCraftingJob
 } from '../types/ankicaster';
 import {
   ROOM_DEFINITIONS,
@@ -26,7 +33,17 @@ import {
   CREATURE_DEFINITIONS,
   RIFT_DESTINATIONS,
   SPELL_DEFINITIONS,
-  SCHOOL_EVENTS
+  SCHOOL_EVENTS,
+  HAZARD_CATALOG,
+  BREACH_CATALOG,
+  HazardDefinition,
+  PERSONALITY_DEFINITIONS,
+  TRAIT_DEFINITIONS,
+  MISBEHAVIOR_INCIDENTS,
+  GREENHOUSE_CROPS,
+  SCROLL_DEFINITIONS,
+  SPELLBOOK_DEFINITIONS,
+  ENDLESS_SPELLBOOK_MILESTONES
 } from '../data/content';
 import { createInitialGameState } from '../data/initialState';
 import {
@@ -38,6 +55,9 @@ import {
   newlyUnsupportedRooms,
   stairMoveWarnings,
   placementCharge,
+  discountedBuildReviews,
+  discountedFurnitureCost,
+  discountedResourceCost,
   defaultSpent,
   demolishRefund,
   REFUND_MATERIALS,
@@ -53,11 +73,13 @@ import {
 } from './requiredFurniture';
 import {
   academyFurnitureEffect,
+  alumniRetirementScale,
   FACULTY_CAREERS,
   FURNITURE_EFFECTS,
   getFacultySummary,
   calculateReviewMana,
   calculateDailyVeilCost,
+  calculateHazardRollChance,
   calculateFacultyLimit,
   calculateStudentSkill,
   isMasteryReady,
@@ -69,11 +91,16 @@ import {
   calculateRoomQuality,
   careerAffinityMultiplier,
   classroomSchool,
+  computeAlumniBonuses,
+  computeSpellbookBonuses,
+  computeStudyLevel,
   HAZARD_SCHOOL,
+  maxStudySessionsForWizard,
   wizardMasteredSchools,
-  wizardOrbQuote
+  wizardOrbQuote,
+  wizardSchoolBuffs
 } from '../utils/formulas';
-import { computeReachability, ReachabilityInfo } from './reachability';
+import { computeDistanceFromRooms, computeReachability, ReachabilityInfo } from './reachability';
 import {
   DraftDeckId, DRAFT_TUTORIAL, STARTER_PATTERNS, dealDraft, deckPrice, isPatternKnown, isRoomUnlocked, isStructure, planHint, requiredFixturesForRoom
 } from './decks';
@@ -81,7 +108,20 @@ import {
   BellNote, commitBell, ensureLedger, glassworksConversion, logResourceChange, logResourceDiff,
   resourceSnapshot, storageCap as storageCapOf, weavingOutput
 } from './resourceReport';
-import { getPenOccupants, penAcceptedHabitats, resolveAllCreatureRooms, syncDiscoveredCreatures } from './creatures';
+import {
+  ALL_HABITATS,
+  bondBuffMultiplier,
+  creatureCategoryBonus,
+  creatureSpeciesBuffSum,
+  getPenOccupants,
+  grantTamingOneTimeBonuses,
+  menagerieModuleCap,
+  penAcceptedHabitats,
+  penCreatureCapacity,
+  resolveAllCreatureRooms,
+  roomAcceptedHabitats,
+  syncDiscoveredCreatures
+} from './creatures';
 import {
   bestBuffScale,
   billCreatureMeals,
@@ -96,7 +136,9 @@ import {
 import {
   applyAcademyScheduleToState,
   buildAcademySchedule,
+  effectiveWorkplaceSlots,
   getStudentDelaySource,
+  libraryReaderCapacity,
   refectoryChairCount
 } from './schedule';
 import {
@@ -147,13 +189,1551 @@ function uniqueNoticeId(prefix: string, state: FullGameState): string {
 function cloneRoom(r: PlacedRoom): PlacedRoom {
   return {
     ...r,
-    settings: { ...r.settings },
+    settings: {
+      ...r.settings,
+      crops: r.settings?.crops ? [...r.settings.crops] : undefined,
+      modules: r.settings?.modules ? [...r.settings.modules] : undefined
+    },
     furniture: (r.furniture || []).map(f => ({ ...f })),
     unplacedFurniture: r.unplacedFurniture ? r.unplacedFurniture.map(u => ({ ...u })) : undefined,
     hazard: r.hazard ? { ...r.hazard } : undefined,
     troubleMalus: r.troubleMalus ? { ...r.troubleMalus } : undefined,
     spent: r.spent ? { ...r.spent } : undefined
   };
+}
+
+function facultyOutputMultiplier(state: FullGameState, char?: Character): number {
+  let bonus = 0;
+  const hasFineLounge = (state.rooms || []).some(
+    r =>
+      r.defId === 'faculty_lounge' &&
+      r.state === 'built' &&
+      !isRoomUnfinished(r) &&
+      (r.lockedUntilReviewIndex ?? -1) <= (state.reviewIndex || 0) &&
+      !r.hazard?.locksRoom &&
+      calculateRoomQuality(r).q >= 45
+  );
+  if (hasFineLounge) bonus += 0.03;
+  if (char?.bedRoomId != null) {
+    const bed = (state.rooms || []).find(
+      r =>
+        r.id === char.bedRoomId &&
+        r.defId === 'faculty_quarters' &&
+        r.state === 'built' &&
+        !isRoomUnfinished(r) &&
+        (r.level || 1) >= 3
+    );
+    if (bed) bonus += 0.05;
+  }
+  return 1 + bonus;
+}
+
+function computeAcademyCharm(state: FullGameState): number {
+  let charm = 0;
+  for (const room of state.rooms || []) {
+    if (room.state !== 'built' || isRoomUnfinished(room)) continue;
+    const ehMult = room.defId === 'entrance_hall' ? 2 : 1;
+    for (const f of room.furniture || []) {
+      const pts = FURNITURE_DEFINITIONS[f.defId]?.stats?.charm || 0;
+      charm += (f.damaged ? pts * 0.5 : pts) * ehMult;
+    }
+    if (room.defId === 'courtyard_garden') {
+      charm += 3 * AnkicasterEngine.roomEfficiency(state, room);
+    }
+    if (room.misbehaviorCharmMalus) charm += room.misbehaviorCharmMalus;
+  }
+  const lanternScale = creatureSpeciesBuffSum(state, 'lantern_moth');
+  if (lanternScale > 0) charm += 3 * lanternScale;
+  return charm;
+}
+
+function syncCharmRenown(state: FullGameState): void {
+  const target = Math.max(0, Math.floor(computeAcademyCharm(state) / 50));
+  const prev = state.charmRenownGranted || 0;
+  if (target !== prev) {
+    state.renown = Math.max(0, (state.renown || 0) + (target - prev));
+    state.charmRenownGranted = target;
+  }
+  checkEndlessSpellbookMilestones(state);
+}
+
+function isActiveWarder(c: Character): boolean {
+  return c.career === 'warder' && c.careerState === 'active' && c.status !== 'away';
+}
+
+function isNightInkType(type?: HazardType | string): boolean {
+  return type === 'spill_of_night' || type === 'night_ink';
+}
+
+function floorHasHazard(state: FullGameState, room: PlacedRoom, type: HazardType): boolean {
+  if (room.hazard && (room.hazard.type === type || (isNightInkType(type) && isNightInkType(room.hazard.type)))) {
+    return true;
+  }
+  return state.rooms.some(r => {
+    if (r.state !== 'built' || !r.hazard) return false;
+    const sameType = r.hazard.type === type || (isNightInkType(type) && isNightInkType(r.hazard.type));
+    if (!sameType || r.area !== room.area) return false;
+    if (r.area === 'grounds') return r.hazard.areaScope === 'floor' || r.hazard.areaScope === 'grounds';
+    const targetFloor = r.hazard.floorY ?? r.y;
+    return targetFloor === room.y && (r.hazard.areaScope === 'floor' || r.id === room.id);
+  });
+}
+
+function roomHasHearth(room: PlacedRoom): boolean {
+  if (room.hazard?.type === 'mana_static') return false;
+  return (room.furniture || []).some(f => !f.damaged && (f.defId === 'warm_hearthstone' || f.defId === 'phoenix_hearth'));
+}
+
+function roomColdSnapMultiplier(room: PlacedRoom, weatherPenaltyMult: number = 1): number {
+  if (room.hazard?.type !== 'cold_snap') return 1;
+  const basePenalty = roomHasHearth(room) ? 0.25 : 0.5;
+  return 1 - basePenalty * weatherPenaltyMult;
+}
+
+function computeAcademyVeilSummary(state: FullGameState) {
+  const warders = state.characters.filter(isActiveWarder).length;
+  const wardingChambers = state.rooms.filter(
+    r => r.defId === 'warding_chamber' && r.state === 'built' && !isRoomUnfinished(r)
+  ).length;
+  const batScale = creatureSpeciesBuffSum(state, 'velvet_bat_swarm');
+  const wyrmScale = creatureSpeciesBuffSum(state, 'umbral_wyrmling');
+  const extraReductions: Array<{ label: string; pct: number }> = [];
+  let loomCount = 0;
+  for (const r of state.rooms) {
+    if (r.state !== 'built' || isRoomUnfinished(r) || r.hazard?.type === 'mana_static') continue;
+    for (const f of r.furniture || []) {
+      if (!f.damaged && f.defId === 'veilweaver_loom' && loomCount < 2) {
+        loomCount++;
+      }
+    }
+  }
+  if (loomCount > 0) {
+    extraReductions.push({ label: `Veilweaver Loom (${loomCount})`, pct: 0.05 * loomCount });
+  }
+  const alumni = computeAlumniBonuses(state.alumniGallery || []);
+  if (alumni.warderVeilReductionPct > 0) {
+    extraReductions.push({ label: 'Warder Alumni', pct: alumni.warderVeilReductionPct });
+  }
+  const sb = computeSpellbookBonuses(state.spellbooks || []);
+  if (sb.veilCostReductionPct > 0) {
+    extraReductions.push({ label: 'Spellbooks', pct: sb.veilCostReductionPct });
+  }
+  return calculateDailyVeilCost(
+    state.rooms,
+    state.wizard.levels.shadow,
+    warders,
+    0,
+    batScale > 0,
+    wyrmScale > 0,
+    batScale || 1,
+    wyrmScale || 1,
+    wardingChambers,
+    extraReductions
+  );
+}
+
+function clearRoomHazard(
+  state: FullGameState,
+  room: PlacedRoom,
+  notifications?: string[],
+  reasonLabel?: string
+): void {
+  const haz = room.hazard;
+  if (!haz) return;
+  const roomName = ROOM_DEFINITIONS[room.defId]?.name || room.defId;
+  room.hazard = undefined;
+  if (haz.locksRoom || haz.isBreach || haz.type === 'wild_growth' || haz.type === 'kitchen_fire' || haz.type === 'rift_tremor' || haz.type === 'shade_breach' || haz.type === 'veil_rent' || haz.type === 'breach') {
+    room.lockedUntilReviewIndex = undefined;
+  }
+  if (haz.hiddenResource?.key === 'provisions' && haz.hiddenResource.amount > 0) {
+    const amt = haz.hiddenResource.amount;
+    state.resources.provisions += amt;
+    state.hiddenProvisions = Math.max(0, (state.hiddenProvisions || amt) - amt);
+    const msg = `🍇 Recovered ${amt} hidden Provisions after clearing Imp Infestation in ${roomName}!`;
+    notifications?.push(msg);
+  }
+  if (haz.type === 'wild_growth') {
+    state.resources.herbs += 5;
+    notifications?.push(`🌿 Harvested +5 Herbs from cleared Wild Growth in ${roomName}!`);
+  }
+  if (haz.type === 'wisp_swarm' && Math.random() < 0.25) {
+    const newCid = uniqueNumericId(state.creatures.map(c => c.id));
+    state.creatures.push({
+      id: newCid,
+      defId: 'lantern_moth',
+      nickname: CREATURE_DEFINITIONS.lantern_moth?.name || 'Lantern Moth',
+      status: 'wary',
+      hungry: false,
+      hatchProgress: 0,
+      tamingProgress: 0,
+      bondLevel: 1,
+      bondProgress: 0,
+      arrivedDay: state.day
+    });
+    syncDiscoveredCreatures(state);
+    notifications?.push(`🦋 A curious Lantern Moth lingered after Will-o'-Wisp Swarm cleared!`);
+  }
+  if (reasonLabel) {
+    state.notices.push({
+      id: uniqueNoticeId(`haz-clear-${room.id}`, state),
+      time: Date.now(),
+      type: 'hazard',
+      text: `✨ ${haz.name} in ${roomName} cleared (${reasonLabel}).`,
+      data: { roomId: room.id, hazardType: haz.type, visualEventType: 'hazard_cleared' }
+    });
+  }
+}
+
+function ensureUpcomingEventsQueue(state: FullGameState): void {
+  const existing = Array.isArray(state.upcomingEvents) ? state.upcomingEvents : [];
+  const byDay = new Map<number, string>();
+  for (const item of existing) {
+    if (item && item.day > state.day) {
+      byDay.set(item.day, item.eventId);
+    }
+  }
+  const usedIds = new Set<string>([
+    ...(state.activeEvents || []).map(e => e.eventId),
+    ...[...byDay.values()].filter(id => id !== 'none')
+  ]);
+  const nextQueue: Array<{ day: number; eventId: string }> = [];
+  for (let offset = 1; offset <= 3; offset++) {
+    const day = state.day + offset;
+    let eventId = byDay.get(day);
+    if (!eventId) {
+      if (Math.random() < 0.4) {
+        const pool = SCHOOL_EVENTS.filter(ev => !usedIds.has(ev.id));
+        if (pool.length > 0) {
+          const picked = pool[Math.floor(Math.random() * pool.length)];
+          eventId = picked.id;
+          usedIds.add(picked.id);
+        } else {
+          eventId = 'none';
+        }
+      } else {
+        eventId = 'none';
+      }
+    }
+    nextQueue.push({ day, eventId });
+  }
+  state.upcomingEvents = nextQueue;
+}
+
+function localHazardFizzleChance(state: FullGameState, targetRoom: PlacedRoom): number {
+  let fizzle = 0;
+
+  // Warding Chamber: -20% within 3 BFS steps
+  const chambers = state.rooms.filter(
+    r => r.defId === 'warding_chamber' && r.state === 'built' && !isRoomUnfinished(r)
+  );
+  if (chambers.length > 0) {
+    const dists = computeDistanceFromRooms(state.rooms, chambers.map(c => c.id));
+    if ((dists.get(targetRoom.id) ?? Infinity) <= 3) {
+      fizzle += 0.2;
+    }
+  }
+
+  // Standing Stones: Grounds hazards -50%; Bramblefox: Grounds hazards -15%/copy
+  if (targetRoom.area === 'grounds') {
+    if (state.rooms.some(r => r.defId === 'standing_stones' && r.state === 'built' && !isRoomUnfinished(r))) {
+      fizzle += 0.5;
+    }
+    if (bestBuffScale(state.creatures, 'bramblefox') > 0) {
+      fizzle += creatureCategoryBonus(state, [{ defId: 'bramblefox', perCopy: 0.15 }], 0.5);
+    }
+  }
+
+  // Ward Lantern: -30% in its room, -10% adjacent; Rune Marker -15% on grounds; Enchanted Gnome -10% on grounds
+  for (const r of state.rooms) {
+    if (r.state !== 'built' || isRoomUnfinished(r) || r.hazard?.type === 'mana_static') continue;
+    const isAdj =
+      r.id !== targetRoom.id &&
+      r.area === targetRoom.area &&
+      r.x <= targetRoom.x + targetRoom.w &&
+      targetRoom.x <= r.x + r.w &&
+      r.y <= targetRoom.y + targetRoom.h &&
+      targetRoom.y <= r.y + r.h;
+    for (const f of r.furniture || []) {
+      const mult = f.damaged ? 0.5 : 1;
+      if (f.defId === 'ward_lantern') {
+        if (r.id === targetRoom.id) fizzle += 0.3 * mult;
+        else if (isAdj) fizzle += 0.1 * mult;
+      } else if (targetRoom.area === 'grounds') {
+        if (f.defId === 'rune_marker') fizzle += 0.15 * mult;
+        else if (f.defId === 'garden_gnome') fizzle += 0.1 * mult;
+      }
+    }
+  }
+
+  return Math.min(0.9, Math.max(0, fizzle));
+}
+
+function consumeFloorWardProtection(state: FullGameState, target: PlacedRoom, summary?: string[]): boolean {
+  if (target.area !== 'castle') return false;
+  const floorY = target.y;
+  const preventList = state.preventFloorHazard || [];
+  const pIdx = preventList.indexOf(floorY);
+  if (pIdx >= 0) {
+    preventList.splice(pIdx, 1);
+    state.preventFloorHazard = preventList;
+    summary?.push(`📜 Ward Scroll prevented a hazard on Floor ${floorY + 1}!`);
+    return true;
+  }
+  const wwList = state.activeBuffs?.wardwaterFloors;
+  const wIdx = wwList ? wwList.indexOf(floorY) : -1;
+  if (wwList && wIdx >= 0) {
+    wwList.splice(wIdx, 1);
+    summary?.push(`🛡️ Wardwater prevented a hazard on Floor ${floorY + 1}!`);
+    return true;
+  }
+  return false;
+}
+
+function filterRoomsForHazard(state: FullGameState, def: HazardDefinition): PlacedRoom[] {
+  const candidates = state.rooms.filter(r => r.state === 'built' && !isRoomUnfinished(r) && !r.hazard);
+  switch (def.targetFilter) {
+    case 'castle':
+      return candidates.filter(r => r.area === 'castle');
+    case 'grounds':
+      return candidates.filter(r => r.area === 'grounds');
+    case 'wild_growth':
+      return candidates.filter(
+        r => r.defId === 'greenhouse' || r.area === 'grounds' || ROOM_DEFINITIONS[r.defId]?.school === 'nature'
+      );
+    case 'storage_kitchen':
+      return candidates.filter(r => r.defId === 'storage_vault' || r.defId === 'kitchen');
+    case 'echo_loop':
+      return candidates.filter(r => r.defId === 'library' || ROOM_DEFINITIONS[r.defId]?.school === 'arcane');
+    case 'cold_snap':
+      return candidates.filter(
+        r => r.defId === 'greenhouse' || r.defId === 'dormitory' || r.defId === 'grand_dormitory' || r.defId === 'faculty_quarters'
+      );
+    case 'kitchen_refectory':
+      return candidates.filter(r => r.defId === 'kitchen' || r.defId === 'refectory');
+    case 'rift_gate':
+      return candidates.filter(r => r.defId === 'rift_gate');
+    case 'alchemy_lab':
+      return candidates.filter(r => r.defId === 'alchemy_lab');
+    case 'entrance_hall':
+      return candidates.filter(r => r.defId === 'entrance_hall');
+    case 'any':
+    default:
+      return candidates;
+  }
+}
+
+function weightedPick<T>(items: T[], weightFn: (item: T) => number): T | undefined {
+  const weights = items.map(item => Math.max(0, weightFn(item)));
+  const total = weights.reduce((a, b) => a + b, 0);
+  if (total <= 0) return items[0];
+  let roll = Math.random() * total;
+  for (let i = 0; i < items.length; i++) {
+    roll -= weights[i];
+    if (roll <= 0) return items[i];
+  }
+  return items[items.length - 1];
+}
+
+function applyHazardInstance(
+  state: FullGameState,
+  def: HazardDefinition,
+  target: PlacedRoom,
+  notifications: string[]
+): void {
+  const hasWarder = state.characters.some(isActiveWarder);
+  const hasGardener = state.characters.some(c => c.career === 'gardener' && c.careerState === 'active' && c.status !== 'away');
+  const hasScholar = state.characters.some(c => c.career === 'scholar' && c.careerState === 'active' && c.status !== 'away');
+  const hasShadeHound = creatureSpeciesBuffSum(state, 'shade_hound') > 0;
+  const roomName = ROOM_DEFINITIONS[target.defId]?.name || target.defId;
+
+  // Instant resolution bonuses per §19.3
+  if (def.id === 'mana_static' && hasWarder) {
+    const msg = `🛡️ Active Warder instantly dispelled Mana Static in ${roomName}!`;
+    notifications.push(msg);
+    state.notices.push({
+      id: uniqueNoticeId(`hazard-warder-${target.id}`, state),
+      time: Date.now(),
+      type: 'hazard',
+      text: msg,
+      data: { roomId: target.id, hazardType: 'mana_static', visualEventType: 'hazard_cleared' }
+    });
+    return;
+  }
+  if (def.id === 'imp_infestation' && hasShadeHound) {
+    const msg = `🐾 Your Shade Hound chased off the Imp Infestation in ${roomName} immediately!`;
+    notifications.push(msg);
+    state.notices.push({
+      id: uniqueNoticeId(`hazard-hound-${target.id}`, state),
+      time: Date.now(),
+      type: 'hazard',
+      text: msg,
+      data: { roomId: target.id, hazardType: 'imp_infestation', visualEventType: 'hazard_cleared' }
+    });
+    return;
+  }
+
+  // Instant multi-room gust: Mischievous Draft (§19.3)
+  if (def.id === 'drafty_window') {
+    const castleRooms = state.rooms.filter(r => r.state === 'built' && !isRoomUnfinished(r) && r.area === 'castle');
+    const shuffled = [...castleRooms].sort(() => Math.random() - 0.5).slice(0, 3);
+    for (const r of shuffled) {
+      r.cleanliness = Math.max(0, r.cleanliness - 15);
+    }
+    const msg = `💨 ${def.name} swept through ${shuffled.length} castle room(s) (-15 Cleanliness)!`;
+    notifications.push(msg);
+    state.notices.push({
+      id: uniqueNoticeId(`hazard-draft`, state),
+      time: Date.now(),
+      type: 'hazard',
+      text: msg,
+      data: { roomId: shuffled[0]?.id ?? target.id, hazardId: 'drafty_window' }
+    });
+    return;
+  }
+
+  let duration = def.durationReviews;
+  if (def.id === 'poltergeist' && hasWarder) duration = 10;
+  else if (def.id === 'imp_infestation' && hasWarder) duration = 10;
+  else if (def.id === 'rift_tremor' && hasWarder) duration = 10;
+  else if (def.id === 'wild_growth' && hasGardener) duration = 10;
+  else if (def.id === 'echo_loop' && hasScholar) duration = 5;
+
+  const hasNightOwlOnFloor = duration > 0 && state.characters.some(c => {
+    if (c.status === 'away' || !hasTrait(c, 'Night Owl')) return false;
+    const floorRooms = state.rooms.filter(r => r.area === target.area && r.y === target.y).map(r => r.id);
+    return (c.seatRoomId && floorRooms.includes(c.seatRoomId))
+      || (c.workplaceRoomId && floorRooms.includes(c.workplaceRoomId))
+      || (c.bedRoomId && floorRooms.includes(c.bedRoomId));
+  });
+  if (hasNightOwlOnFloor) {
+    duration = Math.max(1, Math.round(duration * 0.95));
+  }
+  const ravenResolveBonus = duration > 0
+    ? creatureCategoryBonus(state, [{ defId: 'hush_raven', perCopy: 0.15 }], 0.5)
+    : 0;
+  if (duration > 0 && ravenResolveBonus > 0) {
+    duration = Math.max(1, Math.round(duration * Math.max(0.25, 1 - ravenResolveBonus)));
+  }
+
+  const expiresAt = duration > 0 ? state.reviewIndex + duration : undefined;
+  target.hazard = {
+    type: def.id as HazardType,
+    name: def.name,
+    description: def.description,
+    effect: def.effect,
+    expiresAtReviewIndex: expiresAt,
+    floorY: target.area === 'castle' ? target.y : undefined,
+    areaScope: def.areaScope,
+    locksRoom: def.locksRoom
+  };
+
+  if (def.locksRoom && expiresAt !== undefined) {
+    target.lockedUntilReviewIndex = expiresAt;
+  }
+
+  if (def.id === 'poltergeist') {
+    target.cleanliness = Math.max(0, target.cleanliness - 30);
+    for (const c of state.characters) {
+      if (c.seatRoomId === target.id || c.workplaceRoomId === target.id || c.bedRoomId === target.id) {
+        c.needs.composure = Math.max(0, c.needs.composure - 5);
+      }
+    }
+  } else if (def.id === 'imp_infestation') {
+    const stolen = Math.floor(Math.max(0, state.resources.provisions) * 0.1);
+    if (stolen > 0) {
+      state.resources.provisions -= stolen;
+      state.hiddenProvisions = (state.hiddenProvisions || 0) + stolen;
+      target.hazard.hiddenResource = { key: 'provisions', amount: stolen };
+    }
+  } else if (def.id === 'kitchen_fire') {
+    state.pendingMealCapFactor = Math.min(state.pendingMealCapFactor ?? 1, 0.5);
+  } else if (def.id === 'wisp_swarm') {
+    // Also affect a second built grounds plot if available (§19.3: Plot outputs 0 on 2 plots)
+    const secondPlot = state.rooms.find(
+      r => r.id !== target.id && r.state === 'built' && !isRoomUnfinished(r) && r.area === 'grounds' && !r.hazard
+    );
+    if (secondPlot) {
+      secondPlot.hazard = {
+        ...target.hazard,
+        areaScope: 'grounds'
+      };
+    }
+  }
+
+  const msg = `⚠️ Hazard emerged: ${def.name} in ${roomName}!`;
+  notifications.push(msg);
+  state.notices.push({
+    id: uniqueNoticeId(`hazard-${target.id}`, state),
+    time: Date.now(),
+    type: 'hazard',
+    text: msg,
+    data: { roomId: target.id, hazardId: def.id as HazardType, hazardType: def.id as HazardType }
+  });
+}
+
+function rollHazardForBell(state: FullGameState, notifications: string[]): void {
+  if ((state.activeBuffs?.wardPulseBells || 0) > 0) return;
+
+  const activeWarders = state.characters.filter(isActiveWarder).length;
+  const shadowSteps = wizardSchoolBuffs(state.wizard?.levels || {}).shadowSteps;
+  const creatureHazRed = creatureCategoryBonus(
+    state,
+    [
+      { defId: 'night_lynx', perCopy: 0.15 },
+      { defId: 'velvet_bat_swarm', perCopy: 0.08 },
+      { defId: 'glyph_cat', perCopy: 0.08 }
+    ],
+    0.5
+  );
+  const acadFurnRed = Math.abs(academyFurnitureEffect(state.rooms, 'hazard_chance_pct')) / 100;
+  const sb = computeSpellbookBonuses(state.spellbooks || []);
+  // Combine Academy-wide hazard reductions; §19.2 caps at 75%
+  const globalReduction = shadowSteps * 0.03 + activeWarders * 0.1 + creatureHazRed + acadFurnRed * 0.25 + sb.hazardReductionPct;
+  const veilInfo = computeAcademyVeilSummary(state);
+  const pHazard = calculateHazardRollChance(
+    state.veil.strength,
+    veilInfo.sizePoints,
+    globalReduction,
+    (state.activeBuffs?.moonlessNightBells || 0) > 0
+  );
+  if (Math.random() >= pHazard) return;
+
+  const eligibleDefs: Array<{ def: HazardDefinition; rooms: PlacedRoom[] }> = [];
+  const fireproofBells = state.activeBuffs?.fireproofBells || 0;
+  const fireproofRoomId = state.activeBuffs?.fireproofRoomId;
+
+  for (const def of Object.values(HAZARD_CATALOG)) {
+    if (def.weight <= 0) continue;
+    if (def.id === 'kitchen_fire' && fireproofBells > 0 && !fireproofRoomId) continue;
+    const rooms = filterRoomsForHazard(state, def);
+    if (rooms.length > 0) eligibleDefs.push({ def, rooms });
+  }
+  if (eligibleDefs.length === 0) return;
+
+  const pickedEntry = weightedPick(eligibleDefs, e => {
+    if (e.def.id === 'kitchen_fire') {
+      const hasFirebug = e.rooms.some(rm =>
+        state.characters.some(
+          ch => ch.traits?.includes('Firebug') && (ch.workplaceRoomId === rm.id || ch.seatRoomId === rm.id || ch.bedRoomId === rm.id)
+        )
+      );
+      if (hasFirebug) return e.def.weight * 2;
+    }
+    return e.def.weight;
+  });
+  if (!pickedEntry) return;
+  const target = weightedPick(pickedEntry.rooms, r => ROOM_DEFINITIONS[r.defId]?.veil || 1);
+  if (!target) return;
+
+  if (pickedEntry.def.id === 'kitchen_fire' && fireproofBells > 0 && fireproofRoomId === target.id) {
+    notifications.push(`🛡️ Fireproof Salve blocked a Kitchen Fire in ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}!`);
+    return;
+  }
+
+  if (consumeFloorWardProtection(state, target, notifications)) return;
+
+  const fizzle = localHazardFizzleChance(state, target);
+  if (Math.random() < fizzle) {
+    notifications.push(`🛡️ Local wards dissolved an incoming ${pickedEntry.def.name} near ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}.`);
+    return;
+  }
+
+  applyHazardInstance(state, pickedEntry.def, target, notifications);
+}
+
+function rollBreachForBell(state: FullGameState, notifications: string[]): void {
+  if ((state.activeBuffs?.wardPulseBells || 0) > 0) return;
+  const band = getVeilBand(state.veil.strength);
+  const sb = computeSpellbookBonuses(state.spellbooks || []);
+  if (sb.breachesOnlyAtTorn) {
+    if (band !== 'torn') return;
+  } else if (band !== 'thin' && band !== 'torn') {
+    return;
+  }
+
+  const stonesCount = state.rooms.filter(
+    r => r.defId === 'standing_stones' && r.state === 'built' && !isRoomUnfinished(r)
+  ).length;
+  const baseBreachChance = band === 'torn' ? 0.03 : 0.01;
+  const effectiveBreachChance = baseBreachChance * Math.pow(0.75, stonesCount);
+  if (Math.random() >= effectiveBreachChance) return;
+
+  const breachDefs = Object.values(BREACH_CATALOG).filter(b => filterRoomsForHazard(state, b).length > 0);
+  if (breachDefs.length === 0) return;
+  const picked = weightedPick(breachDefs, b => b.weight);
+  if (!picked) return;
+  const validRooms = filterRoomsForHazard(state, picked);
+  const target = weightedPick(validRooms, r => ROOM_DEFINITIONS[r.defId]?.veil || 1);
+  if (!target) return;
+
+  // Level 3 Warding Chamber auto-contains breaches within 3 BFS steps
+  const l3Chambers = state.rooms.filter(
+    r => r.defId === 'warding_chamber' && r.state === 'built' && !isRoomUnfinished(r) && r.level >= 3
+  );
+  if (l3Chambers.length > 0) {
+    const dists = computeDistanceFromRooms(state.rooms, l3Chambers.map(c => c.id));
+    if ((dists.get(target.id) ?? Infinity) <= 3) {
+      const msg = `🛡️ Level 3 Warding Chamber auto-contained a ${picked.name}!`;
+      notifications.push(msg);
+      state.notices.push({
+        id: uniqueNoticeId(`breach-contained-${target.id}`, state),
+        time: Date.now(),
+        type: 'hazard',
+        text: msg,
+        data: { roomId: target.id, visualEventType: 'hazard_cleared' }
+      });
+      return;
+    }
+  }
+
+  const activeWarder = state.characters.some(isActiveWarder);
+  const shadeHoundRed = creatureCategoryBonus(state, [{ defId: 'shade_hound', perCopy: 0.5 }], 0.75);
+  const breachFactor = Math.max(0.25, 1 - shadeHoundRed);
+
+  if (picked.id === 'shade_breach') {
+    if (activeWarder) {
+      const msg = `⚔️ Active Warder banished a Shade Breach in ${ROOM_DEFINITIONS[target.defId]?.name || 'room'} immediately!`;
+      notifications.push(msg);
+      state.notices.push({
+        id: uniqueNoticeId(`breach-warder-${target.id}`, state),
+        time: Date.now(),
+        type: 'hazard',
+        text: msg,
+        data: { roomId: target.id, visualEventType: 'hazard_cleared' }
+      });
+      return;
+    }
+    const dur = Math.max(10, Math.round(60 * breachFactor));
+    const expiresAt = state.reviewIndex + dur;
+    target.hazard = {
+      type: 'shade_breach',
+      name: picked.name,
+      description: picked.description,
+      effect: picked.effect,
+      expiresAtReviewIndex: expiresAt,
+      isBreach: true,
+      locksRoom: true
+    };
+    target.lockedUntilReviewIndex = expiresAt;
+    for (const c of state.characters) {
+      if (c.status === 'away' || c.injury) continue;
+      if (c.seatRoomId === target.id || c.workplaceRoomId === target.id || c.bedRoomId === target.id) {
+        const hitMult = (c.traits?.includes('Lucky') ? 0.8 : 1) * breachFactor;
+        const r = Math.random();
+        if (r < 0.2 * hitMult) {
+          if (!c.traits?.includes('Warded')) {
+            c.injury = { type: 'hexed', points: 0, required: 60 };
+          }
+        } else if (r < 0.6 * hitMult) {
+          c.injury = { type: 'bruised', points: 0, required: 30 };
+        }
+      }
+    }
+  } else if (picked.id === 'gloom_pack') {
+    target.hazard = {
+      type: 'gloom_pack',
+      name: picked.name,
+      description: picked.description,
+      effect: picked.effect,
+      expiresAtBellIndex: state.bellIndex + 1,
+      areaScope: 'grounds',
+      isBreach: true
+    };
+  } else if (picked.id === 'veil_rent') {
+    const veilLoss = Math.max(1, Math.round(10 * breachFactor));
+    state.veil.strength = Math.max(0, state.veil.strength - veilLoss);
+    const dur = Math.max(5, Math.round(30 * breachFactor));
+    const lockCount = shadeHoundRed > 0 ? Math.max(1, Math.round(3 * breachFactor)) : 3;
+    const expiresAt = state.reviewIndex + dur;
+    const lockCandidates = state.rooms.filter(r => r.state === 'built' && !isRoomUnfinished(r) && !r.hazard).slice(0, lockCount);
+    for (const lr of lockCandidates) {
+      lr.hazard = {
+        type: 'veil_rent',
+        name: picked.name,
+        description: picked.description,
+        effect: picked.effect,
+        expiresAtReviewIndex: expiresAt,
+        isBreach: true,
+        locksRoom: true
+      };
+      lr.lockedUntilReviewIndex = expiresAt;
+    }
+  } else if (picked.id === 'wanderer') {
+    target.hazard = {
+      type: 'wanderer',
+      name: picked.name,
+      description: picked.description,
+      effect: picked.effect,
+      isBreach: true,
+      tamingProgress: 0,
+      tamingRequired: 160
+    };
+  }
+
+  const msg = `🌀 Rift Breach: ${picked.name} emerged near ${ROOM_DEFINITIONS[target.defId]?.name || 'the Academy'}!`;
+  notifications.push(msg);
+  state.notices.push({
+    id: uniqueNoticeId(`breach-${target.id}`, state),
+    time: Date.now(),
+    type: 'hazard',
+    text: msg,
+    data: { roomId: target.id, hazardId: picked.id as HazardType, hazardType: picked.id as HazardType }
+  });
+}
+
+// --- M3: Personalities, Traits & Misbehavior Helpers (§14, §20) ---
+
+const HABITAT_ROOM_DEFS = new Set([
+  'meadow_paddock', 'tide_tank', 'aviary', 'gloom_enclosure', 'ember_hearth', 'crystal_terrarium', 'menagerie'
+]);
+const FELINE_CREATURES = new Set(['glyph_cat', 'night_lynx']);
+const AVIAN_CREATURES = new Set(['meadow_lark', 'dawn_finch', 'star_heron', 'mistfeather_owl', 'chronoflare_owl', 'hush_raven', 'dawnhart_gryphon']);
+const INSECT_CREATURES = new Set(['brook_beetle', 'prism_beetle', 'orrery_moth', 'lantern_moth']);
+const COSMETIC_PRANK_LABELS = ['Green Hair', 'Floating Boots', 'Tiny Voice', 'Sparkling Ears'];
+const SECRET_CLUB_NAMES = ['The Midnight Ink Society', 'The Gargoyle Watch', 'The Secret Waffle Guild', 'Order of the Floating Feather'];
+
+function hasTrait(c: Character | undefined, trait: string): boolean {
+  return !!c?.traits?.includes(trait);
+}
+
+function roomsAreAdjacent(a: PlacedRoom, b: PlacedRoom): boolean {
+  if (a.id === b.id || a.area !== b.area) return false;
+  return a.x <= b.x + b.w && b.x <= a.x + a.w && a.y <= b.y + b.h && b.y <= a.y + a.h;
+}
+
+function roomHasGlassFurniture(r: PlacedRoom | undefined): boolean {
+  if (!r) return false;
+  return (r.furniture || []).some(f => {
+    const def = FURNITURE_DEFINITIONS[f.defId];
+    return !!(def?.cost?.glass || f.defId.includes('window') || f.defId.includes('mirror') || f.defId.includes('lantern'));
+  });
+}
+
+function characterMoraleBonuses(state: FullGameState, char: Character): number {
+  let bonus = 0;
+  const built = (state.rooms || []).filter(r => r.state === 'built' && !isRoomUnfinished(r));
+  const hasBuilt = (defId: string) => built.some(r => r.defId === defId);
+  const bedRoom = char.bedRoomId != null ? state.rooms.find(r => r.id === char.bedRoomId) : undefined;
+  const seatRoom = char.seatRoomId != null ? state.rooms.find(r => r.id === char.seatRoomId) : undefined;
+  const workRoom = char.workplaceRoomId != null ? state.rooms.find(r => r.id === char.workplaceRoomId) : undefined;
+  const usedRooms = [bedRoom, seatRoom, workRoom].filter((r): r is PlacedRoom => !!r);
+
+  // Personality Loves (+5) & Dislikes (-5) per §14.2
+  switch (char.personality) {
+    case 'Bookish':
+      if (hasBuilt('library')) bonus += 5;
+      if (bedRoom && built.some(r => r.defId === 'workshop' && roomsAreAdjacent(bedRoom, r))) bonus -= 5;
+      break;
+    case 'Mischievous':
+      if (hasBuilt('common_room')) bonus += 5;
+      if (hasBuilt('detention_hall')) bonus -= 5;
+      break;
+    case 'Gentle':
+      if (built.some(r => HABITAT_ROOM_DEFS.has(r.defId))) bonus += 5;
+      if (hasBuilt('training_yard')) bonus -= 5;
+      break;
+    case 'Bold':
+      if (hasBuilt('training_yard')) bonus += 5;
+      if (usedRooms.some(r => calculateRoomQuality(r).tier === 'bare')) bonus -= 5;
+      break;
+    case 'Dreamy':
+      if (hasBuilt('observatory')) bonus += 5;
+      if (usedRooms.some(r => !roomHasGlassFurniture(r))) bonus -= 5;
+      break;
+    case 'Steadfast':
+      if (hasBuilt('sunlit_sanctum')) bonus += 5;
+      break;
+    case 'Social':
+      if (hasBuilt('common_room') || hasBuilt('refectory')) bonus += 5;
+      if (bedRoom && ['bare', 'plain'].includes(calculateRoomQuality(bedRoom).tier)) bonus -= 5;
+      break;
+    case 'Curious':
+      if (hasBuilt('alchemy_lab') || hasBuilt('menagerie')) bonus += 5;
+      break;
+  }
+
+  // Trait Morale Modifiers per §14.3
+  if (hasTrait(char, 'Sunny')) bonus += 5;
+  if (hasTrait(char, 'Homesick')) {
+    const daysEnrolled = (state.day || 0) - (char.enrolledDay || 0);
+    if (daysEnrolled <= 7) bonus -= 5;
+    else if (daysEnrolled >= 30) bonus += 5;
+  }
+  const activeCreatures = (state.creatures || []).filter(cr => cr.status === 'tamed' || cr.status === 'wary');
+  if (hasTrait(char, 'Cat Person')) bonus += activeCreatures.some(cr => FELINE_CREATURES.has(cr.defId)) ? 10 : -3;
+  if (hasTrait(char, 'Bird Person')) bonus += activeCreatures.some(cr => AVIAN_CREATURES.has(cr.defId)) ? 10 : -3;
+  if (hasTrait(char, 'Bug Person')) bonus += activeCreatures.some(cr => INSECT_CREATURES.has(cr.defId)) ? 10 : -3;
+
+  return bonus;
+}
+
+function characterNeedDecayMults(state: FullGameState, char: Character): { hunger: number; rest: number; leisure: number; composure: number } {
+  const m = { hunger: 1, rest: 1, leisure: 1, composure: 1 };
+  const built = (state.rooms || []).filter(r => r.state === 'built' && !isRoomUnfinished(r));
+  const hasLib = built.some(r => r.defId === 'library');
+  const hasCommon = built.some(r => r.defId === 'common_room');
+  const pDef = PERSONALITY_DEFINITIONS[char.personality];
+  if (pDef) {
+    const nm = pDef.needModifiers;
+    if (nm.hungerDecayMult) m.hunger *= nm.hungerDecayMult;
+    if (nm.restDecayMult) m.rest *= nm.restDecayMult;
+    if (nm.leisureDecayMult && (!nm.requiresLibraryForLeisure || hasLib)) m.leisure *= nm.leisureDecayMult;
+    if (nm.composureDecayMult && (!nm.requiresCommonRoomForComposure || hasCommon)) m.composure *= nm.composureDecayMult;
+  }
+  if (hasTrait(char, 'Night Owl')) m.rest *= 0.8;
+  if (hasTrait(char, 'Iron Stomach')) m.hunger *= 0.7;
+  if (hasTrait(char, 'Early Riser')) {
+    m.rest *= 1.1;
+    m.leisure *= 0.9;
+  }
+  if (hasTrait(char, 'Lazy')) m.rest *= 0.85;
+  if (hasTrait(char, 'Nervous')) m.composure *= 1.4;
+  return m;
+}
+
+function clearRoomMisbehaviorChains(state: FullGameState, roomId: number | undefined): number {
+  let cleared = 0;
+  for (const r of state.rooms) {
+    if (roomId == null || r.id === roomId) {
+      if (r.misbehaviorCharmMalus) {
+        r.misbehaviorCharmMalus = undefined;
+        cleared++;
+      }
+    }
+  }
+  for (const c of state.characters) {
+    if (!c.misbehaviorChains?.length) continue;
+    const before = c.misbehaviorChains.length;
+    c.misbehaviorChains = roomId == null ? [] : c.misbehaviorChains.filter(ch => ch.roomId !== roomId);
+    if (c.misbehaviorChains.length < before) cleared += before - c.misbehaviorChains.length;
+  }
+  return cleared;
+}
+
+function rollMisbehaviorForStudent(
+  state: FullGameState,
+  char: Character,
+  wizBuffs: ReturnType<typeof wizardSchoolBuffs>,
+  bag: Record<string, number>,
+  note: (resource: string, before: number, source: string) => void,
+  notifications: string[]
+): void {
+  if (char.status !== 'student' || char.status === ('away' as string)) return;
+  if ((char.absentUntilReviewIndex || 0) > state.reviewIndex) return;
+
+  const pMult = PERSONALITY_DEFINITIONS[char.personality]?.misbehaviorMult ?? 1;
+  let traitMult = 1;
+  if (hasTrait(char, 'Prankster')) traitMult *= 1.5;
+  if (hasTrait(char, 'Rule-Bender')) traitMult *= 1.3;
+  if ((char.secretClubUntilBell || 0) > state.bellIndex) traitMult *= 1.2;
+  if ((char.morale ?? 70) >= 0) {
+    const moraleMult =
+      char.morale < 30 ? 2.0 :
+      char.morale < 60 ? 1.25 :
+      char.morale < 80 ? 1.0 : 0.6;
+    const warders = state.characters.filter(isActiveWarder).length;
+    const comL3 = state.rooms.filter(r => r.defId === 'common_room' && r.state === 'built' && !isRoomUnfinished(r) && r.level >= 3).length;
+    const furnMisRed = Math.abs(academyFurnitureEffect(state.rooms, 'misbehavior_pct')) / 100;
+    const creatureMisRed = creatureCategoryBonus(
+      state,
+      [
+        { defId: 'duskmouse', perCopy: 0.05 },
+        { defId: 'moonless_kitsune', perCopy: 0.2 }
+      ],
+      0.5
+    );
+    const sb = computeSpellbookBonuses(state.spellbooks || []);
+    const globalRed = Math.min(
+      0.75,
+      wizBuffs.shadowSteps * 0.03 +
+        warders * 0.1 +
+        comL3 * 0.05 +
+        furnMisRed +
+        creatureMisRed +
+        sb.misbehaviorReductionPct
+    );
+    const moonMult = (state.activeBuffs?.moonlessNightBells || 0) > 0 ? 0.4 : 1;
+
+    const studentRoom = (char.seatRoomId ? state.rooms.find(r => r.id === char.seatRoomId) : undefined)
+      || (char.bedRoomId ? state.rooms.find(r => r.id === char.bedRoomId) : undefined);
+    let roomOrder = 0;
+    if (studentRoom) {
+      for (const f of studentRoom.furniture || []) {
+        if (f.damaged) continue;
+        roomOrder += FURNITURE_DEFINITIONS[f.defId]?.stats?.order || 0;
+      }
+    }
+    const orderFactor = 1 - Math.min(0.3, roomOrder / 100);
+    const pMisbehave = 0.004 * pMult * traitMult * moraleMult * (1 - globalRed) * moonMult * orderFactor;
+    if (Math.random() >= pMisbehave) return;
+
+    const picked = weightedPick(MISBEHAVIOR_INCIDENTS, inc => {
+      let w = 1;
+      if (inc.likelyPersonalities.includes(char.personality)) w += 3;
+      if (inc.likelyTraits.some(t => hasTrait(char, t))) w += 3;
+      if (inc.id === 'rift_peek' && !state.riftGateGranted) w = 0;
+      return w;
+    }) || MISBEHAVIOR_INCIDENTS[0];
+
+    const ehRoom = state.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || state.rooms[0];
+    let targetRoom = studentRoom || ehRoom;
+    let extraText = picked.effectSummary;
+    const involvedIds = [char.id];
+
+    switch (picked.id) {
+      case 'graffiti_glyphs': {
+        if (targetRoom) {
+          targetRoom.cleanliness = Math.max(0, targetRoom.cleanliness - 20);
+          targetRoom.misbehaviorCharmMalus = (targetRoom.misbehaviorCharmMalus || 0) - 3;
+          char.misbehaviorChains = [...(char.misbehaviorChains || []), { roomId: targetRoom.id, incidentId: 'graffiti_glyphs', penaltyCharm: -3 }];
+        }
+        if (Math.random() < 0.1) {
+          const undisc = state.potions.find(p => !p.discovered);
+          if (undisc) extraText += ` Clue spotted for ${undisc.name}!`;
+        }
+        break;
+      }
+      case 'food_fight': {
+        const ref = state.rooms.find(r => r.defId === 'refectory' && r.state === 'built') || targetRoom;
+        targetRoom = ref;
+        if (ref) ref.cleanliness = Math.max(0, ref.cleanliness - 40);
+        state.nextBellMealExtraProvisions = (state.nextBellMealExtraProvisions || 0) + 5;
+        char.needs.leisure = Math.min(100, char.needs.leisure + 10);
+        break;
+      }
+      case 'unauthorized_summoning': {
+        const cand = targetRoom && !targetRoom.hazard ? targetRoom : state.rooms.find(r => r.state === 'built' && !isRoomUnfinished(r) && !r.hazard);
+        const hazId = Math.random() < 0.5 ? 'echo_loop' : 'imp_infestation';
+        if (cand && HAZARD_CATALOG[hazId]) {
+          applyHazardInstance(state, HAZARD_CATALOG[hazId], cand, notifications);
+          targetRoom = cand;
+        }
+        if (Math.random() < 0.15) {
+          const commons = Object.values(CREATURE_DEFINITIONS).filter(c => c.rarity === 'common');
+          const cDef = commons[Math.floor(Math.random() * commons.length)];
+          if (cDef && state.creatures.length < 40) {
+            state.creatures.push({
+              id: uniqueNumericId(state.creatures.map(cr => cr.id)),
+              defId: cDef.id,
+              nickname: cDef.name,
+              status: 'wary',
+              hungry: false,
+              hatchProgress: 0,
+              tamingProgress: 0,
+              bondLevel: 0,
+              bondProgress: 0,
+              arrivedDay: state.day
+            });
+            extraText += ` A wild ${cDef.name} slipped through!`;
+          }
+        }
+        break;
+      }
+      case 'sneaking_out': {
+        char.absentUntilReviewIndex = state.reviewIndex + 20;
+        break;
+      }
+      case 'hex_duel': {
+        const partner = state.characters.find(c => c.id !== char.id && c.status === 'student');
+        const duelists = partner ? [char, partner] : [char];
+        for (const d of duelists) {
+          if (!d.injury && Math.random() < 0.2) d.injury = { type: 'bruised', points: 0, required: 30 };
+          d.hexDuelFortuneBonus = (d.hexDuelFortuneBonus || 0) + 1;
+          if (d.id !== char.id) involvedIds.push(d.id);
+        }
+        break;
+      }
+      case 'creature_release': {
+        const cr = state.creatures.find(c => c.status === 'tamed' || c.status === 'wary');
+        if (cr) {
+          cr.returnStatus = cr.status === 'wary' ? 'wary' : 'tamed';
+          cr.status = 'loose';
+          extraText = `${cr.nickname} was set loose!`;
+        }
+        break;
+      }
+      case 'potion_prank': {
+        const label = COSMETIC_PRANK_LABELS[Math.floor(Math.random() * COSMETIC_PRANK_LABELS.length)];
+        char.cosmeticStatus = { label, expiresDay: state.day + 1 };
+        for (const other of state.characters) {
+          if (other.id !== char.id) other.needs.composure = Math.min(100, other.needs.composure + 5);
+        }
+        extraText = `${char.name} now has ${label} for 1 day (Onlookers +5 Composure)!`;
+        break;
+      }
+      case 'midnight_feast': {
+        const before = bag.provisions || 0;
+        const loss = Math.min(10, Math.floor(before * 0.05));
+        if (loss > 0) {
+          bag.provisions = Math.max(0, before - loss);
+          note('provisions', before, 'Midnight Feast');
+        }
+        for (const rm of state.characters) {
+          if (char.bedRoomId != null && rm.bedRoomId === char.bedRoomId) {
+            rm.needs.leisure = Math.min(100, rm.needs.leisure + 10);
+          }
+        }
+        break;
+      }
+      case 'bell_prank': {
+        for (const s of state.characters) {
+          if (s.status === 'student') s.needs.rest = Math.max(0, s.needs.rest - 5);
+        }
+        break;
+      }
+      case 'library_fort': {
+        const lib = state.rooms.find(r => r.defId === 'library' && r.state === 'built');
+        if (lib) {
+          lib.lockedUntilReviewIndex = Math.max(lib.lockedUntilReviewIndex || 0, state.reviewIndex + 20);
+          targetRoom = lib;
+        }
+        const before = bag.insight || 0;
+        bag.insight = before + 2;
+        note('insight', before, 'Library Fort');
+        break;
+      }
+      case 'portrait_mustache': {
+        const hall = ehRoom || targetRoom;
+        if (hall) {
+          hall.misbehaviorCharmMalus = (hall.misbehaviorCharmMalus || 0) - 2;
+          char.misbehaviorChains = [...(char.misbehaviorChains || []), { roomId: hall.id, incidentId: 'portrait_mustache', penaltyCharm: -2 }];
+          targetRoom = hall;
+        }
+        break;
+      }
+      case 'broom_joyride': {
+        if (!char.injury && Math.random() < 0.3) char.injury = { type: 'bruised', points: 0, required: 30 };
+        char.needs.leisure = Math.min(100, char.needs.leisure + 5);
+        break;
+      }
+      case 'alchemy_dare': {
+        const lab = state.rooms.find(r => r.defId === 'alchemy_lab' && r.state === 'built') || targetRoom;
+        state.nextBellLabExplosionMult = Math.max(state.nextBellLabExplosionMult || 1, 3);
+        if (lab) {
+          char.misbehaviorChains = [...(char.misbehaviorChains || []), { roomId: lab.id, incidentId: 'alchemy_dare', expiresBell: state.bellIndex + 2 }];
+          targetRoom = lab;
+        }
+        break;
+      }
+      case 'rift_peek': {
+        const gate = state.rooms.find(r => r.defId === 'rift_gate' && r.state === 'built');
+        if (gate) {
+          gate.lockedUntilReviewIndex = Math.max(gate.lockedUntilReviewIndex || 0, state.reviewIndex + 10);
+          targetRoom = gate;
+        }
+        if (Math.random() < 0.1) {
+          const resKey = Math.random() < 0.5 ? 'timber' : 'herbs';
+          const amt = 3 + Math.floor(Math.random() * 6);
+          const before = bag[resKey] || 0;
+          bag[resKey] = before + amt;
+          note(resKey, before, 'Rift Peek');
+        }
+        break;
+      }
+      case 'secret_club': {
+        const members = [char, ...state.characters.filter(c => c.id !== char.id && c.status === 'student').slice(0, 2)];
+        const clubName = SECRET_CLUB_NAMES[state.bellIndex % SECRET_CLUB_NAMES.length];
+        for (const m of members) {
+          m.needs.leisure = Math.min(100, m.needs.leisure + 10);
+          m.secretClubUntilBell = state.bellIndex + 30;
+          if (!involvedIds.includes(m.id)) involvedIds.push(m.id);
+        }
+        char.chronicle.push({ day: state.day, text: `Founded ${clubName}.` });
+        extraText = `Formed "${clubName}" (+10 Leisure, misbehavior x1.2 for 30 bells)!`;
+        break;
+      }
+      case 'dorm_swap': {
+        const other = state.characters.find(c => c.id !== char.id && c.status === 'student' && c.bedRoomId && c.bedRoomId !== char.bedRoomId);
+        if (other && char.bedRoomId) {
+          const tmp = char.bedRoomId;
+          char.bedRoomId = other.bedRoomId;
+          other.bedRoomId = tmp;
+          involvedIds.push(other.id);
+        }
+        for (const c of state.characters) {
+          if (c.bedRoomId && c.bedRoomId === char.bedRoomId) {
+            c.needs.composure = Math.min(100, c.needs.composure + 3);
+          }
+        }
+        break;
+      }
+    }
+
+    const msg = `${picked.name}: ${char.name} — ${extraText}`;
+    notifications.push(`⚠️ Misbehavior: ${msg}`);
+    state.notices.push({
+      id: uniqueNoticeId(`misbehavior-${char.id}`, state),
+      time: Date.now(),
+      type: 'misbehavior',
+      text: `Student Incident: ${msg}`,
+      data: {
+        roomId: targetRoom?.id,
+        characterIds: involvedIds,
+        incidentId: picked.id
+      }
+    });
+  }
+}
+
+const APPLICANT_FIRST_NAMES = ['Tamsin', 'Corin', 'Lyra', 'Rowan', 'Bram', 'Sera', 'Pippin', 'Maren', 'Orin', 'Faye', 'Caspian', 'Nyx'];
+const APPLICANT_LAST_NAMES = ['Reed', 'Blackwood', 'Starling', 'Vale', 'Thorn', 'Waverly', 'Ashford', 'Briar', 'Quill', 'Larkspur', 'Ember', 'Frost'];
+const ALL_PERSONALITIES: PersonalityType[] = ['Bookish', 'Mischievous', 'Gentle', 'Bold', 'Dreamy', 'Steadfast', 'Social', 'Curious'];
+const POSITIVE_TRAITS = Object.values(TRAIT_DEFINITIONS).filter(t => t.category === 'positive').map(t => t.id);
+const NEUTRAL_TRAITS = Object.values(TRAIT_DEFINITIONS).filter(t => t.category === 'neutral').map(t => t.id);
+const TROUBLESOME_TRAITS = Object.values(TRAIT_DEFINITIONS).filter(t => t.category === 'troublesome').map(t => t.id);
+
+function generateApplicantsForState(
+  state: FullGameState,
+  count: number = 4
+): Array<{ name: string; personality: PersonalityType; traits: string[]; bio: string }> {
+  const renown = state.renown || 0;
+  const hasOpenDoor = state.spellbooks?.includes('the_open_door');
+  const totalCount = hasOpenDoor ? count + 1 : count;
+  const seedBase = (state.day || 0) * 131 + (state.characters?.length || 0) * 37 + Math.floor(renown / 25) * 17;
+  const pseudo = (salt: number) => {
+    let n = Math.imul(seedBase + salt * 2654435761, 374761393);
+    n = Math.imul(n ^ (n >>> 13), 1274126177);
+    return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+  };
+  const usedNames = new Set((state.characters || []).map(c => c.name));
+  const out: Array<{ name: string; personality: PersonalityType; traits: string[]; bio: string }> = [];
+
+  for (let i = 0; i < totalCount; i++) {
+    let name = '';
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const f = APPLICANT_FIRST_NAMES[Math.floor(pseudo(i * 19 + attempt * 3 + 1) * APPLICANT_FIRST_NAMES.length)];
+      const l = APPLICANT_LAST_NAMES[Math.floor(pseudo(i * 19 + attempt * 3 + 2) * APPLICANT_LAST_NAMES.length)];
+      const candidate = `${f} ${l}`;
+      if (!usedNames.has(candidate)) {
+        name = candidate;
+        usedNames.add(candidate);
+        break;
+      }
+    }
+    if (!name) name = `Apprentice #${(state.characters?.length || 0) + i + 1}`;
+    const personality = ALL_PERSONALITIES[Math.floor(pseudo(i * 19 + 4) * ALL_PERSONALITIES.length)];
+    const traitCount = renown >= 300 || hasOpenDoor
+      ? (pseudo(i * 19 + 5) < 0.5 ? 3 : 2)
+      : renown >= 150
+      ? 2
+      : renown >= 50
+      ? (pseudo(i * 19 + 5) < 0.5 ? 2 : 1)
+      : 1;
+
+    const traits: string[] = [];
+    for (let tIdx = 0; tIdx < traitCount; tIdx++) {
+      const r = pseudo(i * 31 + tIdx * 7 + 9);
+      const posCutoff = renown >= 300 || hasOpenDoor ? 0.72 : renown >= 150 ? 0.58 : renown >= 50 ? 0.45 : 0.3;
+      const neuCutoff = posCutoff + 0.35;
+      const pool = r < posCutoff ? POSITIVE_TRAITS : r < neuCutoff ? NEUTRAL_TRAITS : TROUBLESOME_TRAITS;
+      const picked = pool[Math.floor(pseudo(i * 31 + tIdx * 11 + 13) * pool.length)];
+      if (picked && !traits.includes(picked)) traits.push(picked);
+    }
+    const pInfo = PERSONALITY_DEFINITIONS[personality];
+    out.push({
+      name,
+      personality,
+      traits,
+      bio: `${pInfo.flavour}. ${pInfo.lovesText}.`
+    });
+  }
+  return out;
+}
+
+// --- M4: Timed Alchemy Brewing Helpers (§24.2) ---
+
+function completeBrewJob(
+  next: FullGameState,
+  recipeId: string,
+  labRoom: PlacedRoom | undefined,
+  usedAlchemist: boolean,
+  hasPhilosophersHour: boolean,
+  notifications?: string[]
+): number {
+  const recipe = next.potions.find(p => p.id === recipeId);
+  const wizBuffs = wizardSchoolBuffs(next.wizard.levels);
+  const sb = computeSpellbookBonuses(next.spellbooks || []);
+  const alumni = computeAlumniBonuses(next.alumniGallery || []);
+  const creatureYield = creatureCategoryBonus(
+    next,
+    [
+      { defId: 'cinder_newt', perCopy: 0.05 },
+      { defId: 'alembic_salamander', perCopy: 0.1 }
+    ],
+    0.5
+  );
+  const hasAthanor = !!(labRoom?.furniture || []).some(f => f.defId === 'everburning_athanor' && !f.damaged);
+  const yieldMult =
+    1 +
+    wizBuffs.alchemySteps * 0.03 +
+    creatureYield +
+    sb.potionYieldPct +
+    alumni.alchemistPotionPct +
+    (hasAthanor ? 0.15 : 0);
+
+  const rawYield = 2 * yieldMult * (hasPhilosophersHour ? 2 : 1);
+  if (!next.fractionalPotionYields) next.fractionalPotionYields = {};
+  const combined = (next.fractionalPotionYields[recipeId] || 0) + rawYield;
+  let granted = Math.floor(combined + 1e-9);
+  next.fractionalPotionYields[recipeId] = Math.max(0, Number((combined - granted).toFixed(6)));
+
+  let bonusFromMastery = false;
+  if (usedAlchemist) {
+    next.alchemistBrewCount = (next.alchemistBrewCount || 0) + 1;
+    if (next.alchemistBrewCount % 4 === 0) {
+      granted += 1;
+      bonusFromMastery = true;
+    }
+  }
+
+  next.resources.potions[recipeId] = (next.resources.potions[recipeId] || 0) + granted;
+  const msg = `⚗️ Brewed ${granted}x ${recipe?.name || recipeId}!${bonusFromMastery ? ' (+1 Alchemist batch bonus!)' : ''} (${recipe?.effect || ''})`;
+  notifications?.push(msg);
+  next.notices.push({
+    id: uniqueNoticeId(`brew-done-${recipeId}`, next),
+    time: Date.now(),
+    type: 'alchemy',
+    text: msg,
+    data: {
+      potionId: recipeId,
+      roomId: labRoom?.id,
+      school: recipe?.school,
+      visualEventType: 'potion_brewed'
+    }
+  });
+  return granted;
+}
+
+function rollAlchemyExplosionForBell(state: FullGameState, notifications: string[]): void {
+  const queue = state.brewingQueue || [];
+  if (queue.length === 0) return;
+
+  const activeLabIds = Array.from(new Set(queue.map(j => j.roomId)));
+  const salamanderScale = bestBuffScale(state.creatures, 'alembic_salamander') > 0
+    ? creatureSpeciesBuffSum(state, 'alembic_salamander')
+    : 0;
+  const fireproofBells = state.activeBuffs?.fireproofBells || 0;
+  const fireproofRoomId = state.activeBuffs?.fireproofRoomId;
+  const sb = computeSpellbookBonuses(state.spellbooks || []);
+
+  for (const labId of activeLabIds) {
+    const lab = state.rooms.find(r => r.id === labId && r.state === 'built' && !isRoomUnfinished(r));
+    if (!lab) continue;
+    if (fireproofBells > 0 && (!fireproofRoomId || fireproofRoomId === lab.id)) continue;
+
+    const alchemists = state.characters.filter(
+      c => c.career === 'alchemist' && c.careerState === 'active' && c.status !== 'away' && c.workplaceRoomId === lab.id
+    );
+    const hasAlchemist = alchemists.length > 0;
+    const hasFumeHood = (lab.furniture || []).some(f => f.defId === 'fume_hood' && !f.damaged);
+    const hasSteadyHand = state.characters.some(
+      c => hasTrait(c, 'Steady Hand') && (c.workplaceRoomId === lab.id || c.seatRoomId === lab.id)
+    );
+    const hasFirebug = state.characters.some(
+      c => hasTrait(c, 'Firebug') && (c.workplaceRoomId === lab.id || c.seatRoomId === lab.id || c.bedRoomId === lab.id)
+    );
+
+    const pExplosion =
+      0.005 *
+      (hasAlchemist ? 0.5 : 1) *
+      (hasSteadyHand ? 0.5 : 1) *
+      (hasFumeHood ? 0.6 : 1) *
+      Math.max(0.25, 1 - salamanderScale * 0.30) *
+      (1 - sb.labExplosionReductionPct) *
+      (hasFirebug ? 2 : 1) *
+      (state.nextBellLabExplosionMult || 1);
+
+    if (Math.random() < pExplosion) {
+      lab.cleanliness = Math.max(0, lab.cleanliness - 40);
+      if (alchemists.length > 0 && Math.random() < 0.3) {
+        const victim = alchemists[Math.floor(Math.random() * alchemists.length)];
+        if (!victim.injury) {
+          victim.injury = { type: 'bruised', points: 0, required: 30 };
+        }
+      }
+      const msg = `💥 Bubbling Cauldron in ${ROOM_DEFINITIONS[lab.defId]?.name || 'Alchemy Lab'}! (-40 Cleanliness; brew continues.)`;
+      notifications.push(msg);
+      state.notices.push({
+        id: uniqueNoticeId(`cauldron-${lab.id}`, state),
+        time: Date.now(),
+        type: 'hazard',
+        text: msg,
+        data: { roomId: lab.id, hazardId: 'bubbling_cauldron', hazardType: 'bubbling_cauldron' }
+      });
+    }
+  }
+}
+
+// --- M7: Alumni Bonuses, Visits, 21 Spellbooks & Card Linking Helpers (§13, §31) ---
+
+function isCardInDeckScope(card: AnkiCardSnapshot, deckScope?: string): boolean {
+  if (!deckScope || deckScope === 'all' || deckScope.trim() === '') return true;
+  const scope = deckScope.trim().toLowerCase();
+  const name = (card.deckName || '').toLowerCase();
+  return name === scope || name.startsWith(`${scope}::`) || name.includes(scope);
+}
+
+function getEligibleFreeYoungCards(state: FullGameState, maxIvl: number = 30): AnkiCardSnapshot[] {
+  const linkedCardIds = new Set<number>();
+  for (const set of state.cardSets || []) {
+    if (!set.released) {
+      for (const cid of set.cardIds) linkedCardIds.add(cid);
+    }
+  }
+  const allowNewCards = state.settings?.linkNewCards ?? false;
+  return Object.values(state.allCards || {})
+    .filter(
+      c =>
+        !linkedCardIds.has(c.id) &&
+        c.honestIvl <= maxIvl &&
+        c.queue !== -1 &&
+        (allowNewCards || (c.type ?? 2) !== 0) &&
+        isCardInDeckScope(c, state.settings?.deckScope)
+    )
+    .sort((a, b) => a.honestIvl - b.honestIvl || a.id - b.id);
+}
+
+function pickFreeYoungCards(state: FullGameState, maxIvl: number, needed: number): AnkiCardSnapshot[] {
+  const candidates = getEligibleFreeYoungCards(state, maxIvl);
+  if (!state.settings?.avoidSiblings) {
+    return candidates.slice(0, needed);
+  }
+  const seenNids = new Set<number>();
+  const firstPass: AnkiCardSnapshot[] = [];
+  const remainder: AnkiCardSnapshot[] = [];
+  for (const c of candidates) {
+    const nid = c.nid ?? c.id;
+    if (!seenNids.has(nid)) {
+      seenNids.add(nid);
+      firstPass.push(c);
+    } else {
+      remainder.push(c);
+    }
+  }
+  if (firstPass.length >= needed) {
+    return firstPass.slice(0, needed);
+  }
+  return [...firstPass, ...remainder].slice(0, needed);
+}
+
+function createAlumnusRecord(
+  char: Character,
+  retiredDay: number,
+  retirementAgeDays?: number
+): FullGameState['alumniGallery'][number] {
+  const scale = alumniRetirementScale(retirementAgeDays);
+  const career: CareerType | 'resident' = char.career || 'resident';
+  const baseByCareer: Record<CareerType | 'resident', number> = {
+    teacher: 0.01,
+    scholar: 0.005,
+    gardener: 0.02,
+    tamer: 0.02,
+    healer: 0.02,
+    warder: 0.01,
+    alchemist: 0.02,
+    builder: 0.01,
+    adventurer: 0.2,
+    resident: 0.01
+  };
+  const bonusValue = Number((baseByCareer[career] * scale).toFixed(4));
+  const extraSchoolsMastered = Math.max(0, (char.masteredSchools?.length || 1) - 1);
+  return {
+    id: char.id,
+    name: char.name,
+    portrait: char.appearance?.hat || 'grand_hat',
+    titles: char.masteredSchools.map(s => `Master of ${s.toUpperCase()}`),
+    retiredDay,
+    career,
+    extraSchoolsMastered,
+    retiredAgeDays: retirementAgeDays || 90,
+    bonusType: career,
+    bonusValue
+  };
+}
+
+function offerSpellbookDraft(
+  state: FullGameState,
+  targetTier: 1 | 2 | 3,
+  source: string,
+  allowPlanPick: boolean = false
+): void {
+  if (!state.spellbooks) state.spellbooks = [];
+  if (state.pendingSpellbookDraft) return;
+  const owned = new Set(state.spellbooks);
+  const allDefs = Object.values(SPELLBOOK_DEFINITIONS);
+  const unownedInTier = allDefs.filter(d => d.tier === targetTier && !owned.has(d.id));
+  const otherUnowned = allDefs
+    .filter(d => d.tier !== targetTier && !owned.has(d.id))
+    .sort((a, b) => Math.abs(a.tier - targetTier) - Math.abs(b.tier - targetTier));
+  const pool = [...unownedInTier, ...otherUnowned];
+  if (pool.length === 0) {
+    state.renown = (state.renown || 0) + 50;
+    const msg = `✨ Gilded Edition! All 21 Spellbooks already collected — ${source} grants +50 Renown!`;
+    state.notices.push({
+      id: uniqueNoticeId('gilded-spellbook', state),
+      time: Date.now(),
+      type: 'milestone',
+      text: msg
+    });
+    return;
+  }
+  const choices = unownedInTier.length >= 3
+    ? [...unownedInTier].sort(() => Math.random() - 0.5).slice(0, 3).map(d => d.id)
+    : pool.slice(0, 3).map(d => d.id);
+  state.pendingSpellbookDraft = {
+    choices,
+    tier: targetTier,
+    source,
+    allowPlanPick
+  };
+  state.notices.push({
+    id: uniqueNoticeId('spellbook-offer', state),
+    time: Date.now(),
+    type: 'milestone',
+    text: `📚 A Tier ${targetTier} Spellbook Choice awaits (${source})!`
+  });
+}
+
+function checkEndlessSpellbookMilestones(state: FullGameState): void {
+  if (state.settings?.mode === 'timed' || state.pendingSpellbookDraft) return;
+  const renown = state.renown || 0;
+  const last = state.lastRenownSpellbookThreshold || 0;
+  for (const m of ENDLESS_SPELLBOOK_MILESTONES) {
+    if (m.renown > last && renown >= m.renown) {
+      state.lastRenownSpellbookThreshold = m.renown;
+      offerSpellbookDraft(state, m.tier, `Endless Renown ${m.renown}`);
+      return;
+    }
+  }
+  if (last >= 1200) {
+    const nextThreshold = last + 400;
+    if (renown >= nextThreshold) {
+      state.lastRenownSpellbookThreshold = nextThreshold;
+      offerSpellbookDraft(state, 3, `Endless Renown ${nextThreshold}`);
+    }
+  }
+}
+
+function grantAlumniVisitGift(state: FullGameState, summary: string[]): void {
+  if (!state.alumniGallery?.length) return;
+  if (state.lastAlumniVisitDay === state.day) return;
+  if (Math.random() >= 0.03) return;
+
+  state.lastAlumniVisitDay = state.day;
+  const visitor = state.alumniGallery[Math.floor(Math.random() * state.alumniGallery.length)];
+  const career = visitor.career || visitor.bonusType || 'resident';
+  const cap = AnkicasterEngine.storageCap(state);
+  const storeCommon = (key: keyof FullGameState['resources'], amt: number) => {
+    const cur = (state.resources as any)[key] || 0;
+    (state.resources as any)[key] = cur >= cap ? cur : Math.min(cap, cur + amt);
+  };
+  let giftText = '+15 Mana';
+  switch (career) {
+    case 'gardener':
+      storeCommon('greens', 20);
+      giftText = '+20 Greens';
+      break;
+    case 'adventurer':
+      if (!state.scrolls) state.scrolls = {};
+      state.scrolls.rift_map = (state.scrolls.rift_map || 0) + 1;
+      giftText = '+1 Rift Map scroll';
+      break;
+    case 'alchemist':
+      state.resources.reagents = (state.resources.reagents || 0) + 15;
+      giftText = '+15 Reagents';
+      break;
+    case 'builder':
+      storeCommon('timber', 15);
+      storeCommon('stone', 15);
+      giftText = '+15 Timber, +15 Stone';
+      break;
+    case 'scholar':
+      state.resources.insight = (state.resources.insight || 0) + 15;
+      giftText = '+15 Insight';
+      break;
+    case 'healer':
+      state.resources.herbs = (state.resources.herbs || 0) + 15;
+      giftText = '+15 Herbs';
+      break;
+    case 'tamer':
+      storeCommon('provisions', 10);
+      storeCommon('fish', 10);
+      giftText = '+10 Provisions, +10 Fish';
+      break;
+    case 'warder':
+      state.resources.umbra = (state.resources.umbra || 0) + 15;
+      giftText = '+15 Umbra';
+      break;
+    default:
+      state.mana = (state.mana || 0) + 25;
+      state.resources.radiance = (state.resources.radiance || 0) + 10;
+      giftText = '+25 Mana, +10 Radiance';
+      break;
+  }
+  const msg = `🎓 Alumni Visit: ${visitor.name} dropped by with a gift (${giftText})!`;
+  summary.push(msg);
+  state.notices.push({
+    id: uniqueNoticeId(`alumni-visit-${visitor.id}`, state),
+    time: Date.now(),
+    type: 'event',
+    text: msg
+  });
+}
+
+function checkSuspendedLinkedCards(state: FullGameState, summary: string[]): void {
+  const daysLimit = state.settings?.suspendedReleaseDays ?? 30;
+  if (!state.suspendedSinceDay) state.suspendedSinceDay = {};
+  const tracker = state.suspendedSinceDay;
+
+  for (const cidStr of Object.keys(tracker)) {
+    const cid = Number(cidStr);
+    const card = state.allCards?.[cid];
+    if (!card || card.queue !== -1) {
+      delete tracker[cid];
+    }
+  }
+
+  let releasedTotal = 0;
+  let replacedTotal = 0;
+  for (const set of state.cardSets || []) {
+    if (set.released) continue;
+    const maxIvl = set.kind === 'career' ? 45 : 30;
+    const kept: number[] = [];
+    let removedCount = 0;
+    for (const cid of set.cardIds) {
+      const card = state.allCards?.[cid];
+      if (card && card.queue === -1) {
+        if (tracker[cid] === undefined) tracker[cid] = state.day;
+        if (state.day - tracker[cid] >= daysLimit) {
+          delete tracker[cid];
+          removedCount++;
+          releasedTotal++;
+          continue;
+        }
+      }
+      kept.push(cid);
+    }
+    if (removedCount > 0) {
+      set.cardIds = kept;
+      const replacements = pickFreeYoungCards(state, maxIvl, removedCount);
+      for (const rep of replacements) {
+        set.cardIds.push(rep.id);
+        replacedTotal++;
+      }
+      set.size = set.cardIds.length;
+    }
+  }
+
+  if (releasedTotal > 0) {
+    const msg = `🔄 Released ${releasedTotal} suspended flashcard(s) (${daysLimit}d limit) and linked ${replacedTotal} fresh replacement(s).`;
+    summary.push(msg);
+    state.notices.push({
+      id: uniqueNoticeId('suspended-release', state),
+      time: Date.now(),
+      type: 'event',
+      text: msg
+    });
+  }
 }
 
 export class AnkicasterEngine {
@@ -237,7 +1817,8 @@ export class AnkicasterEngine {
       shelvedRooms: state.shelvedRooms ? state.shelvedRooms.map(cloneRoom) : undefined,
       creatures: state.creatures.map(c => ({
         ...c,
-        stashed: c.stashed ? { ...c.stashed } : undefined
+        stashed: c.stashed ? { ...c.stashed } : undefined,
+        injury: c.injury ? { ...c.injury } : undefined
       })),
       expeditions: state.expeditions.map(e => ({
         ...e,
@@ -283,6 +1864,13 @@ export class AnkicasterEngine {
       knownPatterns: state.knownPatterns ? [...state.knownPatterns] : [],
       knownPlans: state.knownPlans ? [...state.knownPlans] : [],
       discoveredCreatures: state.discoveredCreatures ? [...state.discoveredCreatures] : undefined,
+      brewingQueue: state.brewingQueue ? state.brewingQueue.map(j => ({ ...j })) : [],
+      fractionalPotionYields: state.fractionalPotionYields ? { ...state.fractionalPotionYields } : undefined,
+      scrolls: state.scrolls ? { ...state.scrolls } : undefined,
+      scrollQueue: state.scrollQueue ? state.scrollQueue.map(j => ({ ...j })) : [],
+      discoveredHints: state.discoveredHints
+        ? Object.fromEntries(Object.entries(state.discoveredHints).map(([k, v]) => [k, [...v]]))
+        : undefined,
       notices: [...state.notices],
       processedReviewIds: state.processedReviewIds ? [...state.processedReviewIds] : []
     };
@@ -296,7 +1884,13 @@ export class AnkicasterEngine {
     }
 
     // 1. Mana gain (F1)
-    const manaEarned = calculateReviewMana(next.wizard.levels.arcane);
+    const sbRev = computeSpellbookBonuses(next.spellbooks || []);
+    const alumniRev = computeAlumniBonuses(next.alumniGallery || []);
+    const manaEarned = calculateReviewMana(
+      next.wizard.levels.arcane,
+      sbRev.manaPct + alumniRev.scholarManaPct,
+      next.settings?.manaPerReview ?? 10
+    );
     if (next.manaDebt > 0) {
       const debtPaid = Math.min(next.manaDebt, manaEarned);
       next.manaDebt -= debtPaid;
@@ -454,7 +2048,35 @@ export class AnkicasterEngine {
       next.rooms.filter(r => r.state === 'built' && !isRoomUnfinished(r)),
       'build_speed_pct'
     );
-    const buildStep = buildSpeedPct > 0 ? Math.round((1 + buildSpeedPct / 100) * 100) / 100 : 1;
+    const activeBuilders = next.characters.filter(
+      c => c.career === 'builder' && c.careerState === 'active' && c.status !== 'away' && !c.injury
+    );
+    let builderBonus = 0;
+    for (const b of activeBuilders) {
+      const ws = b.workplaceRoomId != null
+        ? next.rooms.find(
+            r =>
+              r.id === b.workplaceRoomId &&
+              r.defId === 'workshop' &&
+              r.state === 'built' &&
+              !isRoomUnfinished(r) &&
+              !AnkicasterEngine.roomIsLocked(next, r)
+          )
+        : undefined;
+      const bStep = ws && (ws.level || 1) >= 3 ? 0.4 : 0.25;
+      builderBonus += bStep * careerAffinityMultiplier(b.masteredSchools, 'builder') * facultyOutputMultiplier(next, b);
+    }
+    const hasQuickHandsBuilder = activeBuilders.some(c => hasTrait(c, 'Quick Hands'));
+    const creatureBuildBonus = creatureCategoryBonus(
+      next,
+      [
+        { defId: 'bellows_toad', perCopy: 0.05 },
+        { defId: 'geode_golem', perCopy: 0.1 }
+      ],
+      0.5
+    );
+    const totalBuildPct = buildSpeedPct + (hasQuickHandsBuilder ? 15 : 0) + creatureBuildBonus * 100;
+    const buildStep = Math.round((1 + builderBonus) * (1 + totalBuildPct / 100) * 100) / 100;
     for (const room of next.rooms) {
       if (room.state === 'site' && !room.buildPaused) {
         room.buildProgress = Math.round((room.buildProgress + buildStep) * 100) / 100;
@@ -463,6 +2085,7 @@ export class AnkicasterEngine {
     }
 
     // 5. Advance Active Creature Taming & Hatching, and count down loose-creature captures
+    const wizBuffs = wizardSchoolBuffs(next.wizard.levels);
     tickCaptures(next, notifications);
     const creatureRoomMap = resolveAllCreatureRooms(next.creatures, next.rooms);
     const HATCH_REVIEWS: Record<string, number> = {
@@ -482,7 +2105,7 @@ export class AnkicasterEngine {
           !res.roaming &&
           res.room &&
           res.room.state === 'built' &&
-          penAcceptedHabitats(res.room.defId).some(h => cDef.habitats.includes(h))
+          roomAcceptedHabitats(res.room).some(h => cDef.habitats.includes(h))
         ) {
           const required = HATCH_REVIEWS[cDef.rarity] ?? 20;
           c.hatchProgress = Math.min(100, (c.hatchProgress || 0) + 100 / required);
@@ -509,11 +2132,20 @@ export class AnkicasterEngine {
       const cRoom = c.roomId != null ? next.rooms.find(r => r.id === c.roomId) : creatureRoomMap.get(c.id)?.room;
       if (c.status === 'wary' && c.tamerId !== undefined && c.tamerId !== null) {
         const tamingBonus = academyFurnitureEffect(next.rooms, 'taming_pct', cRoom);
+        const tamerChar = c.tamerId > 0 ? next.characters.find(ch => ch.id === c.tamerId) : undefined;
         const tamerMastered = c.tamerId === 0
           ? wizardMasteredSchools(next.wizard.levels)
-          : (next.characters.find(ch => ch.id === c.tamerId)?.masteredSchools || []);
+          : (tamerChar?.masteredSchools || []);
         const tamerMult = careerAffinityMultiplier(tamerMastered, 'tamer', cDef?.school);
-        c.tamingProgress += (1 + tamingBonus / 100) * tamerMult;
+        const whispererMult = hasTrait(tamerChar, 'Beast Whisperer') ? 1.25 : 1;
+        const gentleMult = tamerChar?.personality === 'Gentle' ? 1.25 : 1;
+        c.tamingProgress +=
+          (1 + tamingBonus / 100) *
+          tamerMult *
+          whispererMult *
+          gentleMult *
+          wizBuffs.natureMult *
+          (1 + sbRev.tamingPct + alumniRev.tamerTamingPct);
         if (cDef && c.tamingProgress >= cDef.tamingReviews) {
           c.status = 'tamed';
           notifications.push(`🐾 Tamed ${c.nickname} (${cDef.name})!`);
@@ -529,6 +2161,7 @@ export class AnkicasterEngine {
               visualEventType: 'creature_tamed'
             }
           });
+          grantTamingOneTimeBonuses(next, c, notifications);
         }
       } else if (c.status === 'tamed') {
         const bondBonus = academyFurnitureEffect(next.rooms, 'creature_bond_pct', cRoom);
@@ -589,18 +2222,32 @@ export class AnkicasterEngine {
     }
     const activeHealerChars = next.characters.filter(c => c.career === 'healer' && c.careerState === 'active');
     const activeHealers = activeHealerChars.length;
-    const hasHealingCreature = Math.max(
-      bestBuffScale(next.creatures, 'halo_lamb'),
-      bestBuffScale(next.creatures, 'fen_sprite'),
-      bestBuffScale(next.creatures, 'ember_phoenix')
+    const haloScale = bestBuffScale(next.creatures, 'halo_lamb') > 0 ? creatureSpeciesBuffSum(next, 'halo_lamb') : 0;
+    const phoenixHealCheck = bestBuffScale(next.creatures, 'ember_phoenix');
+    const sunlitScale = creatureSpeciesBuffSum(next, 'sunlit_unicorn');
+    const creatureHealBonus = creatureCategoryBonus(
+      next,
+      [
+        { defId: 'halo_lamb', perCopy: 0.1 },
+        { defId: 'sunlit_unicorn', perCopy: 0.2 },
+        ...(phoenixHealCheck > 0 ? [{ defId: 'ember_phoenix', perCopy: 0.1 }] : []),
+        ...(infirmaryRoom ? [{ defId: 'coral_kelpie', perCopy: 0.1 }] : [])
+      ],
+      0.5
     );
 
+    const hasBathhouseHeal = next.rooms.some(
+      r => r.defId === 'bathhouse' && r.state === 'built' && !isRoomUnfinished(r) && !AnkicasterEngine.roomIsLocked(next, r)
+    );
+    const hasMoonwellHeal = next.rooms.some(
+      r => r.defId === 'moonwell' && r.state === 'built' && !isRoomUnfinished(r) && !AnkicasterEngine.roomIsLocked(next, r)
+    );
     for (const char of next.characters) {
       if (char.injury) {
         let healRate = 1.0;
         if (infirmaryBonus > 0) healRate += infirmaryBonus;
         healRate += activeHealers * 1.5;
-        if (hasHealingCreature > 0) healRate += 1.5 * hasHealingCreature;
+        if (haloScale > 0) healRate += 1.5 * haloScale;
         const healRooms = new Map<number, PlacedRoom>();
         const bedRoom = char.bedRoomId != null ? next.rooms.find(r => r.id === char.bedRoomId) : undefined;
         if (bedRoom) healRooms.set(bedRoom.id, bedRoom);
@@ -610,16 +2257,31 @@ export class AnkicasterEngine {
             healRooms.set(hr.id, hr);
           }
         }
-        let healPct = 0;
+        let healPct = (hasBathhouseHeal ? 10 : 0) + (hasMoonwellHeal ? 20 : 0);
         for (const hr of healRooms.values()) {
           healPct += academyFurnitureEffect(next.rooms, 'heal_pct', hr);
         }
         if (healPct > 0) healRate *= 1 + healPct / 100;
+        if (creatureHealBonus > 0) healRate *= 1 + creatureHealBonus;
         if (activeHealerChars.length > 0) {
           const charSchools: SchoolType[] = [...(char.currentSchool ? [char.currentSchool] : []), ...char.masteredSchools];
-          const healerMult = Math.max(...activeHealerChars.map(h => careerAffinityMultiplier(h.masteredSchools, 'healer', charSchools)));
+          const healerMult = Math.max(
+            ...activeHealerChars.map(h => careerAffinityMultiplier(h.masteredSchools, 'healer', charSchools) * facultyOutputMultiplier(next, h))
+          );
           healRate *= healerMult;
         }
+        healRate *= wizBuffs.lightRecoveryMult;
+        if (char.injury.type === 'hexed' && activeHealers === 0 && sunlitScale <= 0) {
+          healRate *= 0.25;
+        }
+        if (hasTrait(char, 'Brave')) healRate *= 1.15;
+        if (hasTrait(char, 'Hardy')) healRate /= 0.7;
+        const isRiftInjury = char.injury.type === 'hexed' || char.injury.type === 'sprained' || char.injury.type === 'broken_bone' || char.injury.type === 'rift_touched';
+        if (isRiftInjury) {
+          if (char.personality === 'Steadfast') healRate *= 1.25;
+          if (hasTrait(char, 'Daredevil')) healRate *= 0.75;
+        }
+        healRate *= 1 + sbRev.healingPct + alumniRev.healerHealingPct;
 
         char.injury.points += healRate;
         if (char.injury.points >= char.injury.required) {
@@ -638,15 +2300,195 @@ export class AnkicasterEngine {
           });
         }
       }
+      if (char.absentUntilReviewIndex !== undefined && next.reviewIndex >= char.absentUntilReviewIndex) {
+        char.absentUntilReviewIndex = undefined;
+        const matKeys = ['timber', 'stone', 'glass', 'cloth'] as const;
+        const mat = matKeys[Math.floor(Math.random() * matKeys.length)];
+        const amt = 3 + Math.floor(Math.random() * 6);
+        const cap = AnkicasterEngine.storageCap(next);
+        const before = (next.resources as any)[mat] || 0;
+        (next.resources as any)[mat] = before >= cap ? before : Math.min(cap, before + amt);
+        const msg = `🌙 ${char.name} slipped back in after sneaking out (+${amt} ${mat}).`;
+        notifications.push(msg);
+        next.notices.push({
+          id: uniqueNoticeId(`return-${char.id}`, next),
+          time: Date.now(),
+          type: 'misbehavior',
+          text: msg,
+          data: { roomId: char.bedRoomId ?? ehRoom?.id, characterIds: [char.id] }
+        });
+      }
     }
 
-    // 8. Decrement Spell Cooldowns
+    const hasL3Infirmary = next.rooms.some(
+      r => r.defId === 'infirmary' && r.state === 'built' && !isRoomUnfinished(r) && !AnkicasterEngine.roomIsLocked(next, r) && (r.level || 1) >= 3
+    );
+    let baseCreatureHeal = 1.0 + infirmaryBonus + activeHealers * 1.5 + (haloScale > 0 ? 1.5 * haloScale : 0);
+    const infirmHealPct =
+      (infirmaryRoom ? academyFurnitureEffect(next.rooms, 'heal_pct', infirmaryRoom) : 0) +
+      (hasBathhouseHeal ? 10 : 0) +
+      (hasMoonwellHeal ? 20 : 0);
+    if (infirmHealPct > 0) baseCreatureHeal *= 1 + infirmHealPct / 100;
+    if (creatureHealBonus > 0) baseCreatureHeal *= 1 + creatureHealBonus;
+    if (activeHealerChars.length > 0) {
+      baseCreatureHeal *= Math.max(
+        ...activeHealerChars.map(h => careerAffinityMultiplier(h.masteredSchools, 'healer') * facultyOutputMultiplier(next, h))
+      );
+    }
+    baseCreatureHeal *= wizBuffs.lightRecoveryMult * (1 + sbRev.healingPct + alumniRev.healerHealingPct);
+    for (const cr of next.creatures) {
+      if (!cr.injury) continue;
+      if (!hasL3Infirmary && (cr.status === 'loose' || cr.status === 'away')) continue;
+      cr.injury.points += hasL3Infirmary ? baseCreatureHeal : 0.5;
+      if (cr.injury.points >= cr.injury.required) {
+        cr.injury = undefined;
+        notifications.push(`💚 ${cr.nickname} has recovered from injury!`);
+      }
+    }
+
+    // 8. Decrement Spell Cooldowns & Expire Timed Room Hazards
     for (const [spell, cd] of Object.entries(next.wizard.spellCooldowns)) {
       if (cd > 1) {
         next.wizard.spellCooldowns[spell] = cd - 1;
       } else {
         delete next.wizard.spellCooldowns[spell];
       }
+    }
+
+    const activeTamersForBreach = next.characters.filter(
+      c => c.career === 'tamer' && c.careerState === 'active' && c.status !== 'away' && !c.injury
+    );
+    const bestTamerMult = activeTamersForBreach.length > 0
+      ? Math.max(...activeTamersForBreach.map(t =>
+          careerAffinityMultiplier(t.masteredSchools, 'tamer') *
+          (hasTrait(t, 'Beast Whisperer') ? 1.25 : 1) *
+          (t.personality === 'Gentle' ? 1.25 : 1)
+        ))
+      : 0;
+    for (const room of next.rooms) {
+      if (room.state === 'built' && room.hazard) {
+        if (room.hazard.type === 'wanderer' && bestTamerMult > 0) {
+          const tamingBonus = academyFurnitureEffect(next.rooms, 'taming_pct', room);
+          room.hazard.tamingProgress =
+            (room.hazard.tamingProgress || 0) +
+            (1 + tamingBonus / 100) * bestTamerMult * wizBuffs.natureMult * (1 + sbRev.tamingPct + alumniRev.tamerTamingPct);
+          if (room.hazard.tamingProgress >= (room.hazard.tamingRequired || 160)) {
+            const rareDefs = Object.values(CREATURE_DEFINITIONS).filter(cd => cd.rarity === 'rare');
+            const pool = rareDefs.length > 0 ? rareDefs : Object.values(CREATURE_DEFINITIONS);
+            const pickedDef = pool[Math.floor(Math.random() * pool.length)];
+            clearRoomHazard(next, room, notifications, 'tamed');
+            if (pickedDef) {
+              const newCid = uniqueNumericId(next.creatures.map(c => c.id));
+              next.creatures.push({
+                id: newCid,
+                defId: pickedDef.id,
+                nickname: pickedDef.name,
+                status: 'tamed',
+                hungry: false,
+                hatchProgress: 0,
+                tamingProgress: pickedDef.tamingReviews,
+                bondLevel: 1,
+                bondProgress: 0,
+                arrivedDay: next.day
+              });
+              syncDiscoveredCreatures(next);
+              notifications.push(`🌟 Your Tamer tamed the Wanderer from Beyond — it revealed itself as a ${pickedDef.name}!`);
+            }
+            continue;
+          }
+        }
+        if (room.hazard.expiresAtReviewIndex !== undefined && next.reviewIndex >= room.hazard.expiresAtReviewIndex) {
+          clearRoomHazard(next, room, notifications, 'resolved');
+        }
+      }
+      if (room.lockedUntilReviewIndex !== undefined && next.reviewIndex >= room.lockedUntilReviewIndex && !room.hazard?.locksRoom) {
+        room.lockedUntilReviewIndex = undefined;
+      }
+    }
+
+    // 8b. Advance Timed Alchemy Brewing Stations (§24.2)
+    if (next.brewingQueue && next.brewingQueue.length > 0) {
+      const remainingBrews: BrewingJob[] = [];
+      for (const job of next.brewingQueue) {
+        const lab = next.rooms.find(r => r.id === job.roomId && r.state === 'built' && !isRoomUnfinished(r));
+        if (!lab) {
+          remainingBrews.push(job);
+          continue;
+        }
+        const hasAlchemist = next.characters.some(
+          c => c.career === 'alchemist' && c.careerState === 'active' && c.status !== 'away' && !c.injury && c.workplaceRoomId === lab.id
+        );
+        if (hasAlchemist) job.usedAlchemist = true;
+        job.progress += hasAlchemist ? 2 : 1;
+        if (job.progress >= job.required) {
+          completeBrewJob(next, job.recipeId, lab, job.usedAlchemist, false, notifications);
+        } else {
+          remainingBrews.push(job);
+        }
+      }
+      next.brewingQueue = remainingBrews;
+    }
+
+    // 8c. Advance Scriptorium Scroll Crafting Queue (§25.4)
+    if (next.scrollQueue && next.scrollQueue.length > 0) {
+      const remainingScrolls: ScrollCraftingJob[] = [];
+      for (const job of next.scrollQueue) {
+        const scriptorium = next.rooms.find(
+          r =>
+            r.id === job.roomId &&
+            r.defId === 'scriptorium' &&
+            r.state === 'built' &&
+            !isRoomUnfinished(r) &&
+            !AnkicasterEngine.roomIsLocked(next, r)
+        );
+        if (!scriptorium) {
+          remainingScrolls.push(job);
+          continue;
+        }
+        const eff = AnkicasterEngine.roomEfficiency(next, scriptorium);
+        if (eff <= 0) {
+          remainingScrolls.push(job);
+          continue;
+        }
+        const scholars = next.characters.filter(
+          c =>
+            c.career === 'scholar' &&
+            c.careerState === 'active' &&
+            c.status !== 'away' &&
+            !c.injury &&
+            c.workplaceRoomId === scriptorium.id
+        );
+        const scholarRate =
+          scholars.length > 0
+            ? Math.max(
+                ...scholars.map(
+                  s => careerAffinityMultiplier(s.masteredSchools, 'scholar', 'arcane') * facultyOutputMultiplier(next, s)
+                )
+              )
+            : 0.5;
+        const outPct = academyFurnitureEffect(next.rooms, 'output_pct', scriptorium);
+        const owlBonus = creatureCategoryBonus(next, [{ defId: 'mistfeather_owl', perCopy: 0.1 }], 0.5);
+        const hasQuill = (scriptorium.furniture || []).some(f => f.defId === 'silent_quill' && !f.damaged);
+        const quillMult = hasQuill ? 1.25 : 1;
+        job.progress += scholarRate * (1 + outPct / 100) * (1 + owlBonus) * quillMult;
+        if (job.progress >= job.required) {
+          if (!next.scrolls) next.scrolls = {};
+          next.scrolls[job.scrollId] = (next.scrolls[job.scrollId] || 0) + 1;
+          const sName = SCROLL_DEFINITIONS[job.scrollId]?.name || job.scrollId;
+          const msg = `📜 Crafted ${sName} in the Scriptorium!`;
+          notifications.push(msg);
+          next.notices.push({
+            id: uniqueNoticeId(`scroll-done-${job.scrollId}`, next),
+            time: Date.now(),
+            type: 'alchemy',
+            text: msg,
+            data: { roomId: scriptorium.id }
+          });
+        } else {
+          remainingScrolls.push(job);
+        }
+      }
+      next.scrollQueue = remainingScrolls;
     }
 
     // 9. Bell Tick (every 10 reviews)
@@ -659,6 +2501,7 @@ export class AnkicasterEngine {
 
     // 10. Check Automatic Retirement (Rule BR-26 / GDD Section 12)
     this.checkAutomaticRetirements(next, notifications);
+    syncCharmRenown(next);
 
     return { state: next, toast: toastMsg, notifications };
   }
@@ -753,7 +2596,7 @@ export class AnkicasterEngine {
         const sch = classroomSchool(r.defId);
         if (!sch || !char.masteredSchools.includes(sch)) return false;
       }
-      return AnkicasterEngine.slotsUsed(state, r, exceptId) < wp.slots;
+      return AnkicasterEngine.slotsUsed(state, r, exceptId) < effectiveWorkplaceSlots(r);
     });
     if (avoidRoomId != null) {
       const other = matches.find(r => r.id !== avoidRoomId);
@@ -782,7 +2625,7 @@ export class AnkicasterEngine {
       const current = c.workplaceRoomId != null ? state.rooms.find(r => r.id === c.workplaceRoomId) : undefined;
       const wp = current ? ROOM_DEFINITIONS[current.defId]?.workplace : undefined;
       const still = !!current && !!wp && wp.career === c.career && AnkicasterEngine.roomWorkable(current)
-        && AnkicasterEngine.slotsUsed(state, current, c.id) < wp.slots
+        && AnkicasterEngine.slotsUsed(state, current, c.id) < effectiveWorkplaceSlots(current)
         && current.id !== avoidId;
       if (still) continue;
       c.workplaceRoomId = AnkicasterEngine.findOpenWorkplace(state, c.career, c.id, c, avoidId)?.id;
@@ -857,7 +2700,7 @@ export class AnkicasterEngine {
   }
 
   private static roomIsLocked(state: FullGameState, room: PlacedRoom): boolean {
-    return (room.lockedUntilReviewIndex ?? -1) > state.reviewIndex;
+    return (room.lockedUntilReviewIndex ?? -1) > state.reviewIndex || !!room.hazard?.locksRoom;
   }
 
   /** Factors behind one room's efficiency, for the room window. */
@@ -887,6 +2730,7 @@ export class AnkicasterEngine {
     else if (room.state === 'built' && locked) blocked = 'locked';
     let efficiency = locked ? 0 : calculateRoomEfficiency(room, staffed, reachable, rawAdj);
     if (efficiency > 0 && kitchenHalf) efficiency *= 0.5;
+    if (efficiency > 0 && floorHasHazard(state, room, 'gravity_hiccup')) efficiency *= 0.5;
     return { efficiency, level, quality, cleanliness, staff, adjacency, blocked };
   }
 
@@ -906,7 +2750,12 @@ export class AnkicasterEngine {
     const eff = AnkicasterEngine.roomEfficiency(state, room, reach);
     if (eff <= 0) return 25;
     const bonus = academyFurnitureEffect(state.rooms, 'rest_bonus', room);
-    return Math.min(100, AnkicasterEngine.restTargetFromEfficiency(eff) + bonus);
+    const bathhouseBonus = state.rooms.some(
+      r => r.defId === 'bathhouse' && r.state === 'built' && !isRoomUnfinished(r) && !AnkicasterEngine.roomIsLocked(state, r)
+    ) ? 10 : 0;
+    const sb = computeSpellbookBonuses(state.spellbooks || []);
+    const coldPenalty = room.hazard?.type === 'cold_snap' ? (roomHasHearth(room) ? 5 : 10) * sb.weatherPenaltyMult : 0;
+    return Math.max(0, Math.min(100, AnkicasterEngine.restTargetFromEfficiency(eff) + bonus + bathhouseBonus - coldPenalty));
   }
 
   static restTarget(state: FullGameState, char: Character, reach?: Map<number, ReachabilityInfo>): number {
@@ -915,32 +2764,31 @@ export class AnkicasterEngine {
   }
 
   /**
-   * Leisure seats from built, finished Common Room, Faculty Lounge, Bathhouse and Orchard,
-   * each multiplied by that room's efficiency.
-   * Bathhouse has no leisureSeats in content.ts, so it counts as 8.
+   * Leisure seats from built, finished Common Room, Faculty Lounge, Bathhouse, Orchard,
+   * Courtyard Garden, Library (with Rolling Ladder), and Menagerie, each multiplied by efficiency.
    */
   private static leisureCapacity(state: FullGameState, reach?: Map<number, ReachabilityInfo>): number {
-    const ids = new Set(['common_room', 'faculty_lounge', 'bathhouse', 'orchard']);
+    const ids = new Set(['common_room', 'faculty_lounge', 'bathhouse', 'orchard', 'courtyard_garden', 'library', 'menagerie']);
     let cap = 0;
     for (const room of state.rooms) {
       if (!ids.has(room.defId) || room.state !== 'built' || isRoomUnfinished(room)) continue;
-      const listed = ROOM_DEFINITIONS[room.defId]?.capacity?.leisureSeats;
-      const seats = listed ?? 8;
+      let seats: number;
+      if (room.defId === 'library') {
+        seats = libraryReaderCapacity(room);
+      } else if (room.defId === 'courtyard_garden') {
+        seats = 3;
+      } else if (room.defId === 'menagerie') {
+        seats = 6;
+      } else {
+        seats = ROOM_DEFINITIONS[room.defId]?.capacity?.leisureSeats ?? 8;
+      }
       cap += seats * AnkicasterEngine.roomEfficiency(state, room, reach);
     }
     return cap + academyFurnitureEffect(state.rooms, 'leisure_bonus');
   }
 
   private static charmBonus(state: FullGameState): number {
-    let charm = 0;
-    for (const room of state.rooms) {
-      if (room.state !== 'built' || isRoomUnfinished(room)) continue;
-      for (const f of room.furniture) {
-        const pts = FURNITURE_DEFINITIONS[f.defId]?.stats?.charm || 0;
-        charm += f.damaged ? pts * 0.5 : pts;
-      }
-    }
-    return Math.min(20, charm / 10);
+    return Math.min(20, Math.max(-10, computeAcademyCharm(state) / 10));
   }
 
   private static veilModifier(strength: number): number {
@@ -953,13 +2801,35 @@ export class AnkicasterEngine {
   private static composureTarget(state: FullGameState): number {
     const creatures = state.creatures.filter(c => c.status === 'tamed').length;
     const creatureBonus = Math.min(10, creatures * 2);
+    const lanternTargetBonus = creatureSpeciesBuffSum(state, 'lantern_moth');
+    const dawnFinchBonus = 2 * creatureSpeciesBuffSum(state, 'dawn_finch');
     const furnBonus = academyFurnitureEffect(state.rooms, 'composure_bonus');
-    const moonwellBonus = state.rooms.some(r => r.defId === 'moonwell' && r.state === 'built' && !isRoomUnfinished(r)) ? 5 : 0;
-    return 60 + AnkicasterEngine.charmBonus(state) + creatureBonus + furnBonus + moonwellBonus + AnkicasterEngine.veilModifier(state.veil.strength);
+    const moonwellBonus = state.rooms.some(
+      r => r.defId === 'moonwell' && r.state === 'built' && !isRoomUnfinished(r) && !AnkicasterEngine.roomIsLocked(state, r)
+    ) ? 5 : 0;
+    const bathhouseBonus = state.rooms.some(
+      r => r.defId === 'bathhouse' && r.state === 'built' && !isRoomUnfinished(r) && !AnkicasterEngine.roomIsLocked(state, r)
+    ) ? 5 : 0;
+    const wandererPenalty = state.rooms.some(r => r.state === 'built' && r.hazard?.type === 'wanderer') ? 10 : 0;
+    return Math.max(
+      0,
+      60 +
+        AnkicasterEngine.charmBonus(state) +
+        creatureBonus +
+        lanternTargetBonus +
+        dawnFinchBonus +
+        furnBonus +
+        moonwellBonus +
+        bathhouseBonus +
+        AnkicasterEngine.veilModifier(state.veil.strength) -
+        wandererPenalty
+    );
   }
 
-  private static approachNeed(current: number, target: number, decay: number): number {
-    const next = current + (target - current) * 0.25 - decay;
+  private static approachNeed(current: number, target: number, decay: number, recoveryMult: number = 1): number {
+    const recovery = Math.max(0, (target - current) * 0.25) * recoveryMult;
+    const loss = Math.min(0, (target - current) * 0.25);
+    const next = current + recovery + loss - decay;
     return Math.min(100, Math.max(0, next));
   }
 
@@ -987,6 +2857,10 @@ export class AnkicasterEngine {
    */
   static ringBell(state: FullGameState, notifications: string[]) {
     const reach = computeReachability(state.rooms);
+    const schedule = buildAcademySchedule(state, reach);
+    const wizBuffs = wizardSchoolBuffs(state.wizard?.levels || {});
+    const sb = computeSpellbookBonuses(state.spellbooks || []);
+    const alumni = computeAlumniBonuses(state.alumniGallery || []);
     const bellNotes: BellNote[] = [];
     const bag = state.resources as unknown as Record<string, number>;
     const note = (resource: string, before: number, source: string) => {
@@ -997,6 +2871,7 @@ export class AnkicasterEngine {
 
     // 1. Classroom Essence Production (influenced by room hazards & qualifying teacher)
     for (const char of state.characters) {
+      if ((char.absentUntilReviewIndex || 0) > state.reviewIndex) continue;
       if (char.status === 'student' && char.seatRoomId && char.currentSchool) {
         const room = state.rooms.find(r => r.id === char.seatRoomId);
         if (room && room.state === 'built' && !isRoomUnfinished(room)) {
@@ -1006,7 +2881,8 @@ export class AnkicasterEngine {
           if (classSch && !AnkicasterEngine.roomIsStaffed(state, room)) continue;
 
           // Hazard active effects
-          if (room.hazard?.type === 'cold_snap') continue; // room frozen/disabled
+          const coldMult = roomColdSnapMultiplier(room, sb.weatherPenaltyMult);
+          if (coldMult <= 0) continue;
           if (room.hazard?.type === 'echo_loop') continue; // suppresses classroom essence
 
           const eff = AnkicasterEngine.roomEfficiency(state, room, reach);
@@ -1014,14 +2890,48 @@ export class AnkicasterEngine {
 
           const classMalus = outputMalusFactor(room, state.reviewIndex);
           if (classMalus <= 0) continue;
-          let yieldMult = eff * classMalus;
-          if (room.hazard?.type === 'spill_of_night') yieldMult *= 0.5; // efficiency halved
+          let yieldMult = eff * classMalus * coldMult;
+          if ((room.level || 1) >= 3) yieldMult *= 1.05;
+          if (floorHasHazard(state, room, 'spill_of_night')) yieldMult *= 0.5; // efficiency halved
           const outPct = academyFurnitureEffect(state.rooms, 'output_pct', room);
           if (outPct !== 0) yieldMult *= 1 + outPct / 100;
           if ((state.activeBuffs?.starlitConjunctionBells || 0) > 0) yieldMult *= 1.5;
 
+          const schedIds = schedule.classrooms.get(room.id)?.teacherIds || [];
+          const roomTeachers = state.characters.filter(
+            t =>
+              t.career === 'teacher' &&
+              t.careerState !== 'sabbatical' &&
+              t.status !== 'away' &&
+              !t.injury &&
+              (schedIds.includes(t.id) || t.workplaceRoomId === room.id)
+          );
+          if (roomTeachers.length > 0) {
+            yieldMult *= Math.max(...roomTeachers.map(t => facultyOutputMultiplier(state, t)));
+          } else if (schedule.headmasterRoomId === room.id) {
+            yieldMult *= facultyOutputMultiplier(state, undefined);
+          }
+
           const moraleFactor = 0.6 + (0.6 * char.morale) / 100;
-          const yieldAmount = 0.2 * moraleFactor * yieldMult;
+          const schoolEssenceMult = char.currentSchool === 'nature' ? wizBuffs.natureMult : 1;
+          let traitEssenceMult = 1;
+          if (char.currentSchool === 'nature' && hasTrait(char, 'Green Thumb')) traitEssenceMult *= 1.2;
+          if (char.currentSchool === 'arcane' && hasTrait(char, 'Star-Touched')) traitEssenceMult *= 1.1;
+          if (hasTrait(char, 'Well-Read') && room.furniture.some(f => !f.damaged && f.defId === 'bookshelf')) {
+            traitEssenceMult *= 1.1;
+          }
+          if (hasTrait(char, 'Lazy')) traitEssenceMult *= 0.85;
+          const chatterboxes = state.characters.filter(
+            s => s.status === 'student' && s.seatRoomId === room.id && (s.absentUntilReviewIndex || 0) <= state.reviewIndex && hasTrait(s, 'Chatterbox')
+          ).length;
+          if (chatterboxes > 0) traitEssenceMult *= Math.max(0.5, 1 - 0.04 * chatterboxes);
+
+          const alumniClassMult =
+            1 +
+            alumni.teacherClassroomPct +
+            (char.currentSchool ? alumni.residentSchoolEssencePct[char.currentSchool] || 0 : 0);
+          const yieldAmount =
+            0.2 * moraleFactor * yieldMult * wizBuffs.lightEssenceMult * schoolEssenceMult * traitEssenceMult * alumniClassMult;
           const essence = char.currentSchool === 'arcane' ? 'insight'
             : char.currentSchool === 'nature' ? 'herbs'
             : char.currentSchool === 'light' ? 'radiance'
@@ -1037,8 +2947,31 @@ export class AnkicasterEngine {
     }
 
     // 2. Grounds & Resource Plots Output (influenced by hazards & creature buffs)
-    const tortoiseScale = bestBuffScale(state.creatures, 'mossback_tortoise');
-    const greenhouseMult = 1 + 0.05 * tortoiseScale;
+    const hasTortoise = bestBuffScale(state.creatures, 'mossback_tortoise') > 0;
+    const hasFenSprite = bestBuffScale(state.creatures, 'fen_sprite') > 0;
+    const greenhouseMult = 1 + creatureCategoryBonus(
+      state,
+      [
+        ...(hasTortoise ? [{ defId: 'mossback_tortoise', perCopy: 0.05 }] : []),
+        ...(hasFenSprite ? [{ defId: 'fen_sprite', perCopy: 0.08 }] : [])
+      ],
+      0.5
+    );
+    const herbGardenCreatureMult = 1 + (hasFenSprite ? creatureCategoryBonus(state, [{ defId: 'fen_sprite', perCopy: 0.08 }], 0.5) : 0);
+    const foodHerbsMult = 1 + creatureCategoryBonus(state, [{ defId: 'verdant_drake', perCopy: 0.12 }], 0.5);
+    const treantGardenerBonus = creatureCategoryBonus(state, [{ defId: 'elder_treant_sprout', perCopy: 0.2 }], 0.5);
+    const pondCreatureMult = 1 + creatureCategoryBonus(state, [{ defId: 'puddlewyrm', perCopy: 0.15 }], 0.5);
+    const libraryCreatureMult = 1 + creatureCategoryBonus(
+      state,
+      [
+        { defId: 'inkling_wisp', perCopy: 0.05 },
+        { defId: 'mistfeather_owl', perCopy: 0.1 }
+      ],
+      0.5
+    );
+    const scriptoriumCreatureMult = 1 + creatureCategoryBonus(state, [{ defId: 'mistfeather_owl', perCopy: 0.1 }], 0.5);
+    const observatoryCreatureMult = 1 + creatureCategoryBonus(state, [{ defId: 'orrery_moth', perCopy: 0.05 }], 0.5);
+    const craftCreatureMult = 1 + creatureCategoryBonus(state, [{ defId: 'quicksilver_otter', perCopy: 0.15 }], 0.5);
     const cap = AnkicasterEngine.storageCap(state);
     const store = (before: number, add: number) => (add > 0 && before >= cap ? before : add > 0 ? Math.min(cap, before + add) : before + add);
     const PLANT_ROOMS = new Set(['vegetable_patch', 'herb_garden', 'woodlot', 'greenhouse', 'orchard']);
@@ -1069,19 +3002,23 @@ export class AnkicasterEngine {
       }
     }
 
+    const plotBookMult = 1 + sb.plotOutputPct;
     for (const room of state.rooms) {
       if (room.state !== 'built' || isRoomUnfinished(room)) continue; // Unfinished rooms run at 0%
-      if (room.hazard?.type === 'cold_snap') continue; // room disabled
+      const coldMult = roomColdSnapMultiplier(room, sb.weatherPenaltyMult);
+      if (coldMult <= 0) continue;
+      if (room.hazard?.type === 'echo_loop') continue;
+      if (room.hazard?.type === 'wisp_swarm') continue;
 
       const eff = AnkicasterEngine.roomEfficiency(state, room, reach);
       if (eff <= 0) continue;
 
       const harvestMalus = outputMalusFactor(room, state.reviewIndex);
       if (harvestMalus <= 0) continue;
-      let harvestMult = eff * harvestMalus;
-      if (room.hazard?.type === 'spill_of_night') {
+      let harvestMult = eff * harvestMalus * coldMult;
+      if (floorHasHazard(state, room, 'spill_of_night')) {
         harvestMult *= 0.5;
-        room.cleanliness = 0; // soot residue
+        if (isNightInkType(room.hazard?.type)) room.cleanliness = 0; // soot residue
       }
       const outPct = academyFurnitureEffect(state.rooms, 'output_pct', room);
       if (outPct !== 0) harvestMult *= 1 + outPct / 100;
@@ -1092,8 +3029,15 @@ export class AnkicasterEngine {
         const gardeners = hasSlot ? assignedGardeners : (assignedGardeners.length > 0 ? assignedGardeners : activeGardeners);
         if (gardeners.length > 0) {
           const roomSchool = ROOM_DEFINITIONS[room.defId]?.school;
-          const gardenerMult = Math.max(...gardeners.map(g => careerAffinityMultiplier(g.masteredSchools, 'gardener', roomSchool)));
-          harvestMult *= gardenerMult;
+          const gardenerMult = Math.max(
+            ...gardeners.map(
+              g =>
+                careerAffinityMultiplier(g.masteredSchools, 'gardener', roomSchool) *
+                (hasTrait(g, 'Green Thumb') ? 1.2 : 1) *
+                facultyOutputMultiplier(state, g)
+            )
+          );
+          harvestMult *= gardenerMult * (1 + treantGardenerBonus);
         }
         if (finishedApiaries.some(a => a.area === room.area && a.x <= room.x + room.w && room.x <= a.x + a.w && a.y <= room.y + room.h && room.y <= a.y + a.h)) {
           harvestMult *= 1.05;
@@ -1104,6 +3048,7 @@ export class AnkicasterEngine {
         }
       }
       const verdantMult = (state.activeBuffs?.verdantSurgeBells || 0) > 0 ? 2 : 1;
+      const natureFoodMult = wizBuffs.natureMult * foodHerbsMult * (1 + alumni.gardenerFoodHerbsPct);
 
       const insightBell = academyFurnitureEffect(state.rooms, 'insight_per_bell', room, true);
       if (insightBell > 0) {
@@ -1114,26 +3059,26 @@ export class AnkicasterEngine {
       const nectarBell = academyFurnitureEffect(state.rooms, 'nectar_per_bell', room, true);
       if (nectarBell > 0) {
         const beforeN = bag.nectar || 0;
-        bag.nectar = store(beforeN, nectarBell);
+        bag.nectar = store(beforeN, nectarBell * natureFoodMult);
         note('nectar', beforeN, roomName(room.defId));
       }
 
       if (room.defId === 'vegetable_patch') {
         const src = roomName(room.defId);
         let before = bag.provisions || 0;
-        bag.provisions = store(before, 1.0 * harvestMult * verdantMult);
+        bag.provisions = store(before, 1.0 * harvestMult * plotBookMult * verdantMult * natureFoodMult);
         note('provisions', before, src);
         before = bag.greens || 0;
-        bag.greens = store(before, 0.2 * harvestMult * verdantMult);
+        bag.greens = store(before, 0.2 * harvestMult * plotBookMult * verdantMult * natureFoodMult);
         note('greens', before, src);
       } else if (room.defId === 'herb_garden') {
         const before = bag.herbs || 0;
-        bag.herbs = before + 0.6 * harvestMult * verdantMult * seedMult * starlitMult;
+        bag.herbs = before + 0.6 * harvestMult * plotBookMult * herbGardenCreatureMult * verdantMult * seedMult * starlitMult * natureFoodMult;
         note('herbs', before, roomName(room.defId));
       } else if (room.defId === 'woodlot') {
         const src = roomName(room.defId);
         let before = bag.timber || 0;
-        bag.timber = store(before, 2 * harvestMult);
+        bag.timber = store(before, 2 * harvestMult * plotBookMult);
         note('timber', before, src);
         if (Math.random() < 0.02) {
           before = bag.heartwood || 0;
@@ -1143,7 +3088,7 @@ export class AnkicasterEngine {
       } else if (room.defId === 'quarry') {
         const src = roomName(room.defId);
         let before = bag.stone || 0;
-        bag.stone = store(before, 1 * harvestMult);
+        bag.stone = store(before, 1 * harvestMult * plotBookMult);
         note('stone', before, src);
         if (Math.random() < 0.04) {
           before = bag.crystal || 0;
@@ -1152,83 +3097,157 @@ export class AnkicasterEngine {
         }
       } else if (room.defId === 'greenhouse') {
         const src = roomName(room.defId);
-        let before = bag.provisions || 0;
-        bag.provisions = store(before, 1.5 * harvestMult * greenhouseMult * verdantMult);
-        note('provisions', before, src);
-        before = bag.herbs || 0;
-        bag.herbs = before + 0.5 * harvestMult * greenhouseMult * verdantMult * seedMult * starlitMult;
-        note('herbs', before, src);
+        const bedCount = (room.level || 1) >= 3 ? 3 : 2;
+        const defaultBeds = (room.level || 1) >= 3 ? ['hearthroot', 'silverleaf', 'moonbeans'] : ['hearthroot', 'silverleaf'];
+        const beds = room.settings?.crops?.length
+          ? room.settings.crops.slice(0, bedCount)
+          : room.settings?.crop
+          ? Array(bedCount).fill(room.settings.crop)
+          : [...defaultBeds];
+        while (beds.length < bedCount) {
+          beds.push(defaultBeds[beds.length] || 'hearthroot');
+        }
+        const hasCistern = (room.furniture || []).some(f => !f.damaged && f.defId === 'rain_cistern');
+        const hasAssignedGardener = activeGardeners.some(
+          g => g.workplaceRoomId === room.id && g.status !== 'away' && !g.injury
+        );
+        const hasGloomCondition =
+          room.y === 0 ||
+          state.rooms.some(
+            adj =>
+              adj.state === 'built' &&
+              !isRoomUnfinished(adj) &&
+              (adj.defId === 'gloom_hutch' ||
+                adj.defId === 'gloom_enclosure' ||
+                (adj.defId === 'menagerie' && roomAcceptedHabitats(adj).includes('gloom'))) &&
+              AnkicasterEngine.sharesWall(room, adj)
+          );
+        for (const cropId of beds) {
+          const crop = GREENHOUSE_CROPS[cropId];
+          if (!crop) continue;
+          if (cropId === 'featherfern' && (state.wizard?.levels?.nature || 0) < 3) continue;
+          if (cropId === 'shadecap' && !hasGloomCondition) continue;
+          if (cropId === 'sunwheat' && !hasCistern) continue;
+          if ((cropId === 'starfruit' || cropId === 'heartwood_sapling' || cropId === 'lumen_lily') && !hasAssignedGardener) continue;
+          for (const [resKey, baseAmt] of Object.entries(crop.outputs)) {
+            const before = bag[resKey] || 0;
+            if (resKey === 'provisions' || resKey === 'greens' || resKey === 'nectar') {
+              bag[resKey] = store(before, baseAmt * harvestMult * plotBookMult * greenhouseMult * verdantMult * natureFoodMult);
+            } else if (resKey === 'herbs') {
+              bag[resKey] = before + baseAmt * harvestMult * plotBookMult * greenhouseMult * verdantMult * seedMult * starlitMult * natureFoodMult;
+            } else if (resKey === 'insight' || resKey === 'reagents' || resKey === 'radiance' || resKey === 'umbra') {
+              bag[resKey] = before + baseAmt * harvestMult * plotBookMult * greenhouseMult * starlitMult;
+            } else {
+              bag[resKey] = before + baseAmt * harvestMult * plotBookMult * greenhouseMult;
+            }
+            note(resKey, before, src);
+          }
+        }
       } else if (room.defId === 'orchard') {
         const src = roomName(room.defId);
         let before = bag.provisions || 0;
-        bag.provisions = store(before, 0.8 * harvestMult * verdantMult);
+        bag.provisions = store(before, 0.8 * harvestMult * plotBookMult * verdantMult * natureFoodMult);
         note('provisions', before, src);
         before = bag.nectar || 0;
-        bag.nectar = store(before, 0.3 * harvestMult);
+        bag.nectar = store(before, 0.3 * harvestMult * plotBookMult * natureFoodMult);
         note('nectar', before, src);
       } else if (room.defId === 'pond') {
         const before = bag.fish || 0;
-        bag.fish = store(before, 0.8 * harvestMult);
+        bag.fish = store(before, 0.8 * harvestMult * plotBookMult * pondCreatureMult * natureFoodMult);
         note('fish', before, roomName(room.defId));
       } else if (room.defId === 'apiary') {
         const before = bag.nectar || 0;
-        bag.nectar = store(before, 0.5 * harvestMult);
+        bag.nectar = store(before, 0.5 * harvestMult * plotBookMult * natureFoodMult);
         note('nectar', before, roomName(room.defId));
-      } else if (room.defId === 'library' || room.defId === 'scriptorium') {
+      } else if (room.defId === 'library' || room.defId === 'scriptorium' || room.defId === 'observatory') {
         const scholars = state.characters.filter(c => c.career === 'scholar' && c.careerState === 'active' && c.workplaceRoomId === room.id);
         if (scholars.length > 0) {
           const roomSchool = ROOM_DEFINITIONS[room.defId]?.school;
-          const scholarMult = Math.max(...scholars.map(s => careerAffinityMultiplier(s.masteredSchools, 'scholar', roomSchool)));
+          const scholarMult = Math.max(
+            ...scholars.map(
+              s =>
+                careerAffinityMultiplier(s.masteredSchools, 'scholar', roomSchool) *
+                (hasTrait(s, 'Star-Touched') ? 1.1 : 1) *
+                facultyOutputMultiplier(state, s)
+            )
+          );
           const baseInsight = room.defId === 'library' ? 0.3 : 0.25;
+          const roomCreatureMult = room.defId === 'library'
+            ? libraryCreatureMult
+            : room.defId === 'scriptorium'
+            ? scriptoriumCreatureMult
+            : observatoryCreatureMult;
           const before = bag.insight || 0;
-          bag.insight = before + baseInsight * harvestMult * scholarMult * starlitMult;
+          bag.insight = before + baseInsight * harvestMult * scholarMult * roomCreatureMult * starlitMult;
           note('insight', before, roomName(room.defId));
         }
       } else if (room.defId === 'glassworks') {
-        const conv = glassworksConversion(bag.stone || 0, harvestMult, bag.glass || 0, cap);
-        if (conv.stoneUsed > 0) {
-          const beforeS = bag.stone || 0;
-          bag.stone = beforeS - conv.stoneUsed;
-          note('stone', beforeS, 'Glassworks');
-          const beforeG = bag.glass || 0;
-          bag.glass = beforeG + conv.glassGain;
-          note('glass', beforeG, 'Glassworks');
+        if (room.settings?.glassworksActive !== false) {
+          const conv = glassworksConversion(bag.stone || 0, harvestMult * craftCreatureMult, bag.glass || 0, cap);
+          if (conv.stoneUsed > 0) {
+            const beforeS = bag.stone || 0;
+            bag.stone = beforeS - conv.stoneUsed;
+            note('stone', beforeS, 'Glassworks');
+            const beforeG = bag.glass || 0;
+            bag.glass = beforeG + conv.glassGain;
+            note('glass', beforeG, 'Glassworks');
+          }
         }
       } else if (room.defId === 'weaving_room') {
-        const sheepScale = bestBuffScale(state.creatures, 'moonsheep');
-        const gain = weavingOutput(harvestMult, sheepScale > 0, sheepScale || 1);
+        const sheepScale = creatureSpeciesBuffSum(state, 'moonsheep');
+        const gain = weavingOutput(harvestMult * craftCreatureMult, sheepScale > 0, sheepScale || 1);
         const before = bag.cloth || 0;
         bag.cloth = store(before, gain);
         note('cloth', before, sheepScale > 0 ? 'Weaving Room (Moonsheep)' : 'Weaving Room');
       }
     }
 
-    // 3. Creature Active Buffs per Bell
-    const stagScale = bestBuffScale(state.creatures, 'glimmerhorn_stag');
-    let lanternScale = 0;
-
-    for (const c of state.creatures) {
-      if (c.status !== 'tamed') continue;
-      const scale = buffScale(!!c.hungry);
-      const bump = (resource: string, amount: number) => {
-        const before = bag[resource] || 0;
-        bag[resource] = before + amount * scale;
-        note(resource, before, CREATURE_DEFINITIONS[c.defId]?.name || c.defId);
-      };
-      if (c.defId === 'thistle_hare') bump('herbs', 0.1);
-      else if (c.defId === 'mistfeather_owl') bump('insight', 0.1);
-      else if (c.defId === 'night_lynx') bump('umbra', 0.1);
-      else if (c.defId === 'ember_phoenix') bump('radiance', 0.2);
-      else if (c.defId === 'alembic_salamander') bump('reagents', 0.1);
-      else if (c.defId === 'lantern_moth' && lanternScale === 0) lanternScale = scale;
+    // 3. Creature Active Buffs per Bell (§22.7 with Bond/Menagerie scaling & top-2/3 stacking)
+    const stagScale = bestBuffScale(state.creatures, 'glimmerhorn_stag') > 0
+      ? creatureSpeciesBuffSum(state, 'glimmerhorn_stag')
+      : 0;
+    const hareScale = bestBuffScale(state.creatures, 'thistle_hare') > 0
+      ? creatureSpeciesBuffSum(state, 'thistle_hare')
+      : 0;
+    if (hareScale > 0) {
+      const beforeH = bag.herbs || 0;
+      bag.herbs = beforeH + 0.1 * hareScale * wizBuffs.natureMult;
+      note('herbs', beforeH, 'Thistle Hare');
+    }
+    const wispScale = creatureSpeciesBuffSum(state, 'inkling_wisp');
+    if (wispScale > 0) {
+      const beforeI = bag.insight || 0;
+      bag.insight = beforeI + 0.05 * wispScale;
+      note('insight', beforeI, 'Inkling Wisp');
+    }
+    const sheepBellScale = creatureSpeciesBuffSum(state, 'moonsheep');
+    if (sheepBellScale > 0) {
+      state.moonsilkProgress = (state.moonsilkProgress || 0) + sheepBellScale;
+      while (state.moonsilkProgress >= 40 - 1e-9) {
+        state.moonsilkProgress -= 40;
+        const beforeM = bag.moonsilk || 0;
+        bag.moonsilk = beforeM + 1;
+        note('moonsilk', beforeM, 'Moonsheep');
+      }
+    }
+    const prismScale = creatureSpeciesBuffSum(state, 'prism_beetle');
+    if (prismScale > 0) {
+      state.crystalProgress = (state.crystalProgress || 0) + prismScale;
+      while (state.crystalProgress >= 25 - 1e-9) {
+        state.crystalProgress -= 25;
+        const beforeC = bag.crystal || 0;
+        bag.crystal = beforeC + 1;
+        note('crystal', beforeC, 'Prism Beetle');
+      }
     }
 
     // 4. Meals. Characters eat first. Wary and tamed creatures then pay their whole diet or go hungry.
     const kitchenAdjacentToRefectory = state.rooms.some(k =>
       k.defId === 'kitchen' && k.state === 'built' && !isRoomUnfinished(k) &&
       state.rooms.some(ref => ref.defId === 'refectory' && ref.state === 'built' && !isRoomUnfinished(ref) &&
-        k.area === ref.area && k.x <= ref.x + ref.w && ref.x <= k.x + k.w && k.y <= ref.y + ref.h && ref.y <= k.y + ref.h)
+        k.area === ref.area && k.x <= ref.x + ref.w && ref.x <= k.x + k.w && k.y <= ref.y + ref.h && ref.y <= k.y + k.h)
     );
+    const hasBuiltKitchen = state.rooms.some(k => k.defId === 'kitchen' && k.state === 'built' && !isRoomUnfinished(k));
     if (state.bellIndex % 5 === 0) {
       if (state.characters.length > 0) {
         const capFactor = state.pendingMealCapFactor ?? 1;
@@ -1239,19 +3258,29 @@ export class AnkicasterEngine {
           state.rooms.filter(r => r.state === 'built' && !isRoomUnfinished(r)),
           'meal_cost_pct'
         );
-        const mealMult = Math.max(0.5, 1 - (kitchenAdjacentToRefectory ? 0.1 : 0) + mealCostPct / 100);
-        const foodCost = Math.round(served * mealMult * 10) / 10;
+        const mealMult = Math.max(0.5, 1 - (kitchenAdjacentToRefectory ? 0.1 : 0) + mealCostPct / 100 - sb.mealProvisionsReductionPct);
+        const gluttonExtra = state.characters.slice(0, served).filter(c => hasTrait(c, 'Glutton')).length;
+        const foodFightExtra = state.nextBellMealExtraProvisions || 0;
+        state.nextBellMealExtraProvisions = undefined;
+        const foodCost = Math.round((served * mealMult + gluttonExtra + foodFightExtra) * 10) / 10;
         const before = bag.provisions || 0;
-        bag.provisions = before - foodCost;
+        bag.provisions = Math.max(0, before - foodCost);
         note('provisions', before, `Meals (${served} people)`);
+        const hasL3Refectory = state.rooms.some(
+          r => r.defId === 'refectory' && r.state === 'built' && !isRoomUnfinished(r) && !AnkicasterEngine.roomIsLocked(state, r) && (r.level || 1) >= 3
+        );
         state.characters.forEach((char, i) => {
           char.mealTarget = i < plan.seated ? 100 : i < served ? 50 : 25;
+          if (hasL3Refectory && i < plan.seated) {
+            char.needs.composure = Math.min(100, char.needs.composure + 5);
+          }
         });
         if (plan.unfed > 0) {
           notifications.push(`⚠️ Food shortage! ${plan.unfed} students went hungry.`);
         }
-      } else if (state.pendingMealCapFactor != null) {
-        state.pendingMealCapFactor = undefined;
+      } else {
+        if (state.pendingMealCapFactor != null) state.pendingMealCapFactor = undefined;
+        if (state.nextBellMealExtraProvisions != null) state.nextBellMealExtraProvisions = undefined;
       }
       billCreatureMeals(state, note);
     }
@@ -1260,33 +3289,142 @@ export class AnkicasterEngine {
     const headcount = state.characters.length;
     const leisureTarget = 30 + 70 * Math.min(1, headcount > 0 ? AnkicasterEngine.leisureCapacity(state, reach) / headcount : 0);
     const compTarget = AnkicasterEngine.composureTarget(state);
+    const hasBathhouse = state.rooms.some(r => r.defId === 'bathhouse' && r.state === 'built' && !isRoomUnfinished(r));
+    const creatureNeedRecoveryBonus = creatureCategoryBonus(
+      state,
+      [
+        { defId: 'ember_phoenix', perCopy: 0.1 },
+        ...(hasBathhouse ? [{ defId: 'coral_kelpie', perCopy: 0.1 }] : [])
+      ],
+      0.5
+    );
+    const needRecoveryMult = wizBuffs.lightRecoveryMult * (1 + creatureNeedRecoveryBonus);
     for (const char of state.characters) {
-      char.needs.hunger = AnkicasterEngine.approachNeed(char.needs.hunger, char.mealTarget ?? 50, 4);
-      char.needs.rest = AnkicasterEngine.approachNeed(char.needs.rest, AnkicasterEngine.restTarget(state, char, reach), 3);
-      char.needs.leisure = AnkicasterEngine.approachNeed(char.needs.leisure, leisureTarget, 3);
-      char.needs.composure = AnkicasterEngine.approachNeed(char.needs.composure, compTarget, 1);
+      const dm = characterNeedDecayMults(state, char);
+      const rawHungerTarget = char.mealTarget ?? 50;
+      const hungerTarget = hasTrait(char, 'Picky Eater') && !hasBuiltKitchen ? Math.max(0, rawHungerTarget - 20) : rawHungerTarget;
+      const bedRoomForNeed = char.bedRoomId != null ? state.rooms.find(r => r.id === char.bedRoomId) : undefined;
+      const charLeisureTarget =
+        bedRoomForNeed &&
+        bedRoomForNeed.defId === 'grand_dormitory' &&
+        bedRoomForNeed.state === 'built' &&
+        !isRoomUnfinished(bedRoomForNeed) &&
+        !AnkicasterEngine.roomIsLocked(state, bedRoomForNeed) &&
+        (bedRoomForNeed.level || 1) >= 3
+          ? Math.min(100, leisureTarget + 5)
+          : leisureTarget;
+      char.needs.hunger = AnkicasterEngine.approachNeed(char.needs.hunger, hungerTarget, 4 * dm.hunger, needRecoveryMult);
+      char.needs.rest = AnkicasterEngine.approachNeed(char.needs.rest, AnkicasterEngine.restTarget(state, char, reach), 3 * dm.rest, needRecoveryMult);
+      char.needs.leisure = AnkicasterEngine.approachNeed(char.needs.leisure, charLeisureTarget, 3 * dm.leisure, needRecoveryMult);
+      char.needs.composure = AnkicasterEngine.approachNeed(char.needs.composure, compTarget, 1 * dm.composure, needRecoveryMult);
     }
 
-    // Creature and hazard tweaks apply after the need update.
-    if (lanternScale > 0) {
-      for (const char of state.characters) {
-        char.needs.composure = Math.min(100, char.needs.composure + lanternScale);
-      }
-    }
-
+    // Roommate / classmate / trait ambient interactions + fragile furniture / portal traits
+    const builtHabitats = state.rooms.filter(r => r.state === 'built' && !isRoomUnfinished(r) && HABITAT_ROOM_DEFS.has(r.defId));
     for (const char of state.characters) {
-      // Hex fog hazard in classroom or dorm causes extra composure drain
-      if (char.seatRoomId) {
-        const room = state.rooms.find(r => r.id === char.seatRoomId);
-        if (room?.hazard?.type === 'hex_fog') {
-          char.needs.composure = Math.max(0, char.needs.composure - 10);
+      if (char.status === 'away') continue;
+      if (hasTrait(char, 'Kind Heart') && char.bedRoomId != null) {
+        const dormRoom = state.rooms.find(r => r.id === char.bedRoomId);
+        const kindGain = dormRoom?.defId === 'dormitory' && (dormRoom.level || 1) >= 3 ? 6 : 3;
+        for (const other of state.characters) {
+          if (other.id !== char.id && other.bedRoomId === char.bedRoomId) {
+            other.needs.composure = Math.min(100, other.needs.composure + kindGain);
+          }
         }
       }
+      if (hasTrait(char, 'Sunny') && char.seatRoomId != null) {
+        for (const other of state.characters) {
+          if (other.id !== char.id && other.seatRoomId === char.seatRoomId) {
+            other.needs.composure = Math.min(100, other.needs.composure + 2);
+          }
+        }
+      }
+      if (hasTrait(char, 'Sunny') && char.bedRoomId != null) {
+        const dormRoom = state.rooms.find(r => r.id === char.bedRoomId);
+        if (dormRoom?.defId === 'dormitory' && (dormRoom.level || 1) >= 3) {
+          for (const other of state.characters) {
+            if (other.id !== char.id && other.bedRoomId === char.bedRoomId) {
+              other.needs.composure = Math.min(100, other.needs.composure + 4);
+            }
+          }
+        }
+      }
+      if (hasTrait(char, 'Chatterbox') && char.bedRoomId != null) {
+        for (const other of state.characters) {
+          if (other.id !== char.id && other.bedRoomId === char.bedRoomId) {
+            other.needs.leisure = Math.min(100, other.needs.leisure + 2);
+          }
+        }
+      }
+      if (hasTrait(char, 'Animal Allergy') && char.bedRoomId != null) {
+        const dorm = state.rooms.find(r => r.id === char.bedRoomId);
+        if (dorm && builtHabitats.some(h => roomsAreAdjacent(dorm, h))) {
+          char.needs.composure = Math.max(0, char.needs.composure - 5);
+        }
+      }
+      if (hasTrait(char, 'Loudmouth') && char.morale < 40 && char.bedRoomId != null) {
+        for (const other of state.characters) {
+          if (other.id !== char.id && other.bedRoomId === char.bedRoomId) {
+            other.needs.composure = Math.max(0, other.needs.composure - 5);
+          }
+        }
+      }
+      if (hasTrait(char, 'Sleepwalker') && Math.random() < 0.01) {
+        for (const other of state.characters) {
+          if (other.id !== char.id && char.bedRoomId != null && other.bedRoomId === char.bedRoomId) {
+            other.needs.composure = Math.max(0, other.needs.composure - 2);
+          }
+        }
+        state.notices.push({
+          id: uniqueNoticeId(`sleepwalk-${char.id}`, state),
+          time: Date.now(),
+          type: 'misbehavior',
+          text: `🌙 ${char.name} sleepwalked through the corridors at night.`,
+          data: { roomId: char.bedRoomId, characterIds: [char.id] }
+        });
+      }
+      if (hasTrait(char, 'Butterfingers') && Math.random() < 0.03) {
+        const usedRoomIds = [char.seatRoomId, char.workplaceRoomId, char.bedRoomId].filter((id): id is number => id != null);
+        const targetRoom = state.rooms.find(
+          r => usedRoomIds.includes(r.id) && r.furniture.some(f => !f.damaged && !f.slotKind.startsWith('required:'))
+        );
+        const frag = targetRoom?.furniture.find(f => !f.damaged && !f.slotKind.startsWith('required:'));
+        if (targetRoom && frag) {
+          frag.damaged = true;
+          const fName = FURNITURE_DEFINITIONS[frag.defId]?.name || frag.defId;
+          const msg = `💥 ${char.name} accidentally damaged ${fName} in ${roomName(targetRoom.defId)}!`;
+          notifications.push(msg);
+          state.notices.push({
+            id: uniqueNoticeId(`butterfingers-${char.id}`, state),
+            time: Date.now(),
+            type: 'misbehavior',
+            text: msg,
+            data: { roomId: targetRoom.id, characterIds: [char.id] }
+          });
+        }
+      }
+      if (hasTrait(char, 'Summoner-at-Heart') && Math.random() < 0.003) {
+        const cand = state.rooms.find(r => r.state === 'built' && !isRoomUnfinished(r) && !r.hazard && r.area === 'castle');
+        const hazId = Math.random() < 0.5 ? 'echo_loop' : 'imp_infestation';
+        if (cand && HAZARD_CATALOG[hazId]) {
+          applyHazardInstance(state, HAZARD_CATALOG[hazId], cand, notifications);
+        }
+      }
+    }
 
-      char.morale = calculateMorale(char.needs);
-      // Glimmerhorn Stag applies +3 morale to all residents (applied after base morale recalculation so it is not overwritten)
+    for (const char of state.characters) {
+      // Hex fog hazard on floor causes extra composure drain (-10, immune if Rift-Touched)
+      const charRoom = (char.seatRoomId ? state.rooms.find(r => r.id === char.seatRoomId) : undefined)
+        || (char.workplaceRoomId ? state.rooms.find(r => r.id === char.workplaceRoomId) : undefined)
+        || (char.bedRoomId ? state.rooms.find(r => r.id === char.bedRoomId) : undefined);
+      if (charRoom && char.injury?.type !== 'rift_touched' && floorHasHazard(state, charRoom, 'hex_fog')) {
+        char.needs.composure = Math.max(0, char.needs.composure - 10);
+      }
+
+      char.morale = calculateMorale(char.needs, characterMoraleBonuses(state, char));
+      // Glimmerhorn Stag applies +3 morale (scaled by Bond/Menagerie/stacking) after base morale recalculation
       if (stagScale > 0) {
-        char.morale = Math.min(100, char.morale + 3 * stagScale);
+        char.morale = Math.min(100, char.morale + Math.round(3 * stagScale));
       }
       const moraleFurn = academyFurnitureEffect(state.rooms, 'morale_bonus');
       if (moraleFurn !== 0) {
@@ -1299,72 +3437,46 @@ export class AnkicasterEngine {
         char.morale = Math.min(100, char.morale + 15);
       }
 
-      // Student Misbehavior driven by low morale (<40) or low composure (<40)
-      const misbehaviorChance = (state.activeBuffs?.moonlessNightBells || 0) > 0 ? 0.15 * 0.4 : 0.15;
-      if (char.status === 'student' && (char.morale < 40 || char.needs.composure < 40) && Math.random() < misbehaviorChance) {
-        const incidents = [
-          {
-            incidentId: 'honey_rolls',
-            text: `${char.name} skipped study hall to raid honey rolls from the refectory! (-5 Provisions, +10 Rest)`,
-            apply: () => {
-              const before = bag.provisions || 0;
-              bag.provisions = Math.max(0, before - 5);
-              note('provisions', before, 'Misbehavior');
-              char.needs.rest = Math.min(100, char.needs.rest + 10);
-            }
-          },
-          {
-            incidentId: 'sulfur_spark',
-            text: `${char.name} accidentally set off a sulfur spark in the corridor! (All rooms Cleanliness -2)`,
-            apply: () => {
-              for (const r of state.rooms) r.cleanliness = Math.max(0, r.cleanliness - 2);
-            }
-          },
-          {
-            incidentId: 'inkpot_sleep',
-            text: `${char.name} fell soundly asleep with their quill in the inkpot! (+15 Rest, Composure -5)`,
-            apply: () => {
-              char.needs.rest = Math.min(100, char.needs.rest + 15);
-              char.needs.composure = Math.max(0, char.needs.composure - 5);
-            }
-          },
-          {
-            incidentId: 'chalk_duel',
-            text: `${char.name} got into an enchanted chalk duel in the dormitory cloisters!`,
-            apply: () => {
-              char.needs.leisure = Math.min(100, char.needs.leisure + 15);
-              char.needs.composure = Math.max(0, char.needs.composure - 5);
-            }
-          }
-        ];
-        const chosenInc = incidents[Math.floor(Math.random() * incidents.length)];
-        chosenInc.apply();
-        notifications.push(`⚠️ Misbehavior: ${chosenInc.text}`);
-        const ehRoom = state.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || state.rooms[0];
-        state.notices.push({
-          id: `misbehavior-${Date.now()}-${char.id}`,
-          time: Date.now(),
-          type: 'misbehavior',
-          text: `Student Incident: ${chosenInc.text}`,
-          data: {
-            roomId: char.seatRoomId ?? char.bedRoomId ?? ehRoom?.id,
-            characterIds: [char.id],
-            incidentId: chosenInc.incidentId
-          }
-        });
+      // Clean up expired timed misbehavior chains before rolling
+      if (char.misbehaviorChains?.length) {
+        char.misbehaviorChains = char.misbehaviorChains.filter(ch => ch.expiresBell === undefined || ch.expiresBell > state.bellIndex);
       }
+
+      // Full §20.2 / §20.3 Student Misbehavior Roll & Incidents
+      rollMisbehaviorForStudent(state, char, wizBuffs, bag, note, notifications);
     }
 
-    // 6. Cleanliness & Mopslime
-    let cleanBonus = 0;
-    for (const c of state.creatures) {
-      if (c.status === 'tamed' && c.defId === 'mopslime') cleanBonus += 3 * buffScale(!!c.hungry);
-    }
+    // 6. Cleanliness & Mopslime & Lv3 Storage Vault Builders
+    const cleanBonus = 3 * creatureSpeciesBuffSum(state, 'mopslime');
+    const hasActiveBuilderForClean = state.characters.some(
+      c => c.career === 'builder' && c.careerState === 'active' && c.status !== 'away' && !c.injury
+    );
+    const lv3VaultClean = hasActiveBuilderForClean
+      ? state.rooms.filter(
+          r =>
+            r.defId === 'storage_vault' &&
+            r.state === 'built' &&
+            !isRoomUnfinished(r) &&
+            !AnkicasterEngine.roomIsLocked(state, r) &&
+            (r.level || 1) >= 3
+        ).length
+      : 0;
     for (const r of state.rooms) {
       const roomClean = academyFurnitureEffect(state.rooms, 'cleanliness_per_bell', r);
       const isCleanImmune = (state.activeBuffs?.cleanImmuneBells || 0) > 0 && (!state.activeBuffs?.cleanImmuneRoomId || state.activeBuffs.cleanImmuneRoomId === r.id);
-      const decay = isCleanImmune ? 0 : 0.5;
-      r.cleanliness = Math.max(0, Math.min(100, r.cleanliness - decay + cleanBonus + roomClean));
+      const hasTidyUser = state.characters.some(
+        c => c.status !== 'away' && hasTrait(c, 'Tidy') && (c.bedRoomId === r.id || c.seatRoomId === r.id || c.workplaceRoomId === r.id)
+      );
+      const decay = isCleanImmune ? 0 : (hasTidyUser ? 0.5 * 0.7 : 0.5) * (1 - sb.dirtReductionPct);
+      r.cleanliness = Math.max(0, Math.min(100, r.cleanliness - decay + cleanBonus + roomClean + lv3VaultClean));
+      if (r.cleanliness >= 80 && r.misbehaviorCharmMalus) {
+        r.misbehaviorCharmMalus = undefined;
+        for (const ch of state.characters) {
+          if (ch.misbehaviorChains?.length) {
+            ch.misbehaviorChains = ch.misbehaviorChains.filter(m => !(m.roomId === r.id && (m.incidentId === 'graffiti_glyphs' || m.incidentId === 'portrait_mustache')));
+          }
+        }
+      }
     }
 
     // 7. Tick down bell-based potion & spell buffs
@@ -1404,6 +3516,16 @@ export class AnkicasterEngine {
 
     commitBell(state, bellNotes);
     processEscapes(state, notifications, note);
+    for (const room of state.rooms) {
+      if (room.hazard?.expiresAtBellIndex !== undefined && state.bellIndex >= room.hazard.expiresAtBellIndex) {
+        clearRoomHazard(state, room, notifications, 'resolved');
+      }
+    }
+    rollHazardForBell(state, notifications);
+    rollBreachForBell(state, notifications);
+    rollAlchemyExplosionForBell(state, notifications);
+    state.nextBellLabExplosionMult = undefined;
+    syncCharmRenown(state);
   }
 
   /**
@@ -1442,29 +3564,26 @@ export class AnkicasterEngine {
 
     // 10% Bank floor rule (BR-25)
     const bankFloor = Math.max(10, Math.round((next.bankAtLastReview || next.mana) * 0.1));
-    const hasStandingStones = next.rooms.some(r => r.defId === 'standing_stones' && r.state === 'built' && !isRoomUnfinished(r));
+    const standingStonesCount = next.rooms.filter(r => r.defId === 'standing_stones' && r.state === 'built' && !isRoomUnfinished(r)).length;
     const ehRoom = next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || next.rooms[0];
 
-    for (let d = 0; d < processedDays; d++) {
-      const warders = next.characters.filter(c => c.career === 'warder' && c.careerState === 'active').length;
-      const batScale = bestBuffScale(next.creatures, 'velvet_bat_swarm');
-      const wyrmScale = bestBuffScale(next.creatures, 'umbral_wyrmling');
+    ensureUpcomingEventsQueue(next);
 
-      const veilInfo = calculateDailyVeilCost(
-        next.rooms,
-        next.wizard.levels.shadow,
-        warders,
-        0,
-        batScale > 0,
-        wyrmScale > 0,
-        batScale || 1,
-        wyrmScale || 1
-      );
+    for (let d = 0; d < processedDays; d++) {
+      const warders = next.characters.filter(isActiveWarder).length;
+      const veilInfo = computeAcademyVeilSummary(next);
 
       next.veil.costToday = veilInfo.cost;
       next.veil.reductions = veilInfo.reductions;
 
-      if (next.veil.autoPay) {
+      const isManualVeil = !next.veil.autoPay || next.settings?.veilPayment === 'ask';
+      if (isManualVeil) {
+        next.veil.paidToday = 0;
+        next.pendingVeilPayment = {
+          totalCost: (next.pendingVeilPayment?.totalCost || 0) + veilInfo.cost,
+          days: (next.pendingVeilPayment?.days || 0) + 1
+        };
+      } else {
         if (next.mana > bankFloor) {
           const availableToSpend = next.mana - bankFloor;
           const pay = Math.min(availableToSpend, veilInfo.cost);
@@ -1473,9 +3592,9 @@ export class AnkicasterEngine {
           next.veil.paidToday = pay;
 
           if (pay >= veilInfo.cost) {
-            next.veil.strength = Math.min(100, next.veil.strength + 3 + (hasStandingStones ? 2 : 0));
+            next.veil.strength = Math.min(100, next.veil.strength + 3 + standingStonesCount * 2);
           } else {
-            const unpaidRatio = (veilInfo.cost - pay) / veilInfo.cost;
+            const unpaidRatio = (veilInfo.cost - pay) / Math.max(1, veilInfo.cost);
             next.veil.strength = Math.max(0, next.veil.strength - Math.round(15 * unpaidRatio));
             if (next.mana <= bankFloor) floorReached = true;
           }
@@ -1519,6 +3638,7 @@ export class AnkicasterEngine {
                 anyGraduated = true;
                 const renownGain = 10 + academyFurnitureEffect(next.rooms, 'renown_bonus');
                 next.renown += renownGain;
+                checkEndlessSpellbookMilestones(next);
                 summary.push(`🎓 ${char.name} completed real-time mastery countdown and graduated as Master of ${sch.toUpperCase()}!`);
                 next.notices.push({
                   id: uniqueNoticeId(`master-${char.id}`, next),
@@ -1540,12 +3660,20 @@ export class AnkicasterEngine {
       }
       if (anyGraduated) AnkicasterEngine.syncWorkplaces(next);
 
-      // Real-day event arrival roll (one roll per real day picking from all 25 SCHOOL_EVENTS)
-      if (Math.random() < 0.4) {
+      // Real-day event arrival (consumed from upcomingEvents forecast queue)
+      const simDay = startDay + d + 1;
+      const qIdx = (next.upcomingEvents || []).findIndex(e => e.day === simDay);
+      let chosenEventId = qIdx >= 0 ? next.upcomingEvents!.splice(qIdx, 1)[0].eventId : undefined;
+      if (!chosenEventId && Math.random() < 0.4) {
         const availableEvents = SCHOOL_EVENTS.filter(ev => !next.activeEvents.some(ae => ae.eventId === ev.id));
         if (availableEvents.length > 0) {
-          const chosen = availableEvents[Math.floor(Math.random() * availableEvents.length)];
-          next.activeEvents.push({ eventId: chosen.id, dayArrived: startDay + d + 1 });
+          chosenEventId = availableEvents[Math.floor(Math.random() * availableEvents.length)].id;
+        }
+      }
+      if (chosenEventId && chosenEventId !== 'none') {
+        const chosen = SCHOOL_EVENTS.find(ev => ev.id === chosenEventId);
+        if (chosen && !next.activeEvents.some(ae => ae.eventId === chosen.id)) {
+          next.activeEvents.push({ eventId: chosen.id, dayArrived: simDay });
           summary.push(`📜 Event arrived at Academy gates: ${chosen.name}.`);
           next.notices.push({
             id: uniqueNoticeId(`event-arrive-${chosen.id}`, next),
@@ -1556,6 +3684,10 @@ export class AnkicasterEngine {
           });
         }
       }
+      if (next.activeBuffs?.foresightDays && next.activeBuffs.foresightDays > 0) {
+        next.activeBuffs.foresightDays -= 1;
+      }
+      ensureUpcomingEventsQueue(next);
 
       // Check thin Veil hazard spawn if Veil band is 'thin' or 'torn' (< 50%)
       // Rule BR-25: While the player is away and the bank has hit the 10% floor, skip hazard rolls
@@ -1563,37 +3695,29 @@ export class AnkicasterEngine {
       if (!floorReached && next.mana > bankFloor && (next.activeBuffs?.wardPulseBells || 0) <= 0) {
         const baseHazardChance = Math.max(0.02, 0.25 * Math.pow(0.7, warders));
         if (veilBand === 'thin' || veilBand === 'torn') {
-          const eligibleRooms = next.rooms.filter(r => r.state === 'built' && !r.hazard);
-          if (eligibleRooms.length > 0) {
-            const target = eligibleRooms[Math.floor(Math.random() * eligibleRooms.length)];
-            const wardFloorIdx = target.area === 'castle'
-              ? (next.activeBuffs?.wardwaterFloors?.indexOf(target.y) ?? -1)
-              : -1;
-            if (wardFloorIdx >= 0) {
-              next.activeBuffs!.wardwaterFloors!.splice(wardFloorIdx, 1);
-              summary.push(`🛡️ Wardwater prevented a hazard on Floor ${target.y + 1}!`);
-            } else {
-              const furnPct = academyFurnitureEffect(next.rooms, 'hazard_chance_pct', target);
-              const moonMult = (next.activeBuffs?.moonlessNightBells || 0) > 0 ? 0.4 : 1;
-              const stonesMult = (hasStandingStones && target.area === 'grounds') ? 0.5 : 1;
-              const effectiveChance = Math.max(0.01, baseHazardChance * Math.max(0.1, 1 + furnPct / 100) * moonMult * stonesMult);
-              if (Math.random() < effectiveChance) {
-                const hazards = [
-                  { type: 'spill_of_night' as const, name: 'Spill of Night', description: 'Gloom residue seeped through the thinning Veil.', effect: 'Halves room efficiency until dispelled.' },
-                  { type: 'hex_fog' as const, name: 'Hex Fog', description: 'Corrosive mist clinging to the floorboards.', effect: 'Students in this room lose composure faster.' },
-                  { type: 'echo_loop' as const, name: 'Echo Loop', description: 'A temporal chime repeating indefinitely.', effect: 'Suppresses classroom essence generation.' },
-                  { type: 'cold_snap' as const, name: 'Cold Snap', description: 'Sub-zero frost crystallizing across furnishings.', effect: 'Room unusable until thawed.' }
-                ];
-                const chosenHazard = hazards[Math.floor(Math.random() * hazards.length)];
-                target.hazard = chosenHazard;
-                summary.push(`⚠️ Thin Veil hazard emerged: ${chosenHazard.name} in ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}!`);
-                next.notices.push({
-                  id: uniqueNoticeId(`hazard-${target.id}`, next),
-                  time: Date.now(),
-                  type: 'hazard',
-                  text: `⚠️ Thin Veil hazard emerged: ${chosenHazard.name} in ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}!`,
-                  data: { roomId: target.id, hazardId: chosenHazard.type }
-                });
+          const shadowSteps = wizardSchoolBuffs(next.wizard.levels).shadowSteps;
+          const sbDaily = computeSpellbookBonuses(next.spellbooks || []);
+          const creatureHazRed = creatureCategoryBonus(
+            next,
+            [
+              { defId: 'night_lynx', perCopy: 0.15 },
+              { defId: 'velvet_bat_swarm', perCopy: 0.08 },
+              { defId: 'glyph_cat', perCopy: 0.08 }
+            ],
+            0.5
+          );
+          const globalRed = Math.min(0.75, shadowSteps * 0.03 + warders * 0.1 + creatureHazRed + sbDaily.hazardReductionPct);
+          const moonMult = (next.activeBuffs?.moonlessNightBells || 0) > 0 ? 0.4 : 1;
+          if (Math.random() < baseHazardChance * (1 - globalRed) * moonMult) {
+            const eligibleDefs = Object.values(HAZARD_CATALOG)
+              .filter(def => def.weight > 0 && !(def.id === 'kitchen_fire' && (next.activeBuffs?.fireproofBells || 0) > 0 && !next.activeBuffs?.fireproofRoomId))
+              .map(def => ({ def, rooms: filterRoomsForHazard(next, def) }))
+              .filter(e => e.rooms.length > 0);
+            const pickedEntry = weightedPick(eligibleDefs, e => e.def.weight);
+            const target = pickedEntry ? weightedPick(pickedEntry.rooms, r => ROOM_DEFINITIONS[r.defId]?.veil || 1) : undefined;
+            if (pickedEntry && target) {
+              if (!consumeFloorWardProtection(next, target, summary) && Math.random() >= localHazardFizzleChance(next, target)) {
+                applyHazardInstance(next, pickedEntry.def, target, summary);
               }
             }
           }
@@ -1636,6 +3760,10 @@ export class AnkicasterEngine {
       summary.push(`Veil upkeep processed over ${daysPassed} day(s): ${totalVeilPaid} mana paid from reserve. Dome strength: ${next.veil.strength}%.`);
     }
 
+    if (next.pendingVeilPayment && next.pendingVeilPayment.totalCost > 0) {
+      summary.push(`🛡️ Manual Veil Upkeep awaiting confirmation: ${next.pendingVeilPayment.totalCost} mana across ${next.pendingVeilPayment.days} day(s).`);
+    }
+
     if (floorReached) {
       summary.push(`🛡️ 10% Bank Floor reached (${bankFloor} mana preserved). The Veil is holding steady in safe rest state (Rule BR-25).`);
     }
@@ -1657,23 +3785,13 @@ export class AnkicasterEngine {
     const summary: string[] = [];
     next.day += 1;
 
-    // 1. Veil Upkeep Calculation (F23) with 10% Floor (BR-25)
-    const warders = next.characters.filter(c => c.career === 'warder' && c.careerState === 'active').length;
-    const batScale = bestBuffScale(next.creatures, 'velvet_bat_swarm');
-    const wyrmScale = bestBuffScale(next.creatures, 'umbral_wyrmling');
-    const hasStandingStones = next.rooms.some(r => r.defId === 'standing_stones' && r.state === 'built' && !isRoomUnfinished(r));
+    // 1. Veil Upkeep Calculation (F23 / §18.3) with 10% Floor (BR-25)
+    const warders = next.characters.filter(isActiveWarder).length;
+    const standingStonesCount = next.rooms.filter(r => r.defId === 'standing_stones' && r.state === 'built' && !isRoomUnfinished(r)).length;
     const ehRoom = next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || next.rooms[0];
 
-    const veilInfo = calculateDailyVeilCost(
-      next.rooms,
-      next.wizard.levels.shadow,
-      warders,
-      0,
-      batScale > 0,
-      wyrmScale > 0,
-      batScale || 1,
-      wyrmScale || 1
-    );
+    ensureUpcomingEventsQueue(next);
+    const veilInfo = computeAcademyVeilSummary(next);
 
     next.veil.costToday = veilInfo.cost;
     next.veil.reductions = veilInfo.reductions;
@@ -1682,7 +3800,15 @@ export class AnkicasterEngine {
     let floorHit = false;
     let paidFully = veilInfo.cost <= 0;
 
-    if (next.veil.autoPay) {
+    const isManualVeil = !next.veil.autoPay || next.settings?.veilPayment === 'ask';
+    if (isManualVeil) {
+      next.veil.paidToday = 0;
+      next.pendingVeilPayment = {
+        totalCost: (next.pendingVeilPayment?.totalCost || 0) + veilInfo.cost,
+        days: (next.pendingVeilPayment?.days || 0) + 1
+      };
+      summary.push(`🛡️ Manual Veil Upkeep awaiting decision: ${next.pendingVeilPayment.totalCost} mana (${next.pendingVeilPayment.days} day(s)).`);
+    } else {
       if (next.mana > bankFloor) {
         const available = next.mana - bankFloor;
         const paid = Math.min(available, veilInfo.cost);
@@ -1691,10 +3817,10 @@ export class AnkicasterEngine {
 
         if (paid >= veilInfo.cost) {
           paidFully = true;
-          next.veil.strength = Math.min(100, next.veil.strength + 3 + (hasStandingStones ? 2 : 0));
+          next.veil.strength = Math.min(100, next.veil.strength + 5 + warders * 5 + standingStonesCount * 2);
           summary.push(`Veil upkeep paid: ${paid} mana. Dome holds Strong (${next.veil.strength}%).`);
         } else {
-          const unpaidRatio = (veilInfo.cost - paid) / veilInfo.cost;
+          const unpaidRatio = (veilInfo.cost - paid) / Math.max(1, veilInfo.cost);
           next.veil.strength = Math.max(0, next.veil.strength - Math.round(15 * unpaidRatio));
           if (next.mana <= bankFloor) floorHit = true;
           summary.push(`⚠️ Partial Veil upkeep paid (${paid}/${veilInfo.cost} mana). Bank reached 10% floor (${bankFloor} mana). Dome holds steady at ${next.veil.strength}%.`);
@@ -1710,9 +3836,11 @@ export class AnkicasterEngine {
       id: uniqueNoticeId(`day-tick-${next.day}`, next),
       time: Date.now(),
       type: paidFully ? 'day_tick_paid' : 'day_tick_unpaid',
-      text: paidFully
-        ? `Dawn of Day ${next.day}: Veil upkeep paid (${next.veil.paidToday}m).`
-        : `Dawn of Day ${next.day}: Veil upkeep incomplete (${next.veil.paidToday}/${next.veil.costToday}m).`,
+      text: isManualVeil
+        ? `Dawn of Day ${next.day}: Manual Veil upkeep pending (${veilInfo.cost}m).`
+        : paidFully
+          ? `Dawn of Day ${next.day}: Veil upkeep paid (${next.veil.paidToday}m).`
+          : `Dawn of Day ${next.day}: Veil upkeep incomplete (${next.veil.paidToday}/${next.veil.costToday}m).`,
       data: {
         roomId: ehRoom?.id,
         visualEventType: paidFully ? 'day_tick_paid' : 'day_tick_unpaid'
@@ -1751,6 +3879,7 @@ export class AnkicasterEngine {
               anyTickGraduated = true;
               const renownGain = 10 + academyFurnitureEffect(next.rooms, 'renown_bonus');
               next.renown += renownGain;
+              checkEndlessSpellbookMilestones(next);
               summary.push(`🎓 Congratulations! ${char.name} has graduated as a Master of ${sch.toUpperCase()}!`);
               next.notices.push({
                 id: uniqueNoticeId(`master-${char.id}`, next),
@@ -1772,11 +3901,18 @@ export class AnkicasterEngine {
     }
     if (anyTickGraduated) AnkicasterEngine.syncWorkplaces(next);
 
-    // 3. New Random Event Arrival
-    if (Math.random() < 0.4) {
+    // 3. Event Arrival (consumed from upcomingEvents forecast queue)
+    const qIdx = (next.upcomingEvents || []).findIndex(e => e.day === next.day);
+    let chosenEventId = qIdx >= 0 ? next.upcomingEvents!.splice(qIdx, 1)[0].eventId : undefined;
+    if (!chosenEventId && Math.random() < 0.4) {
       const availableEvents = SCHOOL_EVENTS.filter(ev => !next.activeEvents.some(ae => ae.eventId === ev.id));
       if (availableEvents.length > 0) {
-        const chosen = availableEvents[Math.floor(Math.random() * availableEvents.length)];
+        chosenEventId = availableEvents[Math.floor(Math.random() * availableEvents.length)].id;
+      }
+    }
+    if (chosenEventId && chosenEventId !== 'none') {
+      const chosen = SCHOOL_EVENTS.find(ev => ev.id === chosenEventId);
+      if (chosen && !next.activeEvents.some(ae => ae.eventId === chosen.id)) {
         next.activeEvents.push({ eventId: chosen.id, dayArrived: next.day });
         summary.push(`📜 A new event has arrived at the Academy gates: ${chosen.name}.`);
         next.notices.push({
@@ -1788,42 +3924,38 @@ export class AnkicasterEngine {
         });
       }
     }
+    if (next.activeBuffs?.foresightDays && next.activeBuffs.foresightDays > 0) {
+      next.activeBuffs.foresightDays -= 1;
+    }
+    ensureUpcomingEventsQueue(next);
 
     // 3b. Thin Veil hazard spawn if Veil band is 'thin' or 'torn' (< 50%, skipped at 10% bank floor)
     const tickVeilBand = getVeilBand(next.veil.strength);
     if (!floorHit && next.mana > bankFloor && (tickVeilBand === 'thin' || tickVeilBand === 'torn') && (next.activeBuffs?.wardPulseBells || 0) <= 0) {
       const baseHazardChance = Math.max(0.02, 0.25 * Math.pow(0.7, warders));
-      const eligibleRooms = next.rooms.filter(r => r.state === 'built' && !r.hazard);
-      if (eligibleRooms.length > 0) {
-        const target = eligibleRooms[Math.floor(Math.random() * eligibleRooms.length)];
-        const wardFloorIdx = target.area === 'castle'
-          ? (next.activeBuffs?.wardwaterFloors?.indexOf(target.y) ?? -1)
-          : -1;
-        if (wardFloorIdx >= 0) {
-          next.activeBuffs!.wardwaterFloors!.splice(wardFloorIdx, 1);
-          summary.push(`🛡️ Wardwater prevented a hazard on Floor ${target.y + 1}!`);
-        } else {
-          const furnPct = academyFurnitureEffect(next.rooms, 'hazard_chance_pct', target);
-          const moonMult = (next.activeBuffs?.moonlessNightBells || 0) > 0 ? 0.4 : 1;
-          const stonesMult = (hasStandingStones && target.area === 'grounds') ? 0.5 : 1;
-          const effectiveChance = Math.max(0.01, baseHazardChance * Math.max(0.1, 1 + furnPct / 100) * moonMult * stonesMult);
-          if (Math.random() < effectiveChance) {
-            const hazards = [
-              { type: 'spill_of_night' as const, name: 'Spill of Night', description: 'Gloom residue seeped through the thinning Veil.', effect: 'Halves room efficiency until dispelled.' },
-              { type: 'hex_fog' as const, name: 'Hex Fog', description: 'Corrosive mist clinging to the floorboards.', effect: 'Students in this room lose composure faster.' },
-              { type: 'echo_loop' as const, name: 'Echo Loop', description: 'A temporal chime repeating indefinitely.', effect: 'Suppresses classroom essence generation.' },
-              { type: 'cold_snap' as const, name: 'Cold Snap', description: 'Sub-zero frost crystallizing across furnishings.', effect: 'Room unusable until thawed.' }
-            ];
-            const chosenHazard = hazards[Math.floor(Math.random() * hazards.length)];
-            target.hazard = chosenHazard;
-            summary.push(`⚠️ Thin Veil hazard emerged: ${chosenHazard.name} in ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}!`);
-            next.notices.push({
-              id: uniqueNoticeId(`hazard-${target.id}`, next),
-              time: Date.now(),
-              type: 'hazard',
-              text: `⚠️ Thin Veil hazard emerged: ${chosenHazard.name} in ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}!`,
-              data: { roomId: target.id, hazardId: chosenHazard.type }
-            });
+      const shadowSteps = wizardSchoolBuffs(next.wizard.levels).shadowSteps;
+      const sbDaily = computeSpellbookBonuses(next.spellbooks || []);
+      const creatureHazRed = creatureCategoryBonus(
+        next,
+        [
+          { defId: 'night_lynx', perCopy: 0.15 },
+          { defId: 'velvet_bat_swarm', perCopy: 0.08 },
+          { defId: 'glyph_cat', perCopy: 0.08 }
+        ],
+        0.5
+      );
+      const globalRed = Math.min(0.75, shadowSteps * 0.03 + warders * 0.1 + creatureHazRed + sbDaily.hazardReductionPct);
+      const moonMult = (next.activeBuffs?.moonlessNightBells || 0) > 0 ? 0.4 : 1;
+      if (Math.random() < baseHazardChance * (1 - globalRed) * moonMult) {
+        const eligibleDefs = Object.values(HAZARD_CATALOG)
+          .filter(def => def.weight > 0 && !(def.id === 'kitchen_fire' && (next.activeBuffs?.fireproofBells || 0) > 0 && !next.activeBuffs?.fireproofRoomId))
+          .map(def => ({ def, rooms: filterRoomsForHazard(next, def) }))
+          .filter(e => e.rooms.length > 0);
+        const pickedEntry = weightedPick(eligibleDefs, e => e.def.weight);
+        const target = pickedEntry ? weightedPick(pickedEntry.rooms, r => ROOM_DEFINITIONS[r.defId]?.veil || 1) : undefined;
+        if (pickedEntry && target) {
+          if (!consumeFloorWardProtection(next, target, summary) && Math.random() >= localHazardFizzleChance(next, target)) {
+            applyHazardInstance(next, pickedEntry.def, target, summary);
           }
         }
       }
@@ -1832,14 +3964,25 @@ export class AnkicasterEngine {
     // 4. Lure Musk guaranteed visitor
     if (next.activeBuffs?.lureMuskPending) {
       next.activeBuffs.lureMuskPending = false;
+      const targetHabId = next.activeBuffs.lureMuskRoomId;
+      next.activeBuffs.lureMuskRoomId = undefined;
+      const lureRoom = targetHabId != null
+        ? next.rooms.find(r => r.id === targetHabId && r.state === 'built' && !isRoomUnfinished(r))
+        : undefined;
       const allDefs = Object.values(CREATURE_DEFINITIONS);
-      if (allDefs.length > 0) {
-        const cDef = allDefs[Math.floor(Math.random() * allDefs.length)];
+      const acceptedHabs = lureRoom ? roomAcceptedHabitats(lureRoom) : [];
+      const matchingDefs = acceptedHabs.length > 0
+        ? allDefs.filter(d => d.habitats.some(h => acceptedHabs.includes(h)))
+        : allDefs;
+      const pool = matchingDefs.length > 0 ? matchingDefs : allDefs;
+      if (pool.length > 0) {
+        const cDef = pool[Math.floor(Math.random() * pool.length)];
         const newCid = uniqueNumericId(next.creatures.map(c => c.id));
         next.creatures.push({
           id: newCid,
           defId: cDef.id,
           nickname: cDef.name,
+          roomId: lureRoom?.id,
           status: 'wary',
           hungry: false,
           hatchProgress: 0,
@@ -1855,11 +3998,37 @@ export class AnkicasterEngine {
           time: Date.now(),
           type: 'creature_arrival',
           text: `🐾 Lure Musk attracted a wild ${cDef.name} to the Academy!`,
-          data: { roomId: ehRoom?.id, creatureId: newCid, visualEventType: 'creature_arrival' }
+          data: { roomId: lureRoom?.id ?? ehRoom?.id, creatureId: newCid, visualEventType: 'creature_arrival' }
         });
       }
     }
 
+    for (const c of next.characters) {
+      if (c.cosmeticStatus && next.day >= c.cosmeticStatus.expiresDay) {
+        c.cosmeticStatus = undefined;
+      }
+      if (c.status !== 'away' && hasTrait(c, 'Collector') && Math.random() < 0.02) {
+        const mats = ['timber', 'stone', 'glass', 'cloth'] as const;
+        const picked = mats[Math.floor(Math.random() * mats.length)];
+        const amt = 2 + Math.floor(Math.random() * 4);
+        const cap = AnkicasterEngine.storageCap(next);
+        const before = (next.resources as any)[picked] || 0;
+        (next.resources as any)[picked] = before >= cap ? before : Math.min(cap, before + amt);
+        const msg = `🪙 Collector ${c.name} found +${amt} ${picked}!`;
+        summary.push(msg);
+        next.notices.push({
+          id: uniqueNoticeId(`collector-${c.id}`, next),
+          time: Date.now(),
+          type: 'event',
+          text: msg,
+          data: { roomId: c.bedRoomId ?? ehRoom?.id, characterIds: [c.id] }
+        });
+      }
+    }
+
+    checkSuspendedLinkedCards(next, summary);
+    grantAlumniVisitGift(next, summary);
+    checkEndlessSpellbookMilestones(next);
     this.checkAutomaticRetirements(next, summary);
     this.checkTimedTermStatus(next, Date.now());
 
@@ -1907,31 +4076,26 @@ export class AnkicasterEngine {
       set.released = true;
     }
 
-    // Add to Alumni Gallery
-    next.alumniGallery.push({
-      id: char.id,
-      name: char.name,
-      portrait: char.appearance.hat || 'grand_hat',
-      titles: char.masteredSchools.map(s => `Master of ${s.toUpperCase()}`),
-      retiredDay: next.day,
-      bonusType: 'renown_resonance',
-      bonusValue: 10
-    });
+    // Add to Alumni Gallery with career-scaled permanent bonus
+    const extraSchoolsRenown = Math.max(0, char.masteredSchools.length - 1) * 5;
+    const renownGain = 10 + extraSchoolsRenown + academyFurnitureEffect(next.rooms, 'renown_bonus');
+    next.alumniGallery.push(createAlumnusRecord(char, next.day, retirementThreshold));
 
-    next.renown += 10 + academyFurnitureEffect(next.rooms, 'renown_bonus');
+    next.renown += renownGain;
     next.characters.splice(charIndex, 1);
     for (const cr of next.creatures) {
       if (cr.tamerId === char.id) cr.tamerId = undefined;
       if (cr.adventurerId === char.id) cr.adventurerId = undefined;
     }
     AnkicasterEngine.grantRiftGate(next);
+    checkEndlessSpellbookMilestones(next);
 
     const ehRoom = next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || next.rooms[0];
     next.notices.push({
       id: uniqueNoticeId('retire', next),
       time: Date.now(),
       type: 'retirement',
-      text: `🏛️ ${char.name} has gracefully retired to the Academy Alumni Gallery (+10 Renown)! Flashcards returned to free pool.`,
+      text: `🏛️ ${char.name} has gracefully retired to the Academy Alumni Gallery (+${renownGain} Renown)! Flashcards returned to free pool.`,
       data: {
         roomId: ehRoom?.id,
         characterIds: [char.id],
@@ -1973,18 +4137,12 @@ export class AnkicasterEngine {
           set.released = true;
         }
 
-        // Add to Alumni Gallery
-        next.alumniGallery.push({
-          id: char.id,
-          name: char.name,
-          portrait: char.appearance.hat || 'grand_hat',
-          titles: char.masteredSchools.map(s => `Master of ${s.toUpperCase()}`),
-          retiredDay: next.day,
-          bonusType: 'renown_resonance',
-          bonusValue: 10
-        });
+        // Add to Alumni Gallery with career-scaled permanent bonus
+        const extraSchoolsRenown = Math.max(0, char.masteredSchools.length - 1) * 5;
+        const renownGain = 10 + extraSchoolsRenown + academyFurnitureEffect(next.rooms, 'renown_bonus');
+        next.alumniGallery.push(createAlumnusRecord(char, next.day, retirementThreshold));
 
-        next.renown += 10 + academyFurnitureEffect(next.rooms, 'renown_bonus');
+        next.renown += renownGain;
         next.characters.splice(i, 1);
         for (const cr of next.creatures) {
           if (cr.tamerId === char.id) cr.tamerId = undefined;
@@ -1992,8 +4150,9 @@ export class AnkicasterEngine {
         }
         retired.push(char);
         AnkicasterEngine.grantRiftGate(next);
+        checkEndlessSpellbookMilestones(next);
 
-        const msg = `🏛️ ${char.name} has automatically retired to the Alumni Gallery (+10 Renown) after all cards reached ${retirementThreshold}d retirement age!`;
+        const msg = `🏛️ ${char.name} has automatically retired to the Alumni Gallery (+${renownGain} Renown) after all cards reached ${retirementThreshold}d retirement age!`;
         if (summary) summary.push(msg);
         next.notices.push({
           id: uniqueNoticeId(`auto-retire-${char.id}`, next),
@@ -2086,6 +4245,12 @@ export class AnkicasterEngine {
       if (mastersGraduated >= 5 || cardsStudied >= 500) honorTier = 'Summa Cum Laude (Valedictorian)';
       else if (mastersGraduated >= 2 || cardsStudied >= 200) honorTier = 'Magna Cum Laude';
 
+      const stars =
+        (mastersGraduated >= 5 || cardsStudied >= 500 || renownEarned >= 150) ? 3 :
+        (mastersGraduated >= 2 || cardsStudied >= 200 || renownEarned >= 75) ? 2 :
+        (mastersGraduated >= 1 || cardsStudied >= 50 || renownEarned >= 25) ? 1 : 0;
+      next.lastTermStars = stars;
+
       const report = {
         cardsStudied,
         mastersGraduated,
@@ -2093,6 +4258,10 @@ export class AnkicasterEngine {
         honorTier,
         completedAt: currentTimeMs
       };
+
+      if (stars >= 1 && !next.pendingSpellbookDraft && !next.termFinishedReport) {
+        offerSpellbookDraft(next, stars as 1 | 2 | 3, `Commencement (${stars}★)`);
+      }
 
       next.termFinishedReport = report;
       return { state: next, termEnded: true, report };
@@ -2116,20 +4285,13 @@ export class AnkicasterEngine {
   ): { state: FullGameState } {
     const next = structuredClone(state);
     const now = Date.now();
+    const retirementThreshold = next.settings?.retirementAgeDays || 90;
 
     // 1. Move any graduated masters to alumni gallery before reset
     for (const char of next.characters) {
       if (char.masteredSchools.length > 0) {
         if (!next.alumniGallery.some(a => a.name === char.name)) {
-          next.alumniGallery.push({
-            id: char.id,
-            name: char.name,
-            portrait: char.appearance?.hat || 'grand_hat',
-            titles: char.masteredSchools.map(s => `Master of ${s.toUpperCase()}`),
-            retiredDay: next.day,
-            bonusType: 'renown_resonance',
-            bonusValue: 10
-          });
+          next.alumniGallery.push(createAlumnusRecord(char, next.day, retirementThreshold));
         }
       }
     }
@@ -2149,17 +4311,34 @@ export class AnkicasterEngine {
 
     // 5. Reset rooms and materials back to starting layout & stock (BR-34 / F36)
     const fresh = createInitialGameState();
+    const sb = computeSpellbookBonuses(next.spellbooks || []);
     next.rooms = fresh.rooms;
     next.shelvedRooms = [];
     next.resources = fresh.resources;
+    if (sb.foundersTestament) {
+      const tripleKeys = [
+        'timber', 'stone', 'glass', 'cloth', 'provisions', 'greens', 'fish', 'nectar',
+        'insight', 'herbs', 'radiance', 'umbra', 'reagents'
+      ] as const;
+      const bag = next.resources as unknown as Record<string, number>;
+      for (const k of tripleKeys) {
+        bag[k] = (bag[k] || 0) * 3;
+      }
+      next.pendingFoundersPlanChoice = true;
+      if (next.pendingSpellbookDraft) {
+        next.pendingSpellbookDraft.allowPlanPick = true;
+      }
+    }
     next.activeBuffs = {};
 
     // 6. Reset unspent mana, renown, patterns, and this term's draw prices. Room plans stay.
     next.mana = 0;
     next.bankAtLastReview = 0;
     next.manaDebt = 0;
-    next.renown = 0;
-    next.knownPatterns = [...STARTER_PATTERNS];
+    next.renown = computeAlumniBonuses(next.alumniGallery || []).totalExtraSchoolsRenown;
+    if (!sb.persistPlansAndPatterns) {
+      next.knownPatterns = [...STARTER_PATTERNS];
+    }
     next.draftHistory = {};
     next.draftPity = {};
     next.roomlessStreak = {};
@@ -2185,7 +4364,7 @@ export class AnkicasterEngine {
     next.termEndDateMs = now + (termLengthDays * 24 * 3600 * 1000);
     next.termInitialReviewIndex = next.reviewIndex;
     next.termInitialMasters = next.alumniGallery.length;
-    next.termInitialRenown = 0;
+    next.termInitialRenown = next.renown;
     next.termFinishedReport = undefined;
 
     next.notices.push({
@@ -2235,17 +4414,7 @@ export class AnkicasterEngine {
     }
 
     // Check free young cards
-    const linkedCardIds = new Set<number>();
-    for (const set of next.cardSets) {
-      if (!set.released) {
-        for (const cid of set.cardIds) linkedCardIds.add(cid);
-      }
-    }
-
-    const allowNew = next.settings.linkNewCards ?? false;
-    const freeYoungCards = Object.values(next.allCards)
-      .filter(c => !linkedCardIds.has(c.id) && c.honestIvl <= 30 && c.queue !== -1 && (allowNew || (c.type ?? 2) !== 0))
-      .sort((a, b) => a.honestIvl - b.honestIvl);
+    const freeYoungCards = getEligibleFreeYoungCards(next, 30);
 
     const needed = next.settings.cardsPerStudent;
     if (freeYoungCards.length < needed) {
@@ -2259,7 +4428,7 @@ export class AnkicasterEngine {
     // Deduct mana
     next.mana -= 60;
 
-    const chosenCards = freeYoungCards.slice(0, needed).map(c => c.id);
+    const chosenCards = pickFreeYoungCards(next, 30, needed).map(c => c.id);
     const newSetId = uniqueNumericId(next.cardSets.map(s => s.id));
 
     next.cardSets.push({
@@ -2328,17 +4497,7 @@ export class AnkicasterEngine {
     }
 
     // 3. Free young cards check (BR-12, BR-23)
-    const linkedCardIds = new Set<number>();
-    for (const set of next.cardSets) {
-      if (!set.released) {
-        for (const cid of set.cardIds) linkedCardIds.add(cid);
-      }
-    }
-
-    const allowNewCards = next.settings.linkNewCards ?? false;
-    const freeYoungCards = Object.values(next.allCards)
-      .filter(c => !linkedCardIds.has(c.id) && c.honestIvl <= 30 && c.queue !== -1 && (allowNewCards || (c.type ?? 2) !== 0))
-      .sort((a, b) => a.honestIvl - b.honestIvl);
+    const freeYoungCards = getEligibleFreeYoungCards(next, 30);
 
     const needed = next.settings.cardsPerStudent;
     if (freeYoungCards.length < needed) {
@@ -2383,8 +4542,8 @@ export class AnkicasterEngine {
     // Deduct mana
     next.mana -= 60;
 
-    // Pick youngest cards
-    const chosenCards = freeYoungCards.slice(0, needed).map(c => c.id);
+    // Pick youngest cards (honoring avoidSiblings + deckScope)
+    const chosenCards = pickFreeYoungCards(next, 30, needed).map(c => c.id);
 
     const charId = uniqueNumericId([
       ...next.characters.map(c => c.id),
@@ -2493,17 +4652,35 @@ export class AnkicasterEngine {
       if (hero.injury) return { state, success: false, error: `${hero.name} is injured and must recover first.` };
     }
 
-    const maxSupplies = 1 + academyFurnitureEffect(next.rooms, 'rift_supply_slots');
+    const sb = computeSpellbookBonuses(next.spellbooks || []);
+    const alum = computeAlumniBonuses(next.alumniGallery || []);
+    const maxSupplies = 1 + academyFurnitureEffect(next.rooms, 'rift_supply_slots') + sb.supplySlotBonus;
     if (suppliesTaken.length > maxSupplies) {
       return { state, success: false, error: `Can only carry up to ${maxSupplies} supply item(s).` };
     }
+    const riftMapCount = suppliesTaken.filter(s => s === 'rift_map').length;
+    if (riftMapCount > 1) {
+      return { state, success: false, error: 'At most 1 Rift Map can be brought per expedition.' };
+    }
+    if (riftMapCount > 0 && (next.scrolls?.rift_map || 0) < riftMapCount) {
+      return { state, success: false, error: 'No Rift Map scrolls in inventory.' };
+    }
 
     let companionBonus = 0;
+    let selectedComp: (typeof next.creatures)[number] | undefined;
     if (companionId !== undefined) {
       const comp = next.creatures.find(c => c.id === companionId);
       if (!comp || comp.status !== 'tamed') {
         return { state, success: false, error: 'Selected creature companion is not available.' };
       }
+      if (comp.tiredUntilBell !== undefined && comp.tiredUntilBell > next.bellIndex) {
+        return {
+          state,
+          success: false,
+          error: `${comp.nickname} is resting from a recent expedition (${comp.tiredUntilBell - next.bellIndex} bell(s) left).`
+        };
+      }
+      selectedComp = comp;
       companionBonus = CREATURE_DEFINITIONS[comp.defId]?.companionBonus ?? 1;
     }
 
@@ -2531,13 +4708,43 @@ export class AnkicasterEngine {
         }
       }
     }
-    const partySkillDays = cardCount > 0 ? totalCardsIvl / cardCount : 0;
+    const rawPartySkillDays = cardCount > 0 ? totalCardsIvl / cardCount : 0;
+    const hasSocialTrio = teamIds.length === 3 && teamIds.some(id => next.characters.find(c => c.id === id)?.personality === 'Social');
+    const partySkillDays = rawPartySkillDays + (hasSocialTrio ? 2 : 0);
+
+    let traitFortune = 0;
+    for (const hId of teamIds) {
+      const hero = next.characters.find(c => c.id === hId);
+      if (!hero) continue;
+      if (hero.personality === 'Bold') traitFortune += 1;
+      if (hero.personality === 'Bookish' && destinationId === 'crystal_caverns') traitFortune += 1;
+      if (hero.personality === 'Mischievous' && destinationId === 'shattered_spire') traitFortune += 1;
+      if (hero.personality === 'Dreamy' && destinationId === 'whispering_fen') traitFortune += 1;
+      if (hero.personality === 'Curious' && (destinationId === 'mossy_hollow' || destinationId === 'ashen_wastes')) traitFortune += 1;
+      if (hasTrait(hero, 'Brave')) traitFortune += 1;
+      if (hasTrait(hero, 'Nervous')) traitFortune -= 1;
+      if (hasTrait(hero, 'Daredevil')) traitFortune += 1;
+      if (hasTrait(hero, 'Show-off')) {
+        if (teamIds.length === 3) traitFortune += 1;
+        else if (teamIds.length === 1) traitFortune -= 1;
+      }
+      if (hero.hexDuelFortuneBonus) {
+        traitFortune += hero.hexDuelFortuneBonus;
+        hero.hexDuelFortuneBonus = undefined;
+      }
+    }
 
     let hasElixir = suppliesTaken.includes('rift_elixir');
     if (!hasElixir && (next.activeBuffs?.riftElixirCharges || 0) > 0) {
       hasElixir = true;
       next.activeBuffs!.riftElixirCharges! -= 1;
     }
+    let hasRiftMap = suppliesTaken.includes('rift_map');
+    if (!hasRiftMap && next.activeBuffs?.riftMapPending) {
+      hasRiftMap = true;
+      next.activeBuffs.riftMapPending = false;
+    }
+    const riftMapFortune = hasRiftMap ? 2 : 0;
     const isVeilThin = next.veil.strength < 50;
 
     const { chance } = calculateRiftChance(dest, partySkillDays, teamIds.length, hasElixir, isVeilThin);
@@ -2547,7 +4754,11 @@ export class AnkicasterEngine {
     const beforeRes = resourceSnapshot(next);
     next.resources.provisions -= provisionsNeeded;
     for (const s of suppliesTaken) {
-      if (next.resources.potions[s]) next.resources.potions[s] = Math.max(0, next.resources.potions[s] - 1);
+      if (s === 'rift_map') {
+        if (next.scrolls?.rift_map) next.scrolls.rift_map = Math.max(0, next.scrolls.rift_map - 1);
+      } else if (next.resources.potions[s]) {
+        next.resources.potions[s] = Math.max(0, next.resources.potions[s] - 1);
+      }
     }
     logResourceDiff(next, beforeRes, `Expedition to ${dest.name}`);
 
@@ -2566,12 +4777,24 @@ export class AnkicasterEngine {
     }
 
     const beaconBonus = next.activeBuffs?.riftBeaconActive ? 3 : 0;
+    const tremorPenalty = next.rooms.some(r => r.defId === 'rift_gate' && r.state === 'built' && r.hazard?.type === 'rift_tremor') ? -1 : 0;
+    const creatureFortuneBonus =
+      (creatureSpeciesBuffSum(next, 'orrery_moth') > 0 ? 1 : 0) +
+      (creatureSpeciesBuffSum(next, 'star_heron') > 0 ? 1 : 0);
+    const trainingYardFortune = next.rooms
+      .filter(r => r.defId === 'training_yard' && r.state === 'built' && !isRoomUnfinished(r) && !AnkicasterEngine.roomIsLocked(next, r))
+      .reduce((sum, r) => sum + Math.min(3, r.level || 1), 0);
     const roomFortune =
-      (next.rooms.some(r => r.defId === 'training_yard' && r.state === 'built' && !isRoomUnfinished(r)) ? 1 : 0) +
-      (next.rooms.some(r => r.defId === 'observatory' && r.state === 'built' && !isRoomUnfinished(r)) ? 1 : 0);
-    const requiredReviews = next.activeBuffs?.riftBeaconActive
+      trainingYardFortune +
+      (next.rooms.some(r => r.defId === 'observatory' && r.state === 'built' && !isRoomUnfinished(r)) ? 1 : 0) +
+      tremorPenalty;
+    let requiredReviews = next.activeBuffs?.riftBeaconActive
       ? Math.max(1, Math.round(dest.reviews * 0.75))
       : dest.reviews;
+    if (selectedComp && selectedComp.defId === 'dawnhart_gryphon') {
+      const gryphonSpeed = Math.min(0.4, 0.15 * bondBuffMultiplier(selectedComp.bondLevel) * (selectedComp.hungry ? 0.5 : 1));
+      requiredReviews = Math.max(1, Math.round(requiredReviews * (1 - gryphonSpeed)));
+    }
     if (next.activeBuffs?.riftBeaconActive) {
       next.activeBuffs.riftBeaconActive = false;
     }
@@ -2585,7 +4808,10 @@ export class AnkicasterEngine {
       suppliesTaken,
       partySkillDays,
       chance,
-      fortune: 1 + academyFurnitureEffect(next.rooms, 'rift_fortune') + beaconBonus + roomFortune + companionBonus,
+      fortune: Math.max(
+        0,
+        1 + academyFurnitureEffect(next.rooms, 'rift_fortune') + beaconBonus + roomFortune + creatureFortuneBonus + companionBonus + traitFortune + riftMapFortune + sb.riftFortuneBonus + alum.adventurerFortune
+      ),
       roll,
       wrongRoll,
       requiredReviews,
@@ -2627,9 +4853,13 @@ export class AnkicasterEngine {
       const hero = state.characters.find(c => c.id === hId);
       if (hero) hero.status = 'resident';
     }
+    let returnedComp: (typeof state.creatures)[number] | undefined;
     if (exp.companionId !== undefined) {
       const comp = state.creatures.find(c => c.id === exp.companionId);
-      if (comp && comp.status === 'away') comp.status = 'tamed';
+      if (comp) {
+        if (comp.status === 'away') comp.status = 'tamed';
+        returnedComp = comp;
+      }
     }
 
     const loot: string[] = [];
@@ -2668,6 +4898,10 @@ export class AnkicasterEngine {
         state.resources.golem_core += cores;
         state.resources.starmetal += starmetal;
         loot.push(`${crystal} Crystal${suffix}`, `${stone} Stone${suffix}`, `${cores} Golem Core${suffix}`, `${starmetal} Starmetal${suffix}`);
+        if (factor === 1 && Math.random() < 0.25 && !state.resources.seedsUnlocked.includes('starfruit')) {
+          state.resources.seedsUnlocked.push('starfruit');
+          loot.push('Starfruit Seeds');
+        }
       } else if (dest?.id === 'ashen_wastes') {
         const emberSalt = amt(3);
         const sunstone = amt(2);
@@ -2678,6 +4912,10 @@ export class AnkicasterEngine {
         state.resources.void_pearl += voidPearl;
         state.resources.phoenix_ash += phoenixAsh;
         loot.push(`${emberSalt} Ember Salt${suffix}`, `${sunstone} Sunstone${suffix}`, `${voidPearl} Void Pearl${suffix}`, `${phoenixAsh} Phoenix Ash${suffix}`);
+        if (factor === 1 && Math.random() < 0.3 && !state.resources.seedsUnlocked.includes('heartwood_sapling')) {
+          state.resources.seedsUnlocked.push('heartwood_sapling');
+          loot.push('Heartwood Sapling Seeds');
+        }
       } else if (dest?.id === 'shattered_spire') {
         const starmetal = amt(4);
         const voidPearl = amt(3);
@@ -2688,6 +4926,10 @@ export class AnkicasterEngine {
         state.resources.phoenix_ash += phoenixAsh;
         state.renown += renownGain;
         loot.push(`${starmetal} Starmetal${suffix}`, `${voidPearl} Void Pearl${suffix}`, `${phoenixAsh} Phoenix Ash${suffix}`, `+${renownGain} Renown${suffix}`);
+        if (factor === 1 && Math.random() < 0.3 && !state.resources.seedsUnlocked.includes('heartwood_sapling')) {
+          state.resources.seedsUnlocked.push('heartwood_sapling');
+          loot.push('Heartwood Sapling Seeds');
+        }
       } else {
         const crystal = amt(3);
         const herbs = amt(30);
@@ -2702,6 +4944,15 @@ export class AnkicasterEngine {
       exp.outcome = 'safe';
       notifications.push(`🏆 Safe Return from ${dest.name}! Party returned triumphant without a scratch.`);
       grantDestinationLoot(1);
+
+      const hasLuckyHero = exp.teamIds.some(id => hasTrait(state.characters.find(c => c.id === id), 'Lucky'));
+      if (hasLuckyHero) {
+        const extraCrystal = 2;
+        const extraHerbs = 10;
+        state.resources.crystal += extraCrystal;
+        state.resources.herbs += extraHerbs;
+        loot.push(`+${extraCrystal} Crystal, +${extraHerbs} Herbs (Lucky Roll)`);
+      }
 
       if (fortuneBonus > 0) {
         const extraHerbs = fortuneBonus * 5;
@@ -2764,14 +5015,67 @@ export class AnkicasterEngine {
         exp.injuryApplied = injuredHero?.injury?.type;
         grantDestinationLoot(0.5);
       } else if (chosenOutcome === 'curse') {
-        notifications.push(`🔮 Curse of the Rift! ${injuredHero?.name} was hexed by otherworldly energies.`);
-        if (injuredHero) injuredHero.injury = { type: 'hexed', points: 0, required: Math.round(120 * recoveryMult) };
-        exp.injuredHeroId = injuredHero?.id;
-        exp.injuryApplied = injuredHero?.injury?.type;
-        loot.push('Curio relic fragments');
+        if (injuredHero && hasTrait(injuredHero, 'Warded')) {
+          notifications.push(`🛡️ Warded trait shielded ${injuredHero.name} from the Rift curse!`);
+          loot.push('Warded Curse Immunity (Curio relic fragments)');
+        } else {
+          notifications.push(`🔮 Curse of the Rift! ${injuredHero?.name} was hexed by otherworldly energies.`);
+          if (injuredHero) injuredHero.injury = { type: 'hexed', points: 0, required: Math.round(120 * recoveryMult) };
+          exp.injuredHeroId = injuredHero?.id;
+          exp.injuryApplied = injuredHero?.injury?.type;
+          loot.push('Curio relic fragments');
+        }
       } else {
         notifications.push(`🏃 Party was forced to retreat empty-handed from ${dest.name}!`);
       }
+    }
+
+    const outcomeHeadline = notifications[notifications.length - 1] || `Expedition returned from ${dest?.name || 'the Rift'}.`;
+
+    // Phase Ferret: full-loot expeditions gain +1 extra loot roll (scaled)
+    if ((exp.outcome === 'safe' || exp.outcome === 'minor_injury') && creatureSpeciesBuffSum(state, 'phase_ferret') > 0) {
+      const ferretRolls = Math.max(1, Math.round(creatureSpeciesBuffSum(state, 'phase_ferret')));
+      for (let i = 0; i < ferretRolls; i++) {
+        grantDestinationLoot(0.5);
+      }
+      notifications.push(`🐾 Phase Ferret salvaged +${ferretRolls} bonus loot roll(s)!`);
+    }
+
+    // Atlas of the Unmapped: full-loot expeditions gain +1 bonus loot cache
+    const sbExp = computeSpellbookBonuses(state.spellbooks || []);
+    if ((exp.outcome === 'safe' || exp.outcome === 'minor_injury') && sbExp.extraFullRewardLootRoll > 0) {
+      grantDestinationLoot(0.5);
+      loot.push('Atlas of the Unmapped bonus loot roll');
+      notifications.push('🗺️ Atlas of the Unmapped uncovered an extra loot cache!');
+    }
+    checkEndlessSpellbookMilestones(state);
+
+    // Ember Phoenix companion heals worst Rift/Academy injury on return
+    if (returnedComp && returnedComp.defId === 'ember_phoenix') {
+      const INJURY_SEVERITY: Record<string, number> = {
+        broken_bone: 5,
+        hexed: 4,
+        sprained: 3,
+        rift_touched: 2,
+        bruised: 1
+      };
+      const injuredRoster = [
+        ...state.characters.filter(c => exp.teamIds.includes(c.id) && !!c.injury),
+        ...state.characters.filter(c => !exp.teamIds.includes(c.id) && !!c.injury)
+      ].sort((a, b) => (INJURY_SEVERITY[b.injury?.type || 'bruised'] || 0) - (INJURY_SEVERITY[a.injury?.type || 'bruised'] || 0));
+      const phoenixPatient = injuredRoster[0];
+      if (phoenixPatient && phoenixPatient.injury) {
+        const injType = phoenixPatient.injury.type;
+        phoenixPatient.injury = undefined;
+        phoenixPatient.needs.health = 100;
+        notifications.push(`🔥 Companion Ember Phoenix healed ${phoenixPatient.name}'s ${injType.replace('_', ' ')} on return!`);
+      }
+    }
+
+    // Companion returning from any non-safe expedition rests 10 bells before buffs resume (§27.11)
+    if (returnedComp && exp.outcome && exp.outcome !== 'safe') {
+      returnedComp.tiredUntilBell = state.bellIndex + 10;
+      notifications.push(`💤 ${returnedComp.nickname} returned tired (buffs & expeditions paused for 10 bells).`);
     }
 
     exp.lootSummary = loot;
@@ -2782,7 +5086,7 @@ export class AnkicasterEngine {
       id: uniqueNoticeId(`rift-return-${exp.id}`, state),
       time: Date.now(),
       type: `expedition_${exp.outcome || 'safe'}`,
-      text: notifications[notifications.length - 1] || `Expedition returned from ${dest?.name || 'the Rift'}.`,
+      text: outcomeHeadline,
       data: {
         roomId: riftRoom?.id,
         characterIds: [...exp.teamIds],
@@ -2819,7 +5123,7 @@ export class AnkicasterEngine {
     if (limit.capped) return { state, success: false, error: `${limit.reason}.` };
 
     // Materials only. Mana is not a build cost.
-    const charge = placementCharge(defId);
+    const charge = placementCharge(defId, state);
     for (const k of BUILD_MATERIALS) {
       const need = (charge as unknown as Record<string, number>)[k] || 0;
       const have = (state.resources as unknown as Record<string, number>)[k] || 0;
@@ -2860,7 +5164,7 @@ export class AnkicasterEngine {
       ...next.rooms.map(r => r.id),
       ...(next.shelvedRooms || []).map(r => r.id)
     ]);
-    const buildReq = def.buildReviews;
+    const buildReq = discountedBuildReviews(def.buildReviews, next);
     const isInstant = buildReq === 0;
 
     const newRoom: PlacedRoom = {
@@ -3192,6 +5496,7 @@ export class AnkicasterEngine {
       if (cr.roomId === roomId) { cr.roomId = sameKind([room.defId])?.id; moved++; }
     }
     AnkicasterEngine.syncWorkplaces(next);
+    syncCharmRenown(next);
 
     const ehRoom = next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || next.rooms[0];
     const parts = BUILD_MATERIALS.filter(k => ((refund as unknown as Record<string, number>)[k] || 0) > 0).map(k => `${(refund as unknown as Record<string, number>)[k]} ${k}`);
@@ -3267,6 +5572,42 @@ export class AnkicasterEngine {
       ? { phase, step: Math.max(0, Math.floor(out.tutorial.step) || 0), part: Math.max(0, Math.floor(out.tutorial.part) || 0) }
       : { phase: 'done', step: 0, part: 0 };
     syncDiscoveredCreatures(out);
+    if (!out.scrolls) out.scrolls = {};
+    if (!Array.isArray(out.scrollQueue)) out.scrollQueue = [];
+    if (!Array.isArray(out.spellbooks)) out.spellbooks = [];
+    if (!out.suspendedSinceDay) out.suspendedSinceDay = {};
+    if (out.settings) {
+      out.settings = {
+        ...out.settings,
+        avoidSiblings: out.settings.avoidSiblings ?? true,
+        deckScope: out.settings.deckScope ?? 'all',
+        suspendedReleaseDays: out.settings.suspendedReleaseDays ?? 30,
+        honestIntervalsOnly: out.settings.honestIntervalsOnly ?? true,
+        veilPayment: out.settings.veilPayment ?? (out.veil?.autoPay === false ? 'ask' : 'auto'),
+        toastMode: out.settings.toastMode ?? 'every_bell',
+        textScale: out.settings.textScale ?? 1.0,
+        manaPerReview: out.settings.manaPerReview ?? 10
+      };
+    }
+    if (Array.isArray(out.alumniGallery)) {
+      out.alumniGallery = out.alumniGallery.map((a: any) => {
+        if (!a || a.bonusType !== 'renown_resonance') return a;
+        return {
+          ...a,
+          career: a.career || 'resident',
+          bonusType: a.career || 'resident',
+          bonusValue: 0.01,
+          extraSchoolsMastered: a.extraSchoolsMastered ?? Math.max(0, (a.titles?.length || 1) - 1),
+          retiredAgeDays: a.retiredAgeDays ?? 90
+        };
+      });
+    }
+    if (out.charmRenownGranted === undefined && Array.isArray(out.rooms)) {
+      out.charmRenownGranted = Math.max(0, Math.floor(computeAcademyCharm(out as FullGameState) / 50));
+    }
+    if (Array.isArray(out.rooms)) {
+      ensureUpcomingEventsQueue(out as FullGameState);
+    }
     return out;
   }
 
@@ -3294,6 +5635,7 @@ export class AnkicasterEngine {
       data: { roomId: room.id, visualEventType: 'room_built' }
     });
     AnkicasterEngine.syncWorkplaces(next);
+    syncCharmRenown(next);
   }
 
   /**
@@ -3323,11 +5665,12 @@ export class AnkicasterEngine {
     if (!opt.free && stored > 0) {
       next.furnitureInventory = { ...next.furnitureInventory, [opt.defId]: stored - 1 };
     } else if (!opt.free) {
-      const why = unaffordable(next, opt.cost);
+      const fCost = discountedFurnitureCost(opt.cost, next);
+      const why = unaffordable(next, fCost);
       if (why) return { state, success: false, error: why };
-      next.mana -= opt.cost.mana || 0;
+      next.mana -= fCost.mana || 0;
       const res = next.resources as unknown as Record<string, number>;
-      for (const [k, v] of Object.entries(opt.cost)) if (k !== 'mana' && v) res[k] -= v;
+      for (const [k, v] of Object.entries(fCost)) if (k !== 'mana' && v) res[k] -= v;
     }
     const ids = allFurnitureIds([...next.rooms, ...(next.shelvedRooms || [])]);
     const id = uniqueFurnitureId(ids, r.id * 10 + slot.index + 1);
@@ -3384,7 +5727,7 @@ export class AnkicasterEngine {
     if (stored > 0) {
       next.furnitureInventory = { ...next.furnitureInventory, [furnitureDefId]: stored - 1 };
     } else {
-      const cost = fDef.cost as Cost;
+      const cost = discountedFurnitureCost(fDef.cost as Cost, next);
       const bad = unaffordable(next, cost);
       if (bad) return { state, success: false, error: bad };
 
@@ -3488,6 +5831,7 @@ export class AnkicasterEngine {
       });
     }
     AnkicasterEngine.syncWorkplaces(next);
+    syncCharmRenown(next);
     return { state: next, success: true };
   }
 
@@ -3580,6 +5924,7 @@ export class AnkicasterEngine {
     placed.floor = legacy?.floor ?? 0;
     placed.plane = legacy?.kind ?? piecePlane(item.defId);
     AnkicasterEngine.syncWorkplaces(acq.state);
+    syncCharmRenown(acq.state);
     return { state: acq.state, success: true };
   }
 
@@ -3608,6 +5953,7 @@ export class AnkicasterEngine {
     const nextName = roomDisplayName(room);
     next.renown += 5;
     room.renownGranted = (room.renownGranted || 0) + 5;
+    syncCharmRenown(next);
 
     next.notices.push({
       id: uniqueNoticeId(`upg-${roomId}-${room.level}`, next),
@@ -3663,6 +6009,7 @@ export class AnkicasterEngine {
     placed.floor = legacy?.floor ?? 0;
     placed.plane = legacy?.kind ?? piecePlane(item.defId);
     AnkicasterEngine.syncWorkplaces(acq.state);
+    syncCharmRenown(acq.state);
     return { state: acq.state, success: true };
   }
 
@@ -3720,6 +6067,7 @@ export class AnkicasterEngine {
       next.furnitureInventory[target.defId] = (next.furnitureInventory[target.defId] || 0) + 1;
     }
     AnkicasterEngine.syncWorkplaces(next);
+    syncCharmRenown(next);
     return { state: next, success: true };
   }
 
@@ -3774,7 +6122,7 @@ export class AnkicasterEngine {
             error: 'Teacher can only be assigned to a classroom of a school they have mastered.'
           };
         }
-        const wpSlots = ROOM_DEFINITIONS[chosen.defId]?.workplace?.slots ?? 1;
+        const wpSlots = effectiveWorkplaceSlots(chosen);
         if (AnkicasterEngine.slotsUsed(next, chosen, char.id) >= wpSlots) {
           return { state, success: false, error: 'That classroom already has a teacher.' };
         }
@@ -3796,21 +6144,11 @@ export class AnkicasterEngine {
 
     // Link 20 youngest free cards to Career Set (BR-15)
     // When switching careers, link 20 new cards and keep old ones
-    const linkedCardIds = new Set<number>();
-    for (const set of next.cardSets) {
-      if (!set.released) {
-        for (const cid of set.cardIds) linkedCardIds.add(cid);
-      }
-    }
-
     // Check if char already has a career set for this specific career
     const existingCareerSet = next.cardSets.find(s => s.characterId === char.id && s.career === career && !s.released);
 
     if (!existingCareerSet) {
-      const allowNewCards = next.settings.linkNewCards ?? false;
-      const freeCards = Object.values(next.allCards)
-        .filter(c => !linkedCardIds.has(c.id) && c.honestIvl <= 45 && c.queue !== -1 && (allowNewCards || (c.type ?? 2) !== 0))
-        .sort((a, b) => a.honestIvl - b.honestIvl);
+      const freeCards = getEligibleFreeYoungCards(next, 45);
 
       const needed = 20;
       if (freeCards.length < needed) {
@@ -3821,7 +6159,7 @@ export class AnkicasterEngine {
         };
       }
 
-      const chosen = freeCards.slice(0, needed).map(c => c.id);
+      const chosen = pickFreeYoungCards(next, 45, needed).map(c => c.id);
       const careerSetId = uniqueNumericId(next.cardSets.map(s => s.id));
       next.cardSets.push({
         id: careerSetId,
@@ -3895,7 +6233,7 @@ export class AnkicasterEngine {
     if (!sch || !char.masteredSchools.includes(sch)) {
       return { state, success: false, error: 'Teacher has not mastered that classroom’s school.' };
     }
-    const wpSlots = ROOM_DEFINITIONS[room.defId]?.workplace?.slots ?? 1;
+    const wpSlots = effectiveWorkplaceSlots(room);
     if (AnkicasterEngine.slotsUsed(next, room, char.id) >= wpSlots) {
       return { state, success: false, error: 'That classroom already has a teacher.' };
     }
@@ -3943,7 +6281,7 @@ export class AnkicasterEngine {
     );
 
     const avoid = new Map<number, number>();
-    if (occupants.length >= wp.slots) {
+    if (occupants.length >= effectiveWorkplaceSlots(room)) {
       if (replaceCharId == null) {
         return { state, success: false, error: 'All slots are full; pick who to replace.' };
       }
@@ -3987,13 +6325,19 @@ export class AnkicasterEngine {
   static usePotion(
     state: FullGameState,
     potionId: string,
-    targetId?: number
+    target?: number | AlchemyTarget
   ): { state: FullGameState; success: boolean; error?: string; message?: string } {
     const next = structuredClone(state);
     const count = next.resources.potions[potionId] || 0;
     if (count <= 0) {
       return { state, success: false, error: 'No potions of this type in inventory.' };
     }
+
+    const numTarget = typeof target === 'number' ? target : undefined;
+    const tObj: AlchemyTarget = typeof target === 'object' && target !== null ? target : {};
+    const charTargetId = tObj.characterId ?? numTarget;
+    const roomTargetId = tObj.roomId ?? numTarget;
+    const creatureTargetId = tObj.creatureId ?? numTarget;
 
     next.resources.potions[potionId] -= 1;
     if (!next.activeBuffs) next.activeBuffs = {};
@@ -4005,8 +6349,8 @@ export class AnkicasterEngine {
 
     switch (potionId) {
       case 'mending_draught': {
-        const injuredHero = targetId
-          ? next.characters.find(c => c.id === targetId && c.injury)
+        const injuredHero = charTargetId
+          ? next.characters.find(c => c.id === charTargetId && c.injury)
           : next.characters.find(c => c.injury);
         if (injuredHero && injuredHero.injury) {
           injuredHero.injury = undefined;
@@ -4022,10 +6366,10 @@ export class AnkicasterEngine {
       }
 
       case 'calming_tonic': {
-        const targetChar = targetId ? next.characters.find(c => c.id === targetId) : undefined;
-        const targetRoomId = targetId && !targetChar
-          ? targetId
-          : targetChar?.seatRoomId ?? targetChar?.workplaceRoomId ?? targetChar?.bedRoomId;
+        const targetChar = tObj.roomId == null && charTargetId ? next.characters.find(c => c.id === charTargetId) : undefined;
+        const targetRoomId = tObj.roomId ?? (numTarget && !targetChar
+          ? numTarget
+          : targetChar?.seatRoomId ?? targetChar?.workplaceRoomId ?? targetChar?.bedRoomId);
         const affected = targetRoomId
           ? next.characters.filter(c => c.seatRoomId === targetRoomId || c.workplaceRoomId === targetRoomId || c.bedRoomId === targetRoomId)
           : next.characters;
@@ -4033,15 +6377,16 @@ export class AnkicasterEngine {
         for (const c of list) {
           c.needs.composure = Math.min(100, c.needs.composure + 30);
         }
+        const clearedChains = clearRoomMisbehaviorChains(next, targetRoomId);
         potionTargetRoomId = targetRoomId;
         potionTargetCharIds = list.map(c => c.id);
-        message = `✨ Calming Tonic consumed! Composure +30 for ${list.length} resident(s); misbehavior calmed.`;
+        message = `✨ Calming Tonic consumed! Composure +30 for ${list.length} resident(s)${clearedChains > 0 ? ` and cleared ${clearedChains} misbehavior effect(s)` : '; misbehavior calmed'}.`;
         break;
       }
 
       case 'growth_elixir': {
-        const plot = (targetId ? next.rooms.find(r => r.id === targetId) : undefined)
-          || next.rooms.find(r => r.state === 'built' && ['greenhouse', 'vegetable_patch', 'herb_garden', 'woodlot', 'orchard'].includes(r.defId));
+        const plot = (roomTargetId ? next.rooms.find(r => r.id === roomTargetId) : undefined)
+          || next.rooms.find(r => r.state === 'built' && ['greenhouse', 'vegetable_patch', 'herb_garden', 'woodlot', 'orchard', 'apiary'].includes(r.defId));
         next.activeBuffs.growthElixirBells = 10;
         next.activeBuffs.growthElixirRoomId = plot?.id;
         potionTargetRoomId = plot?.id;
@@ -4050,7 +6395,7 @@ export class AnkicasterEngine {
       }
 
       case 'beast_biscuit': {
-        const loose = (targetId ? next.creatures.find(c => c.id === targetId && c.status === 'loose') : undefined)
+        const loose = (creatureTargetId ? next.creatures.find(c => c.id === creatureTargetId && c.status === 'loose') : undefined)
           || next.creatures.find(c => c.status === 'loose');
         if (loose) {
           loose.status = 'tamed';
@@ -4059,7 +6404,7 @@ export class AnkicasterEngine {
           potionExtraEvent = 'creature_recaptured';
           message = `🐾 Beast Biscuit offered! ${loose.nickname} returned safely and is tamed.`;
         } else {
-          const wary = (targetId ? next.creatures.find(c => c.id === targetId && c.status === 'wary') : undefined)
+          const wary = (creatureTargetId ? next.creatures.find(c => c.id === creatureTargetId && c.status === 'wary') : undefined)
             || next.creatures.find(c => c.status === 'wary');
           if (wary) {
             wary.tamingProgress += 30;
@@ -4068,6 +6413,7 @@ export class AnkicasterEngine {
             const cDef = CREATURE_DEFINITIONS[wary.defId];
             if (cDef && wary.tamingProgress >= cDef.tamingReviews) {
               wary.status = 'tamed';
+              grantTamingOneTimeBonuses(next, wary);
               potionExtraEvent = 'creature_tamed';
               message = `🐾 Beast Biscuit fed! ${wary.nickname} is now fully tamed!`;
             } else {
@@ -4081,13 +6427,18 @@ export class AnkicasterEngine {
       }
 
       case 'lure_musk': {
+        const habitat = roomTargetId ? next.rooms.find(r => r.id === roomTargetId && r.state === 'built') : undefined;
         next.activeBuffs.lureMuskPending = true;
-        message = '🦊 Lure Musk scattered! A wild creature is guaranteed to visit on the next day tick.';
+        next.activeBuffs.lureMuskRoomId = habitat?.id;
+        potionTargetRoomId = habitat?.id;
+        message = habitat
+          ? `🦊 Lure Musk scattered in ${ROOM_DEFINITIONS[habitat.defId]?.name || 'habitat'}! A wild creature is guaranteed to visit on the next day tick.`
+          : '🦊 Lure Musk scattered! A wild creature is guaranteed to visit on the next day tick.';
         break;
       }
 
       case 'polishing_spirit': {
-        const room = (targetId ? next.rooms.find(r => r.id === targetId) : undefined)
+        const room = (roomTargetId ? next.rooms.find(r => r.id === roomTargetId) : undefined)
           || [...next.rooms].filter(r => r.state === 'built').sort((a, b) => a.cleanliness - b.cleanliness)[0];
         if (room) {
           room.cleanliness = 100;
@@ -4102,7 +6453,7 @@ export class AnkicasterEngine {
       }
 
       case 'fireproof_salve': {
-        const room = (targetId ? next.rooms.find(r => r.id === targetId) : undefined)
+        const room = (roomTargetId ? next.rooms.find(r => r.id === roomTargetId) : undefined)
           || next.rooms.find(r => r.state === 'built' && r.defId === 'alchemy_lab')
           || next.rooms.find(r => r.state === 'built');
         next.activeBuffs.fireproofBells = 50;
@@ -4113,7 +6464,7 @@ export class AnkicasterEngine {
       }
 
       case 'dreamless_draught': {
-        const dorm = (targetId ? next.rooms.find(r => r.id === targetId) : undefined)
+        const dorm = (roomTargetId ? next.rooms.find(r => r.id === roomTargetId) : undefined)
           || next.rooms.find(r => r.state === 'built' && (r.defId === 'dormitory' || r.defId === 'grand_dormitory'));
         const sleepers = dorm
           ? next.characters.filter(c => c.bedRoomId === dorm.id)
@@ -4143,7 +6494,7 @@ export class AnkicasterEngine {
           }
         }
         const targetRoom =
-          (targetId ? next.rooms.find(r => r.id === targetId && r.area === 'castle') : undefined) ||
+          (roomTargetId ? next.rooms.find(r => r.id === roomTargetId && r.area === 'castle') : undefined) ||
           next.rooms.find(r => r.state === 'built' && r.area === 'castle');
         if (targetRoom) {
           const floorY = targetRoom.y;
@@ -4157,7 +6508,7 @@ export class AnkicasterEngine {
       }
 
       case 'quickmortar': {
-        const site = (targetId ? next.rooms.find(r => r.id === targetId && r.state === 'site') : undefined)
+        const site = (roomTargetId ? next.rooms.find(r => r.id === roomTargetId && r.state === 'site') : undefined)
           || next.rooms.find(r => r.state === 'site');
         if (site) {
           site.buildProgress += 20;
@@ -4209,8 +6560,12 @@ export class AnkicasterEngine {
         const bag = next.resources as unknown as Record<string, number>;
         const cap = AnkicasterEngine.storageCap(next);
         const sortedDesc = [...commonKeys].sort((a, b) => (bag[b] || 0) - (bag[a] || 0));
-        const src = sortedDesc[0];
-        const dst = sortedDesc[sortedDesc.length - 1];
+        const src = tObj.fromResource && (commonKeys as readonly string[]).includes(tObj.fromResource)
+          ? tObj.fromResource
+          : sortedDesc[0];
+        const dst = tObj.toResource && (commonKeys as readonly string[]).includes(tObj.toResource) && tObj.toResource !== src
+          ? tObj.toResource
+          : sortedDesc.find(k => k !== src) || sortedDesc[sortedDesc.length - 1];
         if ((bag[src] || 0) >= 50 && src !== dst) {
           bag[src] -= 50;
           bag[dst] = (bag[dst] || 0) >= cap ? (bag[dst] || 0) : Math.min(cap, (bag[dst] || 0) + 40);
@@ -4250,6 +6605,7 @@ export class AnkicasterEngine {
       }
     });
 
+    syncCharmRenown(next);
     return { state: next, success: true, message };
   }
 
@@ -4277,7 +6633,7 @@ export class AnkicasterEngine {
 
     const hazardName = room.hazard.name;
     const hazardType = room.hazard.type;
-    room.hazard = undefined;
+    clearRoomHazard(next, room);
     room.cleanliness = Math.max(room.cleanliness, 80);
 
     next.notices.push({
@@ -4430,10 +6786,17 @@ export class AnkicasterEngine {
   ): { state: FullGameState; success: boolean; error?: string } {
     const next = structuredClone(state);
 
-    // Total sessions cap: max 5 sessions including active session
+    // Total sessions cap based on studyLevel (1+1=2 at Lv1, 1+2=3 at Lv2, 1+4=5 at Lv3)
+    const studyLvl = computeStudyLevel(next.wizard.levels);
+    next.wizard.studyLevel = studyLvl;
+    const maxSessions = maxStudySessionsForWizard(studyLvl);
     const totalSessions = (next.wizard.activeSession ? 1 : 0) + next.wizard.queuedSessions.length;
-    if (totalSessions >= 5) {
-      return { state, success: false, error: 'Maximum of 5 wizard training sessions (active + queued).' };
+    if (totalSessions >= maxSessions) {
+      return {
+        state,
+        success: false,
+        error: `Maximum of ${maxSessions} wizard training sessions at Study Level ${studyLvl} (active + ${maxSessions - 1} queued).`
+      };
     }
 
     let targetLevel = 1;
@@ -4448,6 +6811,12 @@ export class AnkicasterEngine {
       }
       if (next.wizard.knownSpells.includes(spDef.id)) {
         return { state, success: false, error: `${spDef.name} is already learned.` };
+      }
+      const alreadyStudying =
+        (next.wizard.activeSession?.kind === 'grimoire' && next.wizard.activeSession.spellId === spDef.id) ||
+        next.wizard.queuedSessions.some(q => q.kind === 'grimoire' && q.spellId === spDef.id);
+      if (alreadyStudying) {
+        return { state, success: false, error: `${spDef.name} is already in your study queue.` };
       }
       const tierReviews: Record<string, number> = { T1: 25, T2: 50, T3: 75, T4: 100, Cap: 150 };
       required = tierReviews[spDef.tier] || 50;
@@ -4532,12 +6901,16 @@ export class AnkicasterEngine {
    */
   static castSpell(
     state: FullGameState,
-    spellId: string
+    spellId: string,
+    target?: number | AlchemyTarget
   ): { state: FullGameState; success: boolean; error?: string; notice?: string } {
     const next = structuredClone(state);
     const beforeRes = resourceSnapshot(next);
     const spell = SPELL_DEFINITIONS[spellId];
     if (!spell) return { state, success: false, error: 'Unknown spell.' };
+
+    const tObj: AlchemyTarget = typeof target === 'object' && target !== null ? target : {};
+    const targetId = typeof target === 'number' ? target : tObj.roomId;
 
     if (!next.wizard.knownSpells.includes(spellId)) {
       return { state, success: false, error: `You have not learned ${spell.name} yet.` };
@@ -4563,15 +6936,23 @@ export class AnkicasterEngine {
       const commonKeys = ['timber', 'stone', 'glass', 'cloth', 'provisions', 'greens', 'fish', 'nectar'] as const;
       const bag = next.resources as unknown as Record<string, number>;
       const sortedDesc = [...commonKeys].sort((a, b) => (bag[b] || 0) - (bag[a] || 0));
-      transmuteSrc = sortedDesc[0];
-      transmuteDst = sortedDesc[sortedDesc.length - 1];
+      transmuteSrc = tObj.fromResource && (commonKeys as readonly string[]).includes(tObj.fromResource)
+        ? tObj.fromResource
+        : sortedDesc[0];
+      transmuteDst = tObj.toResource && (commonKeys as readonly string[]).includes(tObj.toResource) && tObj.toResource !== transmuteSrc
+        ? tObj.toResource
+        : sortedDesc.find(k => k !== transmuteSrc) || sortedDesc[sortedDesc.length - 1];
       if ((bag[transmuteSrc] || 0) < 60 || transmuteSrc === transmuteDst) {
         return { state, success: false, error: 'Need at least 60 of a common material to cast Transmute.' };
       }
     }
 
     next.mana -= manaCost;
-    next.wizard.spellCooldowns[spellId] = spell.cooldownReviews;
+    const sbCast = computeSpellbookBonuses(next.spellbooks || []);
+    next.wizard.spellCooldowns[spellId] = Math.max(
+      1,
+      Math.round(spell.cooldownReviews * (1 - sbCast.spellCooldownReductionPct))
+    );
     if (!next.activeBuffs) next.activeBuffs = {};
 
     let notice = `${spell.name} cast! ${spell.effect}`;
@@ -4580,14 +6961,14 @@ export class AnkicasterEngine {
     // Execute effect
     switch (spellId) {
       case 'glow': {
-        const target = next.rooms.find(r => r.hazard && (r.hazard.type === 'spill_of_night' || r.hazard.type === 'echo_loop'));
+        const target = next.rooms.find(r => r.hazard && (isNightInkType(r.hazard.type) || r.hazard.type === 'echo_loop'));
         if (target) {
           spellTargetRoomId = target.id;
           const floorY = target.y;
           let count = 0;
           for (const r of next.rooms) {
-            if (r.area === target.area && r.y === floorY && r.hazard && (r.hazard.type === 'spill_of_night' || r.hazard.type === 'echo_loop')) {
-              r.hazard = undefined;
+            if (r.area === target.area && r.y === floorY && r.hazard && (isNightInkType(r.hazard.type) || r.hazard.type === 'echo_loop')) {
+              clearRoomHazard(next, r);
               count++;
             }
           }
@@ -4600,11 +6981,11 @@ export class AnkicasterEngine {
         break;
       }
       case 'dispel': {
-        const target = next.rooms.find(r => r.hazard && r.hazard.type !== 'breach');
+        const target = next.rooms.find(r => r.hazard && !r.hazard.isBreach && r.hazard.type !== 'breach' && !['shade_breach', 'gloom_pack', 'veil_rent', 'wanderer'].includes(r.hazard.type));
         if (target && target.hazard) {
           spellTargetRoomId = target.id;
           const hName = target.hazard.name;
-          target.hazard = undefined;
+          clearRoomHazard(next, target);
           notice = `Dispel cast! ${hName} cleared from ${ROOM_DEFINITIONS[target.defId]?.name || 'room'}.`;
         } else {
           notice = 'Dispel cast! No non-breach hazards active.';
@@ -4614,6 +6995,7 @@ export class AnkicasterEngine {
       case 'foresight': {
         next.activeBuffs.foresightDays = 3;
         next.activeBuffs.foresightSkips = (next.activeBuffs.foresightSkips || 0) + 1;
+        ensureUpcomingEventsQueue(next);
         notice = "Foresight cast! Next 3 days' omens revealed and +1 event skip granted.";
         break;
       }
@@ -4648,7 +7030,7 @@ export class AnkicasterEngine {
         for (const r of next.rooms) {
           if (r.hazard && (r.hazard.type === 'cold_snap' || r.hazard.type === 'hex_fog')) {
             if (!spellTargetRoomId) spellTargetRoomId = r.id;
-            r.hazard = undefined;
+            clearRoomHazard(next, r);
             cleared++;
           }
         }
@@ -4666,6 +7048,7 @@ export class AnkicasterEngine {
             const cDef = CREATURE_DEFINITIONS[w.defId];
             if (cDef && w.tamingProgress >= cDef.tamingReviews) {
               w.status = 'tamed';
+              grantTamingOneTimeBonuses(next, w);
               tamedCount++;
             }
           }
@@ -4762,7 +7145,9 @@ export class AnkicasterEngine {
         for (const c of next.characters) {
           c.needs.composure = Math.min(100, c.needs.composure + 5);
         }
-        notice = 'Hush cast! Misbehavior calmed and Composure +5.';
+        const clearedChains = clearRoomMisbehaviorChains(next, targetId);
+        if (targetId != null) spellTargetRoomId = targetId;
+        notice = `Hush cast! Misbehavior calmed${clearedChains > 0 ? ` (${clearedChains} chain(s) cleared)` : ''} and Composure +5.`;
         break;
       }
       case 'ward_pulse': {
@@ -4771,10 +7156,12 @@ export class AnkicasterEngine {
         break;
       }
       case 'banish': {
-        const breachRoom = next.rooms.find(r => r.hazard?.type === 'breach');
+        const breachRoom = next.rooms.find(
+          r => r.hazard && (r.hazard.isBreach || ['breach', 'shade_breach', 'gloom_pack', 'veil_rent', 'wanderer'].includes(r.hazard.type))
+        );
         if (breachRoom) {
           spellTargetRoomId = breachRoom.id;
-          breachRoom.hazard = undefined;
+          clearRoomHazard(next, breachRoom);
           notice = `Banish cast! Breach in ${ROOM_DEFINITIONS[breachRoom.defId]?.name || 'room'} resolved immediately.`;
         } else {
           notice = 'Banish cast! (No active breach found.)';
@@ -4809,10 +7196,13 @@ export class AnkicasterEngine {
         break;
       }
       case 'douse': {
-        const target = next.rooms.find(r => r.hazard) || next.rooms.find(r => r.state === 'built');
+        const target =
+          next.rooms.find(r => r.hazard && (r.hazard.type === 'kitchen_fire' || r.hazard.type === 'bubbling_cauldron'))
+          || next.rooms.find(r => r.hazard)
+          || next.rooms.find(r => r.state === 'built');
         if (target) {
           spellTargetRoomId = target.id;
-          if (target.hazard) target.hazard = undefined;
+          if (target.hazard) clearRoomHazard(next, target);
           next.activeBuffs.fireproofBells = Math.max(next.activeBuffs.fireproofBells || 0, 20);
           next.activeBuffs.fireproofRoomId = target.id;
           notice = `Douse cast! ${ROOM_DEFINITIONS[target.defId]?.name || 'Room'} fireproofed for 20 bells.`;
@@ -4861,6 +7251,7 @@ export class AnkicasterEngine {
       }
     });
     logResourceDiff(next, beforeRes, spell.name || 'Spell');
+    syncCharmRenown(next);
 
     return { state: next, success: true, notice };
   }
@@ -4873,13 +7264,64 @@ export class AnkicasterEngine {
     potionId: string
   ): { state: FullGameState; success: boolean; error?: string } {
     const next = structuredClone(state);
+    const beforeRes = resourceSnapshot(next);
     const potion = next.potions.find(p => p.id === potionId);
     if (!potion) return { state, success: false, error: 'Potion recipe not found.' };
     if (!potion.discovered) return { state, success: false, error: `${potion.name} recipe is not discovered yet.` };
 
-    const lab = next.rooms.find(r => r.defId === 'alchemy_lab' && r.state === 'built' && !isRoomUnfinished(r));
-    if (!lab) {
+    const labs = next.rooms.filter(r => r.defId === 'alchemy_lab' && r.state === 'built' && !isRoomUnfinished(r));
+    if (labs.length === 0) {
       return { state, success: false, error: 'Requires a built and furnished Alchemy Lab.' };
+    }
+
+    const activeAlchemistsForLab = (labId: number) =>
+      next.characters.filter(
+        c => c.career === 'alchemist' && c.careerState === 'active' && c.status !== 'away' && !c.injury && c.workplaceRoomId === labId
+      );
+
+    if (potion.tier !== 'basic') {
+      const hasAnyAlch = labs.some(l => activeAlchemistsForLab(l.id).length > 0);
+      if (!hasAnyAlch) {
+        return {
+          state,
+          success: false,
+          error: `${potion.name} (${potion.tier}) requires an Alchemist on duty in the Alchemy Lab.`
+        };
+      }
+    }
+
+    const eligibleLabs = potion.tier !== 'basic'
+      ? labs.filter(l => activeAlchemistsForLab(l.id).length > 0)
+      : [...labs].sort((a, b) => activeAlchemistsForLab(b.id).length - activeAlchemistsForLab(a.id).length);
+
+    if (!next.brewingQueue) next.brewingQueue = [];
+    const hasPhilosophersHour = (next.activeBuffs?.philosophersHourBrews || 0) > 0;
+    const isBasicInstant = (l: PlacedRoom) =>
+      potion.tier === 'basic' && (l.furniture || []).some(f => f.defId === 'everburning_athanor' && !f.damaged);
+
+    let chosenLab = eligibleLabs[0];
+    let chosenStation = 0;
+    const instantEligible = hasPhilosophersHour ? chosenLab : eligibleLabs.find(isBasicInstant);
+    if (instantEligible) {
+      chosenLab = instantEligible;
+    } else {
+      let foundSlot = false;
+      for (const l of eligibleLabs) {
+        const cap = l.level >= 3 ? 3 : 2;
+        const usedStations = new Set(next.brewingQueue.filter(j => j.roomId === l.id).map(j => j.stationIndex));
+        for (let sIdx = 0; sIdx < cap; sIdx++) {
+          if (!usedStations.has(sIdx)) {
+            chosenLab = l;
+            chosenStation = sIdx;
+            foundSlot = true;
+            break;
+          }
+        }
+        if (foundSlot) break;
+      }
+      if (!foundSlot) {
+        return { state, success: false, error: 'All Alchemy Lab brewing stations are busy.' };
+      }
     }
 
     const bag = next.resources as unknown as Record<string, number>;
@@ -4888,13 +7330,12 @@ export class AnkicasterEngine {
       return { state, success: false, error: `Missing ingredients: ${missing.join(', ')}.` };
     }
 
-    const brewBonus = academyFurnitureEffect(next.rooms, 'brew_speed_pct', lab);
-    const alchemists = next.characters.filter(c => c.career === 'alchemist' && c.careerState === 'active' && c.workplaceRoomId === lab.id);
+    const brewBonus = academyFurnitureEffect(next.rooms, 'brew_speed_pct', chosenLab);
+    const alchemists = activeAlchemistsForLab(chosenLab.id);
     const alchMult = alchemists.length > 0
       ? Math.max(...alchemists.map(a => careerAffinityMultiplier(a.masteredSchools, 'alchemist', potion.school)))
       : 1;
     const baseManaCost = Math.max(10, Math.round(30 * Math.max(0.5, 1 - brewBonus / 100)));
-    const hasPhilosophersHour = (next.activeBuffs?.philosophersHourBrews || 0) > 0;
     const manaCost = hasPhilosophersHour ? 0 : Math.max(10, Math.round(baseManaCost / alchMult));
     if (next.mana < manaCost) {
       return { state, success: false, error: `Need ${manaCost} Mana for alchemical reagent catalyst.` };
@@ -4904,22 +7345,41 @@ export class AnkicasterEngine {
     for (const ing of potion.ingredients) {
       bag[ing] -= 1;
     }
-    const yieldCount = hasPhilosophersHour ? 2 : 1;
-    if (hasPhilosophersHour && next.activeBuffs) {
-      next.activeBuffs.philosophersHourBrews = (next.activeBuffs.philosophersHourBrews || 1) - 1;
+    logResourceDiff(next, beforeRes, `Brew ${potion.name}`);
+
+    const usedAlchemist = alchemists.length > 0;
+    if (hasPhilosophersHour || isBasicInstant(chosenLab)) {
+      if (hasPhilosophersHour && next.activeBuffs) {
+        next.activeBuffs.philosophersHourBrews = (next.activeBuffs.philosophersHourBrews || 1) - 1;
+      }
+      completeBrewJob(next, potionId, chosenLab, usedAlchemist, hasPhilosophersHour);
+      return { state: next, success: true };
     }
-    next.resources.potions[potionId] = (next.resources.potions[potionId] || 0) + yieldCount;
+
+    const hasAlembicArray = (chosenLab.furniture || []).some(f => f.defId === 'alembic_array' && !f.damaged);
+    const baseReviews = potion.reviewsToBrew || (potion.tier === 'basic' ? 20 : potion.tier === 'advanced' ? 40 : potion.tier === 'rare' ? 80 : 120);
+    const required = Math.max(1, Math.round(baseReviews * (hasAlembicArray ? 0.8 : 1)));
+    const jobId = uniqueNumericId(next.brewingQueue.map(j => j.id));
+
+    next.brewingQueue.push({
+      id: jobId,
+      recipeId: potionId,
+      stationIndex: chosenStation,
+      roomId: chosenLab.id,
+      progress: 0,
+      required,
+      usedAlchemist
+    });
 
     next.notices.push({
-      id: uniqueNoticeId('brew', next),
+      id: uniqueNoticeId('brew-start', next),
       time: Date.now(),
       type: 'alchemy',
-      text: `Brewed ${yieldCount}x ${potion.name}! (${potion.effect})`,
+      text: `⚗️ Started brewing ${potion.name} on Station ${chosenStation + 1} (${required} reviews${usedAlchemist ? ', Alchemist x2 speed' : ''}).`,
       data: {
         potionId,
-        roomId: lab.id,
-        school: potion.school,
-        visualEventType: 'potion_brewed'
+        roomId: chosenLab.id,
+        school: potion.school
       }
     });
 
@@ -4947,7 +7407,13 @@ export class AnkicasterEngine {
     next.draftHistory = { ...(next.draftHistory || {}) };
     next.draftHistory[deck] = (next.draftHistory[deck] || 0) + 1;
 
-    const cards = dealDraft(next, deck, rng);
+    const chronoAvailable = creatureSpeciesBuffSum(next, 'chronoflare_owl') > 0 && next.lastChronoflareDraftDay !== next.day;
+    const cardCount = chronoAvailable ? 4 : 3;
+    if (chronoAvailable) {
+      next.lastChronoflareDraftDay = next.day;
+    }
+
+    const cards = dealDraft(next, deck, rng, cardCount);
     const hadRoom = cards.some(c => c.type === 'blueprint');
     next.roomlessStreak = { ...(next.roomlessStreak || {}) };
     next.roomlessStreak[deck] = hadRoom ? 0 : (next.roomlessStreak[deck] || 0) + 1;
@@ -5545,7 +8011,793 @@ export class AnkicasterEngine {
       }
     });
     logResourceDiff(next, beforeRes, 'Gate event');
+    checkEndlessSpellbookMilestones(next);
 
     return { state: next, summary };
+  }
+
+  /**
+   * Player action: Reinforce the Veil (§18.3)
+   * Costs 1x today's Veil upkeep mana, boosts Veil strength +15 (max 100), and ends any active Veil Rent breaches.
+   */
+  static reinforceVeil(
+    state: FullGameState
+  ): { state: FullGameState; success: boolean; error?: string; clearedRents?: number } {
+    const next = structuredClone(state);
+    const veilSummary = computeAcademyVeilSummary(next);
+    next.veil.costToday = veilSummary.cost;
+    next.veil.reductions = veilSummary.reductions;
+    const cost = Math.max(1, veilSummary.cost);
+    if (next.mana < cost) {
+      return { state, success: false, error: `Need ${cost} Mana (1x daily Veil upkeep) to reinforce the Veil.` };
+    }
+    next.mana -= cost;
+    next.veil.strength = Math.min(100, next.veil.strength + 15);
+    let clearedRents = 0;
+    for (const room of next.rooms) {
+      if (room.hazard?.type === 'veil_rent') {
+        clearRoomHazard(next, room);
+        clearedRents++;
+      }
+    }
+    const ehRoom = next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || next.rooms[0];
+    next.notices.push({
+      id: uniqueNoticeId('veil-reinforce', next),
+      time: Date.now(),
+      type: 'veil',
+      text: `🛡️ Reinforced the Veil (${cost} mana): strength is now ${next.veil.strength}%${clearedRents > 0 ? ` and sealed ${clearedRents} Veil Rent` : ''}.`,
+      data: { roomId: ehRoom?.id }
+    });
+    return { state: next, success: true, clearedRents };
+  }
+
+  /**
+   * Resolve a Wanderer from Beyond breach (§19.4): feed 20 Provisions or engage an active Tamer.
+   */
+  static resolveWanderer(
+    state: FullGameState,
+    roomId: number,
+    method: 'feed' | 'tame'
+  ): { state: FullGameState; success: boolean; error?: string; message?: string } {
+    const next = structuredClone(state);
+    const room = next.rooms.find(r => r.id === roomId);
+    if (!room || room.hazard?.type !== 'wanderer') {
+      return { state, success: false, error: 'No Wanderer from Beyond present in this room.' };
+    }
+
+    if (method === 'feed') {
+      if (next.resources.provisions < 20) {
+        return { state, success: false, error: 'Need 20 Provisions to feed the Wanderer.' };
+      }
+      const beforeRes = resourceSnapshot(next);
+      next.resources.provisions -= 20;
+      clearRoomHazard(next, room, undefined, 'fed 20 Provisions');
+      logResourceDiff(next, beforeRes, 'Fed Wanderer from Beyond');
+      const msg = '🍖 Fed the Wanderer 20 Provisions — it drifted peacefully back beyond the Veil.';
+      next.notices.push({
+        id: uniqueNoticeId('wanderer-fed', next),
+        time: Date.now(),
+        type: 'hazard',
+        text: msg,
+        data: { roomId, hazardType: 'wanderer', visualEventType: 'hazard_cleared' }
+      });
+      return { state: next, success: true, message: msg };
+    }
+
+    const activeTamers = next.characters.filter(
+      c => c.career === 'tamer' && c.careerState === 'active' && c.status !== 'away' && !c.injury
+    );
+    if (activeTamers.length === 0) {
+      return { state, success: false, error: 'Requires an active Tamer on duty to tame the Wanderer.' };
+    }
+    const req = room.hazard.tamingRequired || 160;
+    const prog = room.hazard.tamingProgress || 0;
+    if (prog >= req) {
+      const rareDefs = Object.values(CREATURE_DEFINITIONS).filter(cd => cd.rarity === 'rare');
+      const pool = rareDefs.length > 0 ? rareDefs : Object.values(CREATURE_DEFINITIONS);
+      const pickedDef = pool[Math.floor(Math.random() * pool.length)];
+      clearRoomHazard(next, room, undefined, 'tamed');
+      if (pickedDef) {
+        const newCid = uniqueNumericId(next.creatures.map(c => c.id));
+        next.creatures.push({
+          id: newCid,
+          defId: pickedDef.id,
+          nickname: pickedDef.name,
+          status: 'tamed',
+          hungry: false,
+          hatchProgress: 0,
+          tamingProgress: pickedDef.tamingReviews,
+          bondLevel: 1,
+          bondProgress: 0,
+          arrivedDay: next.day
+        });
+        syncDiscoveredCreatures(next);
+      }
+      return { state: next, success: true, message: `🌟 Tamed the Wanderer into a ${pickedDef?.name || 'rare creature'}!` };
+    }
+    const mult = Math.max(...activeTamers.map(t => careerAffinityMultiplier(t.masteredSchools, 'tamer')));
+    room.hazard.tamingProgress = Math.min(req, prog + Math.round(10 * mult));
+    return {
+      state: next,
+      success: true,
+      message: `🐾 Your Tamer is coaxing the Wanderer (${Math.round(room.hazard.tamingProgress)}/${req} reviews; advances with honest reviews).`
+    };
+  }
+
+  /**
+   * How many days of upcoming events the Observatory + Foresight currently reveal (0..3).
+   */
+  static getForecastDepth(state: FullGameState): number {
+    const hasObservatory = state.rooms.some(
+      r => r.defId === 'observatory' && r.state === 'built' && !isRoomUnfinished(r)
+    );
+    let obsDepth = hasObservatory ? 1 : 0;
+    if (hasObservatory && state.characters.some(c => c.status !== 'away' && c.traits?.includes('Star-Touched'))) {
+      obsDepth += 1;
+    }
+    if (creatureSpeciesBuffSum(state, 'star_heron') > 0) {
+      obsDepth += 1;
+    }
+    if (bestBuffScale(state.creatures, 'mistfeather_owl') > 0 && creatureSpeciesBuffSum(state, 'mistfeather_owl') > 0) {
+      obsDepth += 1;
+    }
+    const spellDays = state.activeBuffs?.foresightDays || 0;
+    return Math.min(3, Math.max(obsDepth, spellDays));
+  }
+
+  /**
+   * Return the visible forecasted upcoming events without mutating the caller's state.
+   */
+  static getVisibleForecast(
+    state: FullGameState
+  ): Array<{ day: number; eventId: string; eventName: string; description: string }> {
+    const depth = AnkicasterEngine.getForecastDepth(state);
+    if (depth <= 0) return [];
+    const queue = (state.upcomingEvents || []).filter(e => e.day > state.day).sort((a, b) => a.day - b.day);
+    return queue.slice(0, depth).map(entry => {
+      if (entry.eventId === 'none') {
+        return { day: entry.day, eventId: 'none', eventName: 'Quiet Skies', description: 'No event scheduled to arrive.' };
+      }
+      const ev = SCHOOL_EVENTS.find(e => e.id === entry.eventId);
+      return {
+        day: entry.day,
+        eventId: entry.eventId,
+        eventName: ev?.name || entry.eventId,
+        description: ev?.description || 'An omen stirs at the Academy gates.'
+      };
+    });
+  }
+
+  /**
+   * Spend 1 Foresight skip charge to avert a forecasted upcoming event before it arrives.
+   */
+  static skipForecastedEvent(
+    state: FullGameState,
+    day: number
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const skips = state.activeBuffs?.foresightSkips || 0;
+    if (skips <= 0) {
+      return { state, success: false, error: 'Cast Foresight to gain an event skip charge.' };
+    }
+    const next = structuredClone(state);
+    ensureUpcomingEventsQueue(next);
+    const entry = (next.upcomingEvents || []).find(e => e.day === day);
+    if (!entry || entry.eventId === 'none') {
+      return { state, success: false, error: 'No incoming event on that forecasted day to skip.' };
+    }
+    const evName = SCHOOL_EVENTS.find(e => e.id === entry.eventId)?.name || entry.eventId;
+    entry.eventId = 'none';
+    if (!next.activeBuffs) next.activeBuffs = {};
+    next.activeBuffs.foresightSkips = Math.max(0, (next.activeBuffs.foresightSkips || 1) - 1);
+    const ehRoom = next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || next.rooms[0];
+    next.notices.push({
+      id: uniqueNoticeId(`skip-event-${day}`, next),
+      time: Date.now(),
+      type: 'event',
+      text: `🔮 Foresight averted "${evName}" scheduled for Day ${day}.`,
+      data: { roomId: ehRoom?.id }
+    });
+    return { state: next, success: true };
+  }
+
+  /**
+   * Generate Renown-weighted applicant candidates for the Recruitment Board (§14).
+   */
+  static generateApplicants(
+    state: FullGameState,
+    count: number = 4
+  ): Array<{ name: string; personality: PersonalityType; traits: string[]; bio: string }> {
+    return generateApplicantsForState(state, count);
+  }
+
+  /**
+   * Perform the Sunlit Sanctum's Rite of Renewal: once every 7 days, spend 50 Radiance
+   * to remove 1 Troublesome trait from a chosen character.
+   */
+  static performRiteOfRenewal(
+    state: FullGameState,
+    characterId: number,
+    traitId: string
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const sanctum = state.rooms.find(r => r.defId === 'sunlit_sanctum' && r.state === 'built' && !isRoomUnfinished(r));
+    if (!sanctum) {
+      return { state, success: false, error: 'Requires a built and furnished Sunlit Sanctum.' };
+    }
+    if (state.sanctumRenewalLastDay != null && state.day - state.sanctumRenewalLastDay < 7) {
+      const remaining = 7 - (state.day - state.sanctumRenewalLastDay);
+      return { state, success: false, error: `Rite of Renewal on cooldown (${remaining} day(s) remaining).` };
+    }
+    if ((state.resources.radiance || 0) < 50) {
+      return { state, success: false, error: 'Need 50 Radiance to perform the Rite of Renewal.' };
+    }
+
+    const next = structuredClone(state);
+    const char = next.characters.find(c => c.id === characterId);
+    if (!char) {
+      return { state, success: false, error: 'Character not found.' };
+    }
+    const tDef = TRAIT_DEFINITIONS[traitId];
+    if (!tDef || tDef.category !== 'troublesome') {
+      return { state, success: false, error: 'Select a troublesome trait to cleanse.' };
+    }
+    if (!char.traits.includes(traitId)) {
+      return { state, success: false, error: `${char.name} does not have the ${traitId} trait.` };
+    }
+
+    const beforeRad = next.resources.radiance || 0;
+    next.resources.radiance = beforeRad - 50;
+    logResourceChange(next, 'radiance', -50, 'Rite of Renewal');
+    char.traits = char.traits.filter(t => t !== traitId);
+    next.sanctumRenewalLastDay = next.day;
+    char.chronicle.push({ day: next.day, text: `Cleansed "${traitId}" via Sunlit Sanctum's Rite of Renewal.` });
+
+    next.notices.push({
+      id: uniqueNoticeId(`renewal-${char.id}`, next),
+      time: Date.now(),
+      type: 'event',
+      text: `☀️ Rite of Renewal: ${char.name} shed the "${traitId}" trait in the Sunlit Sanctum (-50 Radiance).`,
+      data: { roomId: sanctum.id, characterIds: [char.id] }
+    });
+
+    return { state: next, success: true };
+  }
+
+  /**
+   * Repair damaged furniture at 25% of its material cost (rounded up, min 1 per non-mana material).
+   */
+  static repairFurniture(
+    state: FullGameState,
+    roomId: number,
+    furnitureId: number
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const next = structuredClone(state);
+    const room = next.rooms.find(r => r.id === roomId);
+    if (!room) return { state, success: false, error: 'Room not found.' };
+    const piece = room.furniture.find(f => f.id === furnitureId);
+    if (!piece) return { state, success: false, error: 'Furniture not found.' };
+    if (!piece.damaged) return { state, success: false, error: 'Furniture is not damaged.' };
+
+    const fDef = FURNITURE_DEFINITIONS[piece.defId];
+    const repairCost: Array<[string, number]> = [];
+    if (fDef?.cost) {
+      for (const [k, rawVal] of Object.entries(fDef.cost)) {
+        if (k === 'mana' || !rawVal || rawVal <= 0) continue;
+        repairCost.push([k, Math.max(1, Math.round(rawVal * 0.25))]);
+      }
+    }
+
+    const bag = next.resources as unknown as Record<string, number>;
+    for (const [k, amt] of repairCost) {
+      if ((bag[k] || 0) < amt) {
+        return { state, success: false, error: `Need ${amt} ${k} to repair ${fDef?.name || piece.defId}.` };
+      }
+    }
+    for (const [k, amt] of repairCost) {
+      bag[k] = (bag[k] || 0) - amt;
+      logResourceChange(next, k, -amt, `Repair ${fDef?.name || piece.defId}`);
+    }
+
+    piece.damaged = false;
+    syncCharmRenown(next);
+    next.notices.push({
+      id: uniqueNoticeId(`repair-${roomId}-${furnitureId}`, next),
+      time: Date.now(),
+      type: 'build',
+      text: `🔧 Repaired ${fDef?.name || piece.defId} in ${ROOM_DEFINITIONS[room.defId]?.name || room.defId}.`,
+      data: { roomId }
+    });
+
+    return { state: next, success: true };
+  }
+
+  /**
+   * Configure which habitat modules an Grand Menagerie supports (2 at Lv1, 3 at Lv2, 4 at Lv3).
+   */
+  static setMenagerieModules(
+    state: FullGameState,
+    roomId: number,
+    modules: HabitatType[]
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const room = state.rooms.find(r => r.id === roomId && r.defId === 'menagerie' && r.state === 'built');
+    if (!room) {
+      return { state, success: false, error: 'Built Grand Menagerie not found.' };
+    }
+    const cap = menagerieModuleCap(room.level);
+    const valid = Array.from(new Set(modules.filter((m): m is HabitatType => ALL_HABITATS.includes(m))));
+    if (valid.length === 0) {
+      return { state, success: false, error: 'Select at least 1 habitat module.' };
+    }
+    if (valid.length > cap) {
+      return { state, success: false, error: `Menagerie Lv ${room.level} supports at most ${cap} habitat modules.` };
+    }
+
+    const next = structuredClone(state);
+    const target = next.rooms.find(r => r.id === roomId)!;
+    target.settings = { ...(target.settings || {}), modules: valid };
+    next.notices.push({
+      id: uniqueNoticeId(`menagerie-mods-${roomId}`, next),
+      time: Date.now(),
+      type: 'build',
+      text: `🐾 Menagerie habitat modules set to: ${valid.join(', ')}.`,
+      data: { roomId }
+    });
+    return { state: next, success: true };
+  }
+
+  /**
+   * Craft/awaken a Geode Golem at a built Workshop using 3 Golem Cores into an open Crystal habitat.
+   */
+  static awakenGeodeGolem(
+    state: FullGameState
+  ): { state: FullGameState; success: boolean; error?: string; creatureId?: number } {
+    const workshop = state.rooms.find(r => r.defId === 'workshop' && r.state === 'built' && !isRoomUnfinished(r));
+    if (!workshop) {
+      return { state, success: false, error: 'Requires a built and furnished Workshop.' };
+    }
+    if ((state.resources.golem_core || 0) < 3) {
+      return { state, success: false, error: 'Need 3 Golem Cores to awaken a Geode Golem.' };
+    }
+
+    const next = structuredClone(state);
+    const openCrystalPen = next.rooms.find(
+      r =>
+        r.state === 'built' &&
+        !isRoomUnfinished(r) &&
+        roomAcceptedHabitats(r).includes('crystal') &&
+        getPenOccupants(next, r).length < penCreatureCapacity(r)
+    );
+    if (!openCrystalPen) {
+      return {
+        state,
+        success: false,
+        error: 'Requires an open Crystal habitat (Crystal Vivarium or Menagerie with Crystal module) with free space.'
+      };
+    }
+
+    next.resources.golem_core = Math.max(0, (next.resources.golem_core || 0) - 3);
+    logResourceChange(next, 'golem_core', -3, 'Awaken Geode Golem');
+
+    const newId = uniqueNumericId(next.creatures.map(c => c.id));
+    next.creatures.push({
+      id: newId,
+      defId: 'geode_golem',
+      nickname: CREATURE_DEFINITIONS.geode_golem?.name || 'Geode Golem',
+      roomId: openCrystalPen.id,
+      status: 'wary',
+      hungry: false,
+      hatchProgress: 0,
+      tamingProgress: 0,
+      bondLevel: 1,
+      bondProgress: 0,
+      arrivedDay: next.day
+    });
+    syncDiscoveredCreatures(next);
+    next.notices.push({
+      id: uniqueNoticeId(`awaken-golem-${newId}`, next),
+      time: Date.now(),
+      type: 'creature_arrival',
+      text: `💎 Awakened a wary Geode Golem at the Workshop and housed it in ${roomDisplayName(openCrystalPen)}!`,
+      data: { roomId: openCrystalPen.id, creatureId: newId, visualEventType: 'creature_arrival' }
+    });
+
+    return { state: next, success: true, creatureId: newId };
+  }
+
+  /**
+   * Configure mixed crop beds inside a Greenhouse (2 beds at Lv 1-2, 3 beds at Lv 3).
+   */
+  static setGreenhouseCrops(
+    state: FullGameState,
+    roomId: number,
+    crops: string[]
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const room = state.rooms.find(r => r.id === roomId && r.defId === 'greenhouse' && r.state === 'built');
+    if (!room) {
+      return { state, success: false, error: 'Built Greenhouse not found.' };
+    }
+    const bedCap = (room.level || 1) >= 3 ? 3 : 2;
+    if (crops.length === 0 || crops.length > bedCap) {
+      return { state, success: false, error: `Greenhouse Lv ${room.level} supports 1 to ${bedCap} crop beds.` };
+    }
+    const natureLvl = state.wizard?.levels?.nature || 0;
+    const unlockedSeeds = new Set(state.resources?.seedsUnlocked || []);
+    for (const cid of crops) {
+      const def = GREENHOUSE_CROPS[cid];
+      if (!def) {
+        return { state, success: false, error: `Unknown crop: ${cid}.` };
+      }
+      if (def.unlock === 'nature_l3' && natureLvl < 3) {
+        return { state, success: false, error: `${def.name} requires Headmaster Nature Lv 3.` };
+      }
+      if ((def.unlock === 'draft' || def.unlock === 'rift') && !unlockedSeeds.has(cid)) {
+        return { state, success: false, error: `${def.name} seeds have not been unlocked yet.` };
+      }
+    }
+
+    const next = structuredClone(state);
+    const target = next.rooms.find(r => r.id === roomId)!;
+    target.settings = { ...(target.settings || {}), crops: [...crops], crop: crops[0] };
+    next.notices.push({
+      id: uniqueNoticeId(`greenhouse-crops-${roomId}`, next),
+      time: Date.now(),
+      type: 'build',
+      text: `🌱 Greenhouse beds planted: ${crops.map(id => GREENHOUSE_CROPS[id]?.name || id).join(', ')}.`,
+      data: { roomId }
+    });
+    return { state: next, success: true };
+  }
+
+  /**
+   * Toggle Glassworks stone-to-glass conversion active state (room.settings.glassworksActive).
+   */
+  static setGlassworksActive(
+    state: FullGameState,
+    roomId: number,
+    active: boolean
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const room = state.rooms.find(r => r.id === roomId && r.defId === 'glassworks' && r.state === 'built');
+    if (!room) {
+      return { state, success: false, error: 'Built Glassworks not found.' };
+    }
+    const next = structuredClone(state);
+    const target = next.rooms.find(r => r.id === roomId)!;
+    target.settings = { ...(target.settings || {}), glassworksActive: active };
+    next.notices.push({
+      id: uniqueNoticeId(`glassworks-${roomId}`, next),
+      time: Date.now(),
+      type: 'build',
+      text: active ? '🪟 Glassworks furnace lit (converting Stone to Glass each bell).' : '🪟 Glassworks furnace banked (conversion paused).',
+      data: { roomId }
+    });
+    return { state: next, success: true };
+  }
+
+  /**
+   * Library Action: Spend Insight (30 base, -10% per active Scholar in Library down to 21)
+   * to reveal 1 ingredient hint of an undiscovered potion recipe (GDD §25.3).
+   */
+  static researchRecipe(
+    state: FullGameState,
+    roomId?: number,
+    recipeId?: string
+  ): { state: FullGameState; success: boolean; error?: string; recipeId?: string; ingredient?: string } {
+    const libs = state.rooms.filter(
+      r => r.defId === 'library' && r.state === 'built' && !isRoomUnfinished(r) && !AnkicasterEngine.roomIsLocked(state, r)
+    );
+    const lib = roomId != null ? libs.find(r => r.id === roomId) : libs[0];
+    if (!lib) {
+      return { state, success: false, error: 'Requires a built, furnished, and unlocked Library.' };
+    }
+
+    const activeLibraryScholars = state.characters.filter(
+      c =>
+        c.career === 'scholar' &&
+        c.careerState === 'active' &&
+        c.status !== 'away' &&
+        !c.injury &&
+        libs.some(l => l.id === c.workplaceRoomId)
+    ).length;
+    const cost = Math.max(21, Math.round(30 * (1 - Math.min(0.3, activeLibraryScholars * 0.1))));
+    if ((state.resources.insight || 0) < cost) {
+      return { state, success: false, error: `Need ${cost} Insight to research an alchemy recipe.` };
+    }
+
+    const hintsMap = state.discoveredHints || {};
+    const undiscovered = state.potions.filter(p => !p.discovered);
+    if (undiscovered.length === 0) {
+      return { state, success: false, error: 'All potion recipes are already discovered!' };
+    }
+    const candidate = recipeId
+      ? undiscovered.find(p => p.id === recipeId)
+      : undiscovered.find(p => {
+          const known = hintsMap[p.id] || [];
+          return p.ingredients.some(ing => !known.includes(ing));
+        });
+    if (!candidate) {
+      return { state, success: false, error: 'All undiscovered recipe ingredients have already been hinted.' };
+    }
+    const knownForTarget = hintsMap[candidate.id] || [];
+    const nextIngredient = candidate.ingredients.find(ing => !knownForTarget.includes(ing));
+    if (!nextIngredient) {
+      return { state, success: false, error: `All ingredients for ${candidate.name} are already revealed.` };
+    }
+
+    const next = structuredClone(state);
+    next.resources.insight = Math.max(0, (next.resources.insight || 0) - cost);
+    logResourceChange(next, 'insight', -cost, 'Library Recipe Research');
+    if (!next.discoveredHints) next.discoveredHints = {};
+    next.discoveredHints[candidate.id] = [...(next.discoveredHints[candidate.id] || []), nextIngredient];
+    next.notices.push({
+      id: uniqueNoticeId(`research-${candidate.id}`, next),
+      time: Date.now(),
+      type: 'alchemy',
+      text: `📖 Library Research (-${cost} Insight): ${candidate.name} uses "${nextIngredient}"!`,
+      data: { roomId: lib.id, potionId: candidate.id }
+    });
+    return { state: next, success: true, recipeId: candidate.id, ingredient: nextIngredient };
+  }
+
+  /**
+   * Scriptorium Action: Queue a review-timed Scroll crafting job (GDD §25.4).
+   */
+  static startScrollCraft(
+    state: FullGameState,
+    roomId: number,
+    scrollId: ScrollId
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const def = SCROLL_DEFINITIONS[scrollId];
+    if (!def) {
+      return { state, success: false, error: `Unknown scroll: ${scrollId}.` };
+    }
+    const scriptorium = state.rooms.find(
+      r => r.id === roomId && r.defId === 'scriptorium' && r.state === 'built' && !isRoomUnfinished(r) && !AnkicasterEngine.roomIsLocked(state, r)
+    );
+    if (!scriptorium) {
+      return { state, success: false, error: 'Requires a built, furnished, and unlocked Scriptorium.' };
+    }
+    if ((state.scrollQueue || []).some(j => j.roomId === roomId)) {
+      return { state, success: false, error: 'This Scriptorium is already crafting a scroll.' };
+    }
+
+    const next = structuredClone(state);
+    const beforeRes = resourceSnapshot(next);
+    const bag = next.resources as unknown as Record<string, number>;
+    for (const [k, amt] of Object.entries(def.cost)) {
+      if ((bag[k] || 0) < amt) {
+        return { state, success: false, error: `Need ${amt} ${k} to inscribe ${def.name}.` };
+      }
+    }
+    for (const [k, amt] of Object.entries(def.cost)) {
+      bag[k] = (bag[k] || 0) - amt;
+    }
+    logResourceDiff(next, beforeRes, `Inscribe ${def.name}`);
+
+    if (!next.scrollQueue) next.scrollQueue = [];
+    const jobId = uniqueNumericId(next.scrollQueue.map(j => j.id));
+    next.scrollQueue.push({
+      id: jobId,
+      scrollId,
+      roomId,
+      progress: 0,
+      required: def.craftReviews
+    });
+    next.notices.push({
+      id: uniqueNoticeId(`scroll-start-${scrollId}`, next),
+      time: Date.now(),
+      type: 'alchemy',
+      text: `📜 Started inscribing ${def.name} in the Scriptorium (${def.craftReviews} reviews base).`,
+      data: { roomId }
+    });
+    return { state: next, success: true };
+  }
+
+  /**
+   * Consume a crafted Scriptorium Scroll from inventory (GDD §25.4).
+   */
+  static useScroll(
+    state: FullGameState,
+    scrollId: ScrollId,
+    target?: { roomId?: number; floorY?: number; recipeId?: string }
+  ): { state: FullGameState; success: boolean; error?: string; message?: string } {
+    const owned = state.scrolls?.[scrollId] || 0;
+    if (owned <= 0) {
+      return { state, success: false, error: `No ${SCROLL_DEFINITIONS[scrollId]?.name || scrollId} scrolls in inventory.` };
+    }
+
+    const next = structuredClone(state);
+    if (!next.scrolls) next.scrolls = {};
+    next.scrolls[scrollId] = owned - 1;
+    if (!next.activeBuffs) next.activeBuffs = {};
+    let message = `Used ${SCROLL_DEFINITIONS[scrollId]?.name || scrollId}.`;
+    let noticeRoomId: number | undefined;
+
+    switch (scrollId) {
+      case 'rift_map': {
+        next.activeBuffs.riftMapPending = true;
+        message = '🗺️ Rift Map prepared! Next Rift expedition gains +2 Rift Fortune.';
+        break;
+      }
+      case 'ward_scroll': {
+        const targetRoom = target?.roomId != null ? next.rooms.find(r => r.id === target.roomId && r.area === 'castle') : undefined;
+        const floorY = target?.floorY ?? targetRoom?.y ?? 0;
+        next.preventFloorHazard = [...(next.preventFloorHazard || []), Math.max(0, floorY)];
+        noticeRoomId = targetRoom?.id;
+        message = `📜 Ward Scroll activated on Floor ${Math.max(0, floorY) + 1}! Next hazard prevented.`;
+        break;
+      }
+      case 'recipe_notes': {
+        const hints = next.discoveredHints || {};
+        const undiscovered = next.potions.filter(p => !p.discovered);
+        const rec = target?.recipeId
+          ? undiscovered.find(p => p.id === target.recipeId)
+          : undiscovered.find(p => p.ingredients.some(ing => !(hints[p.id] || []).includes(ing)));
+        const ing = rec?.ingredients.find(i => !(hints[rec.id] || []).includes(i));
+        if (rec && ing) {
+          if (!next.discoveredHints) next.discoveredHints = {};
+          next.discoveredHints[rec.id] = [...(next.discoveredHints[rec.id] || []), ing];
+          message = `📜 Recipe Notes deciphered! ${rec.name} uses "${ing}".`;
+        } else {
+          message = '📜 Recipe Notes read (all undiscovered recipe ingredients are already known).';
+        }
+        break;
+      }
+      case 'calming_verse': {
+        const roomWithChain = next.rooms.find(r => r.misbehaviorCharmMalus && r.misbehaviorCharmMalus < 0)
+          || (next.characters.find(c => (c.misbehaviorChains?.length || 0) > 0)?.misbehaviorChains?.[0]?.roomId != null
+            ? next.rooms.find(r => r.id === next.characters.find(c => (c.misbehaviorChains?.length || 0) > 0)!.misbehaviorChains![0].roomId)
+            : undefined);
+        const targetRoom = (target?.roomId != null ? next.rooms.find(r => r.id === target.roomId) : undefined)
+          || roomWithChain
+          || next.rooms.find(r => r.state === 'built');
+        const targetRoomId = targetRoom?.id;
+        const cleared = clearRoomMisbehaviorChains(next, targetRoomId);
+        const residents = targetRoomId != null
+          ? next.characters.filter(c => c.seatRoomId === targetRoomId || c.workplaceRoomId === targetRoomId || c.bedRoomId === targetRoomId)
+          : [];
+        const list = residents.length > 0 ? residents : next.characters;
+        for (const c of list) {
+          c.needs.composure = Math.min(100, c.needs.composure + 20);
+        }
+        noticeRoomId = targetRoomId;
+        syncCharmRenown(next);
+        message = `🕊️ Calming Verse recited! Cleared ${cleared} misbehavior effect(s) and granted +20 Composure.`;
+        break;
+      }
+    }
+
+    next.notices.push({
+      id: uniqueNoticeId(`scroll-use-${scrollId}`, next),
+      time: Date.now(),
+      type: 'alchemy',
+      text: message,
+      data: { roomId: noticeRoomId }
+    });
+    return { state: next, success: true, message };
+  }
+
+  /**
+   * Return unlinked eligible young cards respecting deckScope & linkNewCards settings (§31 / Settings).
+   */
+  static getEligibleFreeCards(state: FullGameState, maxIvl: number = 30): AnkiCardSnapshot[] {
+    return getEligibleFreeYoungCards(state, maxIvl);
+  }
+
+  /**
+   * Choose one Spellbook from an active pendingSpellbookDraft choice (Commencement or Endless milestone §31.2).
+   */
+  static chooseSpellbook(
+    state: FullGameState,
+    spellbookId: string,
+    bonusPlanDefId?: string
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const draft = state.pendingSpellbookDraft;
+    if (!draft) {
+      return { state, success: false, error: 'No pending Spellbook draft available.' };
+    }
+    if (!draft.choices.includes(spellbookId)) {
+      return { state, success: false, error: 'Selected spellbook is not in the current draft choices.' };
+    }
+    const def = SPELLBOOK_DEFINITIONS[spellbookId];
+    if (!def) {
+      return { state, success: false, error: `Unknown spellbook: ${spellbookId}.` };
+    }
+    const next = structuredClone(state);
+    if (!next.spellbooks) next.spellbooks = [];
+    if (!next.spellbooks.includes(spellbookId)) {
+      next.spellbooks.push(spellbookId);
+    }
+    if (draft.allowPlanPick && bonusPlanDefId && ROOM_DEFINITIONS[bonusPlanDefId]) {
+      if (!next.knownPlans) next.knownPlans = [];
+      if (!next.knownPlans.includes(bonusPlanDefId)) next.knownPlans.push(bonusPlanDefId);
+      next.roomPlans = { ...(next.roomPlans || {}) };
+      next.roomPlans[bonusPlanDefId] = (next.roomPlans[bonusPlanDefId] || 0) + 1;
+      next.pendingFoundersPlanChoice = false;
+    }
+    next.pendingSpellbookDraft = undefined;
+    next.notices.push({
+      id: uniqueNoticeId(`spellbook-pick-${spellbookId}`, next),
+      time: Date.now(),
+      type: 'milestone',
+      text: `📚 Bound "${def.name}" (Tier ${def.tier}) into the Grand Grimoire Shelf: ${def.effect}`
+    });
+    checkEndlessSpellbookMilestones(next);
+    return { state: next, success: true };
+  }
+
+  /**
+   * Claim the bonus room plan granted by Founder's Testament at the start of a new term (§31.2).
+   */
+  static claimFoundersPlan(
+    state: FullGameState,
+    defId: string
+  ): { state: FullGameState; success: boolean; error?: string } {
+    if (!state.pendingFoundersPlanChoice) {
+      return { state, success: false, error: "No pending Founder's Testament room plan pick." };
+    }
+    const rDef = ROOM_DEFINITIONS[defId];
+    if (!rDef) {
+      return { state, success: false, error: `Unknown room definition: ${defId}.` };
+    }
+    const next = structuredClone(state);
+    if (!next.knownPlans) next.knownPlans = [];
+    if (!next.knownPlans.includes(defId)) next.knownPlans.push(defId);
+    next.roomPlans = { ...(next.roomPlans || {}) };
+    next.roomPlans[defId] = (next.roomPlans[defId] || 0) + 1;
+    next.pendingFoundersPlanChoice = false;
+    next.notices.push({
+      id: uniqueNoticeId(`founders-plan-${defId}`, next),
+      time: Date.now(),
+      type: 'milestone',
+      text: `📜 Founder's Testament bequeathed a ${rDef.name} plan!`
+    });
+    return { state: next, success: true };
+  }
+
+  /**
+   * Resolve pending manual Veil payment queued in `'ask'` veilPayment mode.
+   */
+  static resolvePendingVeilPayment(
+    state: FullGameState,
+    pay: boolean
+  ): { state: FullGameState; success: boolean; message: string } {
+    const pending = state.pendingVeilPayment;
+    if (!pending) {
+      return { state, success: false, message: 'No manual Veil payment pending.' };
+    }
+    const next = structuredClone(state);
+    next.pendingVeilPayment = undefined;
+    const bankFloor = Math.max(10, Math.round((next.bankAtLastReview || next.mana) * 0.1));
+    const standingStonesCount = next.rooms.filter(r => r.defId === 'standing_stones' && r.state === 'built' && !isRoomUnfinished(r)).length;
+    const warders = next.characters.filter(isActiveWarder).length;
+    const ehRoom = next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || next.rooms[0];
+
+    let message = '';
+    if (pay) {
+      const available = Math.max(0, next.mana - bankFloor);
+      const paid = Math.min(available, Math.max(0, pending.totalCost));
+      next.mana -= paid;
+      next.veil.paidToday = paid;
+      if (paid >= pending.totalCost) {
+        next.veil.strength = Math.min(100, next.veil.strength + (3 + warders * 2 + standingStonesCount * 2) * Math.max(1, pending.days));
+        message = `🛡️ Paid ${paid} mana for ${pending.days} day(s) of Veil upkeep. Strength: ${next.veil.strength}%.`;
+      } else {
+        const unpaidRatio = (pending.totalCost - paid) / Math.max(1, pending.totalCost);
+        next.veil.strength = Math.max(0, next.veil.strength - Math.round(15 * unpaidRatio));
+        message = `⚠️ Partially paid ${paid}/${pending.totalCost} mana (10% bank floor protected). Veil at ${next.veil.strength}%.`;
+      }
+    } else {
+      next.veil.paidToday = 0;
+      next.veil.strength = Math.max(0, next.veil.strength - 15);
+      message = `🛡️ Skipped manual Veil upkeep (${pending.totalCost} mana). Veil weakened to ${next.veil.strength}%.`;
+    }
+
+    next.notices.push({
+      id: uniqueNoticeId('veil-manual-resolve', next),
+      time: Date.now(),
+      type: pay ? 'day_tick_paid' : 'day_tick_unpaid',
+      text: message,
+      data: { roomId: ehRoom?.id }
+    });
+    return { state: next, success: true, message };
   }
 }

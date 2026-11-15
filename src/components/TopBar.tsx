@@ -26,6 +26,7 @@ interface TopBarProps {
   /** Optional dev-only controls (never shown in Anki). */
   devControls?: React.ReactNode;
   forceAcademy?: boolean;
+  onResolveVeil?: () => void;
 }
 
 export function termLabel(state: FullGameState, now: number = Date.now()): string | null {
@@ -157,7 +158,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   buildModeOpen = false,
   onToggleBuildMode,
   devControls,
-  forceAcademy
+  forceAcademy,
+  onResolveVeil
 }) => {
   const { mana, veil } = state;
 
@@ -173,6 +175,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   const hazards = hazardRooms(state);
   const term = termLabel(state);
   const shelvedCount = state.shelvedRooms?.length || 0;
+  const isCustomEconomy = (state.settings.manaPerReview ?? 10) !== 10;
 
   return (
     <header className="bg-slate-950/95 backdrop-blur border-b border-amber-900/30 text-amber-100 px-3 py-2 flex items-center justify-between gap-2 shadow-md select-none">
@@ -204,6 +207,16 @@ export const TopBar: React.FC<TopBarProps> = ({
           {term && <span className="text-sky-300 ml-1">· {term}</span>}
         </span>
 
+        {isCustomEconomy && (
+          <span
+            data-testid="custom-economy-badge"
+            className="px-2 py-1 min-h-[32px] rounded-lg border border-purple-500/50 bg-purple-950/50 text-purple-200 text-[11px] font-bold uppercase tracking-wide flex items-center"
+            title={`Base mana per review set to ${state.settings.manaPerReview ?? 10} (default: 10)`}
+          >
+            Custom Economy
+          </span>
+        )}
+
         {state.debugUsed && (
           <span
             data-testid="debug-save-tag"
@@ -221,6 +234,18 @@ export const TopBar: React.FC<TopBarProps> = ({
           <Shield className="w-3.5 h-3.5" />
           {veil.strength}%
         </span>
+
+        {state.pendingVeilPayment && (
+          <button
+            onClick={() => (onResolveVeil ? onResolveVeil() : onOpenScreen('settings'))}
+            data-testid="pending-veil-btn"
+            className="flex items-center gap-1.5 px-2.5 py-1 min-h-[32px] rounded-lg border border-amber-500/60 bg-amber-950/60 text-amber-200 text-[12px] font-bold hover:bg-amber-900/60"
+            title={`Manual Veil upkeep pending: ${state.pendingVeilPayment.totalCost}m across ${state.pendingVeilPayment.days} day(s)`}
+          >
+            <Shield className="w-3.5 h-3.5 text-amber-300" />
+            Veil Due: {state.pendingVeilPayment.totalCost}m
+          </button>
+        )}
 
         {hazards.length > 0 && (
           <button

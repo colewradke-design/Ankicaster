@@ -74,10 +74,25 @@ export const ALL_SCHOOLS: SchoolType[] = ['arcane', 'nature', 'light', 'shadow',
 export const ALL_CAREERS: CareerType[] = ['teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist', 'builder', 'adventurer'];
 export const ALL_INJURIES: InjuryType[] = ['bruised', 'sprained', 'hexed', 'broken_bone', 'rift_touched'];
 export const ALL_HAZARD_TYPES: Array<NonNullable<PlacedRoom['hazard']>['type']> = [
-  'spill_of_night',
+  'mana_static',
+  'poltergeist',
+  'wild_growth',
   'hex_fog',
+  'gravity_hiccup',
+  'imp_infestation',
   'echo_loop',
+  'wisp_swarm',
   'cold_snap',
+  'spill_of_night',
+  'night_ink',
+  'bubbling_cauldron',
+  'kitchen_fire',
+  'drafty_window',
+  'rift_tremor',
+  'shade_breach',
+  'gloom_pack',
+  'veil_rent',
+  'wanderer',
   'breach'
 ];
 
@@ -144,7 +159,7 @@ function ensureDebugTamer(state: FullGameState): number {
     name: 'Debug Tamer',
     pronouns: 'they/them',
     appearance: { skin: '#F6D7C3', hair: 'short', hairColor: '#4A2E1E', robeColor: '#4E8B3A', hat: 'none' },
-    personality: 'Gentle',
+    personality: 'Steadfast',
     traits: [],
     status: 'faculty',
     career: 'tamer',
@@ -927,10 +942,25 @@ export function debugClearAllEvents(state: FullGameState): DebugResult {
 }
 
 const HAZARD_LABELS: Record<NonNullable<PlacedRoom['hazard']>['type'], string> = {
-  spill_of_night: 'Spill of Night',
+  mana_static: 'Mana Static',
+  poltergeist: 'Poltergeist',
+  wild_growth: 'Wild Growth',
   hex_fog: 'Hex Fog',
+  gravity_hiccup: 'Gravity Hiccup',
+  imp_infestation: 'Imp Infestation',
   echo_loop: 'Echo Loop',
+  wisp_swarm: "Will-o'-Wisp Swarm",
   cold_snap: 'Cold Snap',
+  spill_of_night: 'Spill of Night',
+  night_ink: 'Spill of Night',
+  bubbling_cauldron: 'Bubbling Cauldron',
+  kitchen_fire: 'Kitchen Fire',
+  drafty_window: 'Mischievous Draft',
+  rift_tremor: 'Rift Tremor',
+  shade_breach: 'Shade Breach',
+  gloom_pack: 'Gloomhound Pack',
+  veil_rent: 'Veil Rent',
+  wanderer: 'A Wanderer from Beyond',
   breach: 'Veil Breach'
 };
 

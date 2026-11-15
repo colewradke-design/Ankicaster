@@ -51,6 +51,15 @@ export function buffScale(hungry: boolean): number {
   return hungry ? 0.5 : 1;
 }
 
+export {
+  isCreatureBuffEligible,
+  bondBuffMultiplier,
+  creatureCopyBuffScale,
+  creatureSpeciesBuffSum,
+  creatureCategoryBonus,
+  grantTamingOneTimeBonuses
+} from './creatures';
+
 /** 0 if nobody of this species is tamed. 1 if any fed copy remains. 0.5 if every copy is hungry. */
 export function bestBuffScale(creatures: CreatureInstance[], defId: string): number {
   const list = creatures.filter(c => c.status === 'tamed' && c.defId === defId);
@@ -103,6 +112,8 @@ export interface EscapeContext {
   unhomed: boolean;
   cleanliness?: number;
   menagerieLevel3?: boolean;
+  shadowLevel?: number;
+  escapeMultiplier?: number;
 }
 
 export function escapeChance(c: CreatureInstance, ctx: EscapeContext): number {
@@ -119,6 +130,9 @@ export function escapeChance(c: CreatureInstance, ctx: EscapeContext): number {
   if (ctx.unhomed) p *= 1.5;
   else if ((ctx.cleanliness ?? 100) < 40) p *= 1.25;
   if (c.status === 'wary' && ctx.menagerieLevel3) p *= 0.5;
+  const shadowSteps = Math.min(5, Math.max(0, (ctx.shadowLevel || 0) - 5));
+  if (shadowSteps > 0) p *= 1 - 0.03 * shadowSteps;
+  if (ctx.escapeMultiplier !== undefined && ctx.escapeMultiplier !== 1) p *= ctx.escapeMultiplier;
   return p;
 }
 
@@ -506,14 +520,31 @@ export function processEscapes(
   rng: (bellIndex: number, creatureId: number, salt: number) => number = escapeRoll
 ): void {
   const resolution = resolveAllCreatureRooms(state.creatures, state.rooms);
+  const hasGloomPack = state.rooms.some(r => r.hazard?.type === 'gloom_pack');
+  const hasShadeHound = bestBuffScale(state.creatures, 'shade_hound') > 0;
+  const escapeMultiplier = hasGloomPack ? (hasShadeHound ? 2.5 : 5) : 1;
   const consider = (creature: CreatureInstance, salt: number) => {
     if (creature.status !== 'wary' && creature.status !== 'tamed') return false;
     const res = resolution.get(creature.id);
     const room = res?.room;
+    let roomEscMult = escapeMultiplier;
+    if (room) {
+      const whispererOnFloor = state.characters.some(ch => {
+        if (ch.status === 'away' || !ch.traits?.includes('Beast Whisperer')) return false;
+        const chRooms = [ch.seatRoomId, ch.workplaceRoomId, ch.bedRoomId]
+          .filter((id): id is number => id != null)
+          .map(id => state.rooms.find(r => r.id === id))
+          .filter((r): r is PlacedRoom => !!r);
+        return chRooms.some(r => r.area === room.area && r.y === room.y);
+      });
+      if (whispererOnFloor) roomEscMult *= 0.7;
+    }
     const chance = escapeChance(creature, {
       unhomed: !res || res.unhomed || !room,
       cleanliness: room?.cleanliness,
-      menagerieLevel3: !!room && room.defId === 'menagerie' && room.level >= 3
+      menagerieLevel3: !!room && room.defId === 'menagerie' && room.level >= 3,
+      shadowLevel: state.wizard?.levels?.shadow || 0,
+      escapeMultiplier: roomEscMult
     });
     return rng(state.bellIndex, creature.id, salt) < chance;
   };

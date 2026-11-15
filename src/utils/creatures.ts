@@ -15,6 +15,8 @@ import type {
   HabitatType,
   PlacedRoom
 } from '../types/ankicaster';
+import { isRoomUnfinished } from './requiredFurniture';
+import { computeAlumniBonuses } from './formulas';
 
 export const ONE_BY_ONE_PEN_CAP = 3;
 export const LARGE_PEN_CAP = 5;
@@ -75,6 +77,26 @@ export function arrivalStageLabel(stage: 0 | 1 | 2 | 3 | 4): string {
   }
 }
 
+export const ALL_HABITATS: HabitatType[] = ['meadow', 'tide', 'sky', 'gloom', 'ember', 'crystal'];
+export const DEFAULT_MENAGERIE_MODULES: HabitatType[] = ['meadow', 'tide'];
+
+export function menagerieModuleCap(level: number): number {
+  if (level >= 3) return 4;
+  if (level === 2) return 3;
+  return 2;
+}
+
+export function menagerieModules(room: Pick<PlacedRoom, 'defId' | 'level' | 'settings'>): HabitatType[] {
+  const configured = room.settings?.modules?.filter((m): m is HabitatType => ALL_HABITATS.includes(m as HabitatType));
+  if (configured && configured.length > 0) return Array.from(new Set(configured));
+  return [...DEFAULT_MENAGERIE_MODULES];
+}
+
+export function roomAcceptedHabitats(room: Pick<PlacedRoom, 'defId' | 'level' | 'settings'>): HabitatType[] {
+  if (room.defId === 'menagerie') return menagerieModules(room);
+  return penAcceptedHabitats(room.defId);
+}
+
 export function penAcceptedHabitats(roomDefId: string): HabitatType[] {
   if (roomDefId === 'menagerie') return ['meadow', 'tide', 'sky', 'gloom', 'ember', 'crystal'];
   const out: HabitatType[] = [];
@@ -122,6 +144,15 @@ export interface CreatureRoomResolution {
   subBayIndex: number;
 }
 
+function roomMatchesCreature(room: PlacedRoom, c: CreatureInstance, habitats: HabitatType[]): boolean {
+  const accepted = roomAcceptedHabitats(room);
+  if (accepted.length === 0) return true;
+  if (c.defId === 'philosophers_chimera') {
+    return room.defId === 'menagerie' && accepted.includes('ember') && accepted.includes('crystal');
+  }
+  return habitats.some(h => accepted.includes(h));
+}
+
 /**
  * Deterministic room resolution shared between RoomWindow and CreatureChoreographer.
  * - Tamed `roamsFreely` companions need NO pen slot (`roaming: true`, `room: undefined`, `unhomed: false`).
@@ -163,15 +194,16 @@ export function resolveAllCreatureRooms(
     if (c.roomId !== undefined) {
       const explicit = rooms.find(r => r.id === c.roomId && r.state === 'built');
       if (explicit) {
-        const accepted = penAcceptedHabitats(explicit.defId);
-        const isHabitatRoom = accepted.length > 0;
-        const matchesHabitat = habitats.some(h => accepted.includes(h));
+        const accepted = roomAcceptedHabitats(explicit);
+        const isHabitatRoom = accepted.length > 0 || penAcceptedHabitats(explicit.defId).length > 0;
+        const matchesHabitat = roomMatchesCreature(explicit, c, habitats);
         const cap = penCreatureCapacity(explicit);
         const count = occupancyCount.get(explicit.id) ?? 0;
         if ((!isHabitatRoom || matchesHabitat) && (!isHabitatRoom || count < cap)) {
           let bayIdx = 0;
-          if (explicit.defId === 'menagerie' && explicit.settings?.modules?.length) {
-            const foundIdx = explicit.settings.modules.findIndex(m => habitats.includes(m as HabitatType));
+          if (explicit.defId === 'menagerie') {
+            const mods = menagerieModules(explicit);
+            const foundIdx = mods.findIndex(m => habitats.includes(m));
             bayIdx = foundIdx >= 0 ? foundIdx : 0;
           }
           if (isHabitatRoom) {
@@ -192,16 +224,20 @@ export function resolveAllCreatureRooms(
 
     let matched: { room: PlacedRoom; bay: number } | undefined;
     outer: for (const h of habitats) {
-      const preferredDefs = HABITAT_TO_ROOM_DEF[h] ?? ['menagerie'];
+      const preferredDefs = c.defId === 'philosophers_chimera'
+        ? ['menagerie']
+        : (HABITAT_TO_ROOM_DEF[h] ?? ['menagerie']);
       for (const defId of preferredDefs) {
         const candidates = rooms.filter(r => r.state === 'built' && r.defId === defId);
         for (const r of candidates) {
+          if (!roomMatchesCreature(r, c, habitats)) continue;
           const cap = penCreatureCapacity(r);
           const count = occupancyCount.get(r.id) ?? 0;
           if (count < cap) {
             let bay = 0;
-            if (r.defId === 'menagerie' && r.settings?.modules?.length) {
-              const modIdx = r.settings.modules.indexOf(h);
+            if (r.defId === 'menagerie') {
+              const mods = menagerieModules(r);
+              const modIdx = mods.indexOf(h);
               if (modIdx < 0) continue;
               bay = modIdx;
             }
@@ -256,4 +292,136 @@ export function syncDiscoveredCreatures(state: FullGameState): string[] {
   const arr = Array.from(set);
   state.discoveredCreatures = arr;
   return arr;
+}
+
+export function isCreatureBuffEligible(c: CreatureInstance, bellIndex = 0): boolean {
+  if (c.status !== 'tamed') return false;
+  if (c.injury) return false;
+  if (c.tiredUntilBell !== undefined && c.tiredUntilBell > bellIndex) return false;
+  return true;
+}
+
+export function bondBuffMultiplier(bondLevel: number | undefined): number {
+  if ((bondLevel ?? 1) >= 3) return 1.5;
+  if (bondLevel === 2) return 1.25;
+  return 1.0;
+}
+
+/**
+ * Effective buff multiplier for a single creature copy:
+ * - 0 if not tamed or tired after non-safe expedition
+ * - Bond Lv 1/2/3 => x1.0 / x1.25 / x1.5 (when includeBond !== false)
+ * - Hungry => x0.5
+ * - Housed in built, finished Menagerie => +10% (x1.1)
+ * - Menagerie Royale spellbook => +15% (x1.15)
+ */
+export function creatureCopyBuffScale(
+  c: CreatureInstance,
+  opts: {
+    bellIndex?: number;
+    resolvedRoom?: PlacedRoom;
+    menagerieRoyale?: boolean;
+    includeBond?: boolean;
+  } = {}
+): number {
+  if (!isCreatureBuffEligible(c, opts.bellIndex ?? 0)) return 0;
+  let mult = opts.includeBond === false ? 1 : bondBuffMultiplier(c.bondLevel);
+  if (c.hungry) mult *= 0.5;
+  if (opts.resolvedRoom && opts.resolvedRoom.defId === 'menagerie' && opts.resolvedRoom.state === 'built' && !isRoomUnfinished(opts.resolvedRoom)) {
+    mult *= 1.1;
+  }
+  if (opts.menagerieRoyale) mult *= 1.15;
+  return mult;
+}
+
+/**
+ * Summed buff scale across top-2 (or top-3 with Menagerie Royale) active copies of a species.
+ */
+export function creatureSpeciesBuffSum(
+  state: Pick<FullGameState, 'creatures' | 'rooms'> & {
+    spellbooks?: string[];
+    bellIndex?: number;
+    alumniGallery?: FullGameState['alumniGallery'];
+  },
+  defId: string,
+  opts: { includeBond?: boolean } = {}
+): number {
+  const creatures = state.creatures || [];
+  const candidates = creatures.filter(c => c.defId === defId && isCreatureBuffEligible(c, state.bellIndex ?? 0));
+  if (candidates.length === 0) return 0;
+  const menagerieRoyale = !!state.spellbooks?.includes('menagerie_royale');
+  const maxStack = menagerieRoyale ? 3 : 2;
+  const resolution = state.rooms?.length ? resolveAllCreatureRooms(creatures, state.rooms) : undefined;
+  const tamerMult = 1 + (state.alumniGallery?.length ? computeAlumniBonuses(state.alumniGallery).tamerCreatureBuffPct : 0);
+  const scales = candidates
+    .map(c =>
+      creatureCopyBuffScale(c, {
+        bellIndex: state.bellIndex ?? 0,
+        resolvedRoom: resolution?.get(c.id)?.room,
+        menagerieRoyale,
+        includeBond: opts.includeBond
+      }) * tamerMult
+    )
+    .filter(s => s > 0)
+    .sort((a, b) => b - a);
+  let sum = 0;
+  for (let i = 0; i < Math.min(maxStack, scales.length); i++) {
+    sum += scales[i];
+  }
+  return sum;
+}
+
+/**
+ * Computes a combined percentage buff across one or more creature species, enforcing §33.6's
+ * "+50% Creature buff bonuses (Bond multipliers are separate)" cap on the non-bond portion.
+ */
+export function creatureCategoryBonus(
+  state: Pick<FullGameState, 'creatures' | 'rooms'> & {
+    spellbooks?: string[];
+    bellIndex?: number;
+    alumniGallery?: FullGameState['alumniGallery'];
+  },
+  entries: Array<{ defId: string; perCopy: number }>,
+  categoryCap = 0.5
+): number {
+  let rawBaseSum = 0;
+  const parts: Array<{ base: number; bonded: number }> = [];
+  for (const e of entries) {
+    const base = e.perCopy * creatureSpeciesBuffSum(state, e.defId, { includeBond: false });
+    if (base <= 0) continue;
+    const bonded = e.perCopy * creatureSpeciesBuffSum(state, e.defId, { includeBond: true });
+    rawBaseSum += base;
+    parts.push({ base, bonded });
+  }
+  if (rawBaseSum <= 0) return 0;
+  const capScale = rawBaseSum > categoryCap ? categoryCap / rawBaseSum : 1;
+  let total = 0;
+  for (const p of parts) {
+    total += p.bonded * capScale;
+  }
+  return total;
+}
+
+/**
+ * Grant one-time taming bonuses (Gilded Pangolin +5 Renown when tamed).
+ */
+export function grantTamingOneTimeBonuses(
+  state: FullGameState,
+  creature: CreatureInstance,
+  notifications?: string[]
+): void {
+  if (creature.status !== 'tamed') return;
+  if (creature.defId === 'gilded_pangolin' && !creature.tamedRenownGranted) {
+    creature.tamedRenownGranted = true;
+    state.renown += 5;
+    const msg = `✨ Gilded Pangolin ${creature.nickname} brought +5 Renown upon taming!`;
+    notifications?.push(msg);
+    state.notices.push({
+      id: `pangolin-renown-${creature.id}-${state.reviewIndex}`,
+      time: Date.now(),
+      type: 'creature_tamed',
+      text: msg,
+      data: { roomId: creature.roomId, creatureId: creature.id }
+    });
+  }
 }

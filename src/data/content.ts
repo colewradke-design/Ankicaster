@@ -8,13 +8,15 @@
 
 import {
   SchoolType,
+  PersonalityType,
   RoomDefinition,
   FurnitureDefinition,
   CreatureDefinition,
   PotionRecipe,
   PlacedRoom,
   RiftDestination,
-  SchoolEvent
+  SchoolEvent,
+  ScrollId
 } from '../types/ankicaster';
 
 // 56 Room Types from GDD Section 16
@@ -3337,3 +3339,829 @@ export const SCHOOL_EVENTS: SchoolEvent[] = [
     ]
   }
 ];
+
+export interface HazardDefinition {
+  id: string;
+  name: string;
+  description: string;
+  effect: string;
+  weight: number;
+  areaScope: 'room' | 'floor' | 'grounds' | 'academy';
+  targetFilter:
+    | 'any'
+    | 'castle'
+    | 'wild_growth'
+    | 'storage_kitchen'
+    | 'echo_loop'
+    | 'grounds'
+    | 'cold_snap'
+    | 'kitchen_refectory'
+    | 'rift_gate'
+    | 'alchemy_lab'
+    | 'entrance_hall';
+  durationReviews: number;
+  durationBells?: number;
+  locksRoom?: boolean;
+  isBreach?: boolean;
+  fasterNote: string;
+  silverLining?: string;
+}
+
+export const HAZARD_CATALOG: Record<string, HazardDefinition> = {
+  mana_static: {
+    id: 'mana_static',
+    name: 'Mana Static',
+    description: 'Crackling arcane static disrupts nearby enchantments.',
+    effect: 'Furniture special effects in the room switch off.',
+    weight: 10,
+    areaScope: 'room',
+    targetFilter: 'any',
+    durationReviews: 20,
+    fasterNote: 'Warder resolves instantly; Dispel spell'
+  },
+  poltergeist: {
+    id: 'poltergeist',
+    name: 'Poltergeist',
+    description: 'A mischievous phantom knocks quills and books off every shelf.',
+    effect: 'Cleanliness -30; occupants Composure -5.',
+    weight: 10,
+    areaScope: 'room',
+    targetFilter: 'castle',
+    durationReviews: 30,
+    fasterNote: 'Warder 10 reviews; Calming Verse scroll'
+  },
+  wild_growth: {
+    id: 'wild_growth',
+    name: 'Wild Growth',
+    description: 'Overnight thornvines seal the doorway with stubborn green tendrils.',
+    effect: 'Room locked by vines.',
+    weight: 8,
+    areaScope: 'room',
+    targetFilter: 'wild_growth',
+    durationReviews: 30,
+    locksRoom: true,
+    fasterNote: 'Gardener 10 reviews',
+    silverLining: '+5 Herbs when cleared'
+  },
+  hex_fog: {
+    id: 'hex_fog',
+    name: 'Hex Fog',
+    description: 'Violet-green mist coils across every threshold on this floor.',
+    effect: 'Floor Composure -10; Focus -3 in its rooms.',
+    weight: 6,
+    areaScope: 'floor',
+    targetFilter: 'castle',
+    durationReviews: 40,
+    fasterNote: 'Clear Skies spell; Wardwater'
+  },
+  gravity_hiccup: {
+    id: 'gravity_hiccup',
+    name: 'Gravity Hiccup',
+    description: 'Chairs, teacups, and inkwells drift lazily near the ceiling.',
+    effect: 'Rooms on the floor run at x0.5 efficiency.',
+    weight: 5,
+    areaScope: 'floor',
+    targetFilter: 'castle',
+    durationReviews: 20,
+    fasterNote: 'Clears naturally in 20 reviews'
+  },
+  imp_infestation: {
+    id: 'imp_infestation',
+    name: 'Imp Infestation',
+    description: 'Giggling pantry imps stash provisions behind loose bricks.',
+    effect: 'Imps hide 10% of Provisions (returned in full when cleared).',
+    weight: 6,
+    areaScope: 'room',
+    targetFilter: 'storage_kitchen',
+    durationReviews: 40,
+    fasterNote: 'Warder 10 reviews; Shade Hound resolves instantly',
+    silverLining: 'All hidden Provisions returned in full when cleared'
+  },
+  echo_loop: {
+    id: 'echo_loop',
+    name: 'Echo Loop',
+    description: 'A temporal chime traps every spoken phrase in an endless repeat.',
+    effect: 'Room yields 0 while active.',
+    weight: 6,
+    areaScope: 'room',
+    targetFilter: 'echo_loop',
+    durationReviews: 20,
+    fasterNote: 'Scholar 5 reviews; Glow spell'
+  },
+  wisp_swarm: {
+    id: 'wisp_swarm',
+    name: "Will-o'-Wisp Swarm",
+    description: 'Drifting marsh-lights dazzle workers across the grounds.',
+    effect: 'Plot outputs 0 on 2 plots.',
+    weight: 6,
+    areaScope: 'grounds',
+    targetFilter: 'grounds',
+    durationReviews: 30,
+    fasterNote: 'Clears in 30 reviews',
+    silverLining: '25% chance a Lantern Moth stays as a visitor'
+  },
+  cold_snap: {
+    id: 'cold_snap',
+    name: 'Cold Snap',
+    description: 'Sub-zero frost rimes every windowpane and planter bed.',
+    effect: 'Greenhouse -50%; dorm Rest target -10.',
+    weight: 5,
+    areaScope: 'room',
+    targetFilter: 'cold_snap',
+    durationReviews: 40,
+    fasterNote: 'Warm Hearthstone / Phoenix Hearth halves effect; Clear Skies spell'
+  },
+  spill_of_night: {
+    id: 'spill_of_night',
+    name: 'Spill of Night',
+    description: 'Gloom residue and midnight ink creep across the floor.',
+    effect: 'Rooms on floor run at x0.5 efficiency and accumulate soot.',
+    weight: 5,
+    areaScope: 'floor',
+    targetFilter: 'castle',
+    durationReviews: 20,
+    fasterNote: 'Glow spell'
+  },
+  bubbling_cauldron: {
+    id: 'bubbling_cauldron',
+    name: 'Bubbling Cauldron',
+    description: 'A volatile cauldron froths over with shimmering smoke.',
+    effect: 'Cleanliness -40; 30% chance one occupant is Bruised. Brew continues.',
+    weight: 0, // Special roll during active Alchemy brewing (§19.3)
+    areaScope: 'room',
+    targetFilter: 'alchemy_lab',
+    durationReviews: 0,
+    fasterNote: 'Fume Hood, Steady Hand, and Alchemists reduce chance'
+  },
+  kitchen_fire: {
+    id: 'kitchen_fire',
+    name: 'Kitchen Fire',
+    description: 'A grease flare-up scorches the hearthstones.',
+    effect: 'Room locked; next meal at 50% capacity.',
+    weight: 4,
+    areaScope: 'room',
+    targetFilter: 'kitchen_refectory',
+    durationReviews: 20,
+    locksRoom: true,
+    fasterNote: 'Fireproof Salve prevents; Douse spell'
+  },
+  drafty_window: {
+    id: 'drafty_window',
+    name: 'Mischievous Draft',
+    description: 'A playful gale bursts through castle shutters, scattering dust everywhere.',
+    effect: 'Cleanliness -15 on up to 3 castle rooms.',
+    weight: 6,
+    areaScope: 'castle' as 'room',
+    targetFilter: 'castle',
+    durationReviews: 0,
+    fasterNote: 'Instantaneous gust'
+  },
+  rift_tremor: {
+    id: 'rift_tremor',
+    name: 'Rift Tremor',
+    description: 'Space ripples violently around the dormant threshold arch.',
+    effect: 'Gate locked; expeditions launched while active suffer -1 Rift Fortune.',
+    weight: 4,
+    areaScope: 'room',
+    targetFilter: 'rift_gate',
+    durationReviews: 30,
+    locksRoom: true,
+    fasterNote: 'Warder 10 reviews'
+  }
+};
+
+export const BREACH_CATALOG: Record<string, HazardDefinition> = {
+  shade_breach: {
+    id: 'shade_breach',
+    name: 'Shade Breach',
+    description: 'A creeping shade slips through a hairline crack in the Veil.',
+    effect: 'Room locked; occupants risk Bruised (40%) or Hexed (20%).',
+    weight: 30,
+    areaScope: 'room',
+    targetFilter: 'castle',
+    durationReviews: 60,
+    locksRoom: true,
+    isBreach: true,
+    fasterNote: 'Warder or Banish spell resolves instantly; clears in 60 reviews'
+  },
+  gloom_pack: {
+    id: 'gloom_pack',
+    name: 'Gloomhound Pack',
+    description: 'Shadowy hounds prowl along the grounds perimeter fences.',
+    effect: 'Habitat creature escape roll x5 this bell (Shade Hound halves).',
+    weight: 25,
+    areaScope: 'grounds',
+    targetFilter: 'grounds',
+    durationReviews: 0,
+    durationBells: 1,
+    isBreach: true,
+    fasterNote: 'Leaves after 1 bell; Shade Hound halves escape odds'
+  },
+  veil_rent: {
+    id: 'veil_rent',
+    name: 'Veil Rent',
+    description: 'A jagged tear opens overhead, shivering three rooms shut.',
+    effect: 'Veil Strength -10; up to 3 random rooms locked.',
+    weight: 25,
+    areaScope: 'academy',
+    targetFilter: 'any',
+    durationReviews: 30,
+    locksRoom: true,
+    isBreach: true,
+    fasterNote: 'Reinforce the Veil or Banish spell ends immediately; clears in 30 reviews'
+  },
+  wanderer: {
+    id: 'wanderer',
+    name: 'A Wanderer from Beyond',
+    description: 'A strange, harmless-looking extradimensional creature sits quietly in the Entrance Hall.',
+    effect: 'Composure -10 Academy-wide until fed (20 Provisions) or tamed (160 reviews).',
+    weight: 20,
+    areaScope: 'academy',
+    targetFilter: 'entrance_hall',
+    durationReviews: 0,
+    isBreach: true,
+    fasterNote: 'Feed 20 Provisions or assign a Tamer (160 reviews)',
+    silverLining: 'Taming grants a random Rare creature of any school'
+  }
+};
+
+export interface PersonalityDefinition {
+  id: PersonalityType;
+  flavour: string;
+  needModifiers: {
+    hungerDecayMult?: number;
+    restDecayMult?: number;
+    leisureDecayMult?: number;
+    composureDecayMult?: number;
+    requiresLibraryForLeisure?: boolean;
+    requiresCommonRoomForComposure?: boolean;
+  };
+  misbehaviorMult: number;
+  lovesText: string;
+  dislikesText: string;
+  riftNote: string;
+}
+
+export const PERSONALITY_DEFINITIONS: Record<PersonalityType, PersonalityDefinition> = {
+  Bookish: {
+    id: 'Bookish',
+    flavour: 'Lives in the stacks',
+    needModifiers: { leisureDecayMult: 0.8, requiresLibraryForLeisure: true },
+    misbehaviorMult: 0.6,
+    lovesText: 'Library (+5 morale)',
+    dislikesText: 'Noisy rooms (Workshop next to dorm, -5 morale)',
+    riftNote: '+1 Rift Fortune at Crystal Caverns'
+  },
+  Mischievous: {
+    id: 'Mischievous',
+    flavour: 'Pranks with a heart of gold',
+    needModifiers: { leisureDecayMult: 1.3 },
+    misbehaviorMult: 2.0,
+    lovesText: 'Common Room (+5 morale)',
+    dislikesText: 'Detention Hall (-5 morale)',
+    riftNote: '+1 Rift Fortune at Shattered Spire'
+  },
+  Gentle: {
+    id: 'Gentle',
+    flavour: 'Soft-spoken, loved by animals',
+    needModifiers: { composureDecayMult: 0.8 },
+    misbehaviorMult: 0.7,
+    lovesText: 'Any creature habitat (+5 morale)',
+    dislikesText: 'Training Yard (-5 morale)',
+    riftNote: '+4 taming speed as tamer'
+  },
+  Bold: {
+    id: 'Bold',
+    flavour: 'First through any door',
+    needModifiers: { restDecayMult: 1.2 },
+    misbehaviorMult: 1.2,
+    lovesText: 'Training Yard (+5 morale)',
+    dislikesText: 'Bare rooms (quality tier Bare, -5 morale)',
+    riftNote: '+1 Rift Fortune on every expedition'
+  },
+  Dreamy: {
+    id: 'Dreamy',
+    flavour: 'Head in the clouds',
+    needModifiers: { hungerDecayMult: 0.9 },
+    misbehaviorMult: 0.9,
+    lovesText: 'Observatory (+5 morale)',
+    dislikesText: 'Windowless rooms (no Glass furniture, -5 morale)',
+    riftNote: '+1 Rift Fortune at Whispering Fen'
+  },
+  Steadfast: {
+    id: 'Steadfast',
+    flavour: 'Calm and reliable',
+    needModifiers: { hungerDecayMult: 0.9, restDecayMult: 0.9, leisureDecayMult: 0.9, composureDecayMult: 0.9 },
+    misbehaviorMult: 0.5,
+    lovesText: 'Sunlit Sanctum (+5 morale)',
+    dislikesText: 'None',
+    riftNote: 'Recovers from Rift injuries 25% faster'
+  },
+  Social: {
+    id: 'Social',
+    flavour: 'Knows everyone',
+    needModifiers: { leisureDecayMult: 1.2, composureDecayMult: 0.8, requiresCommonRoomForComposure: true },
+    misbehaviorMult: 1.1,
+    lovesText: 'Common Room or Refectory (+5 morale)',
+    dislikesText: 'Dorms below Cozy (-5 morale)',
+    riftNote: '+2 team skill bonus when in a team of 3'
+  },
+  Curious: {
+    id: 'Curious',
+    flavour: 'Pokes everything',
+    needModifiers: { composureDecayMult: 1.1 },
+    misbehaviorMult: 1.3,
+    lovesText: 'Alchemy Lab or Menagerie (+5 morale)',
+    dislikesText: 'None',
+    riftNote: '+1 Rift Fortune at Mossy Hollow & Ashen Wastes'
+  }
+};
+
+export interface TraitDefinition {
+  id: string;
+  name: string;
+  category: 'positive' | 'neutral' | 'troublesome';
+  effect: string;
+}
+
+export const TRAIT_DEFINITIONS: Record<string, TraitDefinition> = {
+  // Positive (15)
+  'Green Thumb': { id: 'Green Thumb', name: 'Green Thumb', category: 'positive', effect: '+20% output when gardener or seated in a Nature classroom' },
+  'Beast Whisperer': { id: 'Beast Whisperer', name: 'Beast Whisperer', category: 'positive', effect: '+25% taming speed; creatures on their floor escape 30% less' },
+  'Night Owl': { id: 'Night Owl', name: 'Night Owl', category: 'positive', effect: 'Rest decays 20% slower; hazards on their floor resolve 5% faster' },
+  'Tidy': { id: 'Tidy', name: 'Tidy', category: 'positive', effect: 'Rooms they use lose cleanliness 30% slower' },
+  'Brave': { id: 'Brave', name: 'Brave', category: 'positive', effect: '+1 Rift Fortune as adventurer; all injuries heal 15% faster' },
+  'Kind Heart': { id: 'Kind Heart', name: 'Kind Heart', category: 'positive', effect: '+3 Composure per bell to dorm roommates' },
+  'Iron Stomach': { id: 'Iron Stomach', name: 'Iron Stomach', category: 'positive', effect: 'Hunger decays 30% slower' },
+  'Lucky': { id: 'Lucky', name: 'Lucky', category: 'positive', effect: '+1 loot roll on successful expeditions; -20% chance of hazard hits' },
+  'Quick Hands': { id: 'Quick Hands', name: 'Quick Hands', category: 'positive', effect: 'Builder or Alchemist output +15%' },
+  'Steady Hand': { id: 'Steady Hand', name: 'Steady Hand', category: 'positive', effect: 'Alchemy Lab explosion chance -50% when present' },
+  'Sunny': { id: 'Sunny', name: 'Sunny', category: 'positive', effect: '+5 morale; +2 Composure per bell to classmates' },
+  'Warded': { id: 'Warded', name: 'Warded', category: 'positive', effect: 'Immune to Hexed injuries' },
+  'Star-Touched': { id: 'Star-Touched', name: 'Star-Touched', category: 'positive', effect: '+10% Insight yield; Observatory foresight +1 day' },
+  'Well-Read': { id: 'Well-Read', name: 'Well-Read', category: 'positive', effect: '+10% essence yield in any classroom with a Bookshelf' },
+  'Hardy': { id: 'Hardy', name: 'Hardy', category: 'positive', effect: 'Healing time -30%' },
+  // Neutral / Quirky (11 distinct)
+  'Collector': { id: 'Collector', name: 'Collector', category: 'neutral', effect: 'Occasionally (2%/day) brings back 2-5 random common material' },
+  'Early Riser': { id: 'Early Riser', name: 'Early Riser', category: 'neutral', effect: 'Rest decays faster (x1.1) but Leisure decays slower (x0.9)' },
+  'Picky Eater': { id: 'Picky Eater', name: 'Picky Eater', category: 'neutral', effect: 'Needs a built Kitchen for full Hunger recovery (else target -20)' },
+  'Homesick': { id: 'Homesick', name: 'Homesick', category: 'neutral', effect: '-5 morale for first 7 days after enrolling; +5 morale after 30 days' },
+  'Chatterbox': { id: 'Chatterbox', name: 'Chatterbox', category: 'neutral', effect: '+2 Leisure to roommates per bell; -2 Focus in classrooms' },
+  'Animal Allergy': { id: 'Animal Allergy', name: 'Animal Allergy', category: 'neutral', effect: '-5 Composure when a creature habitat is adjacent to their dorm' },
+  'Cat Person': { id: 'Cat Person', name: 'Cat Person', category: 'neutral', effect: '+10 morale with feline creatures present, -3 otherwise' },
+  'Bird Person': { id: 'Bird Person', name: 'Bird Person', category: 'neutral', effect: '+10 morale with avian creatures present, -3 otherwise' },
+  'Bug Person': { id: 'Bug Person', name: 'Bug Person', category: 'neutral', effect: '+10 morale with insect/beetle creatures present, -3 otherwise' },
+  'Show-off': { id: 'Show-off', name: 'Show-off', category: 'neutral', effect: '+1 Rift Fortune in a team of 3, -1 when sent alone' },
+  'Sleepwalker': { id: 'Sleepwalker', name: 'Sleepwalker', category: 'neutral', effect: '1% per bell to wander into a random room (-2 Composure to roommates)' },
+  // Troublesome (10)
+  'Prankster': { id: 'Prankster', name: 'Prankster', category: 'troublesome', effect: 'Misbehavior x1.5; pranks are funnier and slightly messier' },
+  'Firebug': { id: 'Firebug', name: 'Firebug', category: 'troublesome', effect: 'Alchemy Lab and Kitchen fire hazard x2 when present' },
+  'Lazy': { id: 'Lazy', name: 'Lazy', category: 'troublesome', effect: 'Essence yield -15%; Rest decays 15% slower' },
+  'Glutton': { id: 'Glutton', name: 'Glutton', category: 'troublesome', effect: 'Eats 2 Provisions per meal' },
+  'Butterfingers': { id: 'Butterfingers', name: 'Butterfingers', category: 'troublesome', effect: '3% per bell to damage a fragile furniture item (-50% stats until repaired)' },
+  'Nervous': { id: 'Nervous', name: 'Nervous', category: 'troublesome', effect: 'Composure decays x1.4; -1 Rift Fortune' },
+  'Loudmouth': { id: 'Loudmouth', name: 'Loudmouth', category: 'troublesome', effect: '-5 Composure to roommates when morale < 40' },
+  'Rule-Bender': { id: 'Rule-Bender', name: 'Rule-Bender', category: 'troublesome', effect: 'Detention Hall effects x0.5; misbehavior x1.3' },
+  'Summoner-at-Heart': { id: 'Summoner-at-Heart', name: 'Summoner-at-Heart', category: 'troublesome', effect: '0.3% per bell to open an unauthorized minor portal (hazard)' },
+  'Daredevil': { id: 'Daredevil', name: 'Daredevil', category: 'troublesome', effect: '+1 Rift Fortune, but recovers from Rift injuries 25% slower' }
+};
+
+export interface MisbehaviorIncidentDef {
+  id: string;
+  name: string;
+  likelyPersonalities: PersonalityType[];
+  likelyTraits: string[];
+  effectSummary: string;
+  silverLining: string;
+}
+
+export const MISBEHAVIOR_INCIDENTS: MisbehaviorIncidentDef[] = [
+  {
+    id: 'graffiti_glyphs',
+    name: 'Graffiti Glyphs',
+    likelyPersonalities: ['Mischievous'],
+    likelyTraits: ['Prankster'],
+    effectSummary: 'Room cleanliness -20; room Charm -3 until cleaned to 80+.',
+    silverLining: '10% chance to reveal an ingredient hint for an undiscovered potion.'
+  },
+  {
+    id: 'food_fight',
+    name: 'Food Fight',
+    likelyPersonalities: ['Social', 'Mischievous'],
+    likelyTraits: ['Prankster', 'Glutton'],
+    effectSummary: 'Refectory cleanliness -40; next meal uses +5 Provisions.',
+    silverLining: 'Leisure +10 for everyone involved.'
+  },
+  {
+    id: 'unauthorized_summoning',
+    name: 'Unauthorized Summoning',
+    likelyPersonalities: ['Curious'],
+    likelyTraits: ['Summoner-at-Heart'],
+    effectSummary: 'Triggers an Echo Loop or Imp Infestation hazard.',
+    silverLining: '15% chance a common creature visitor appears.'
+  },
+  {
+    id: 'sneaking_out',
+    name: 'Sneaking Out to the Woods',
+    likelyPersonalities: ['Bold', 'Curious'],
+    likelyTraits: ['Daredevil'],
+    effectSummary: 'Student absent for 20 reviews (no lesson yield).',
+    silverLining: 'Returns with 3-8 of a random common material.'
+  },
+  {
+    id: 'hex_duel',
+    name: 'Hallway Hex Duel',
+    likelyPersonalities: ['Bold'],
+    likelyTraits: ['Daredevil'],
+    effectSummary: 'Two students risk 20% Bruised injury each.',
+    silverLining: 'Both gain +1 Rift Fortune on their first expedition.'
+  },
+  {
+    id: 'creature_release',
+    name: 'Creature Release',
+    likelyPersonalities: ['Gentle', 'Mischievous'],
+    likelyTraits: ['Beast Whisperer'],
+    effectSummary: 'One habitat creature becomes Loose.',
+    silverLining: 'None.'
+  },
+  {
+    id: 'potion_prank',
+    name: 'Potion Prank',
+    likelyPersonalities: ['Curious'],
+    likelyTraits: ['Prankster'],
+    effectSummary: 'Cosmetic prank status for 1 day (green hair, floating, tiny voice).',
+    silverLining: 'Composure +5 for onlookers.'
+  },
+  {
+    id: 'midnight_feast',
+    name: 'Midnight Feast',
+    likelyPersonalities: ['Social'],
+    likelyTraits: ['Glutton'],
+    effectSummary: 'Provisions -10 (max 5% of stock).',
+    silverLining: 'Dorm Leisure +10.'
+  },
+  {
+    id: 'bell_prank',
+    name: 'The Bell Tower Prank',
+    likelyPersonalities: ['Mischievous'],
+    likelyTraits: ['Prankster'],
+    effectSummary: "All students' Rest -5.",
+    silverLining: 'None.'
+  },
+  {
+    id: 'library_fort',
+    name: 'Library Fort',
+    likelyPersonalities: ['Bookish', 'Dreamy'],
+    likelyTraits: [],
+    effectSummary: 'Library locked for 20 reviews.',
+    silverLining: '+2 Insight.'
+  },
+  {
+    id: 'portrait_mustache',
+    name: "The Founder's Mustache",
+    likelyPersonalities: ['Mischievous'],
+    likelyTraits: ['Prankster'],
+    effectSummary: "Founder's Portrait Charm -2 until the room is cleaned.",
+    silverLining: 'Legendary academy memory.'
+  },
+  {
+    id: 'broom_joyride',
+    name: 'Broom Joyride',
+    likelyPersonalities: ['Bold'],
+    likelyTraits: ['Daredevil'],
+    effectSummary: '30% chance student becomes Bruised.',
+    silverLining: 'Leisure +5.'
+  },
+  {
+    id: 'alchemy_dare',
+    name: 'Alchemy Dare',
+    likelyPersonalities: ['Curious'],
+    likelyTraits: ['Firebug'],
+    effectSummary: 'Lab explosion chance x3 next bell.',
+    silverLining: 'None.'
+  },
+  {
+    id: 'rift_peek',
+    name: 'Peeking Through the Rift',
+    likelyPersonalities: ['Curious', 'Bold'],
+    likelyTraits: ['Daredevil'],
+    effectSummary: 'Rift Gate locked 10 reviews.',
+    silverLining: '10% chance to bring back 3-8 Timber or Herbs.'
+  },
+  {
+    id: 'secret_club',
+    name: 'A Secret Club',
+    likelyPersonalities: ['Social', 'Mischievous'],
+    likelyTraits: ['Chatterbox'],
+    effectSummary: 'Up to 3 students get Leisure +10, misbehavior x1.2 for 30 bells.',
+    silverLining: 'Club name recorded in chronicle.'
+  },
+  {
+    id: 'dorm_swap',
+    name: 'Midnight Dorm Swap',
+    likelyPersonalities: ['Social'],
+    likelyTraits: [],
+    effectSummary: 'Bed assignments swapped between two students.',
+    silverLining: "Roommates' Composure +3."
+  }
+];
+
+export interface GreenhouseCropDef {
+  id: string;
+  name: string;
+  unlock: 'start' | 'nature_l3' | 'draft' | 'rift';
+  outputs: Record<string, number>;
+  conditionNote?: string;
+}
+
+/** All 12 Greenhouse Crops (GDD §21.3) */
+export const GREENHOUSE_CROPS: Record<string, GreenhouseCropDef> = {
+  hearthroot: {
+    id: 'hearthroot',
+    name: 'Hearthroot',
+    unlock: 'start',
+    outputs: { provisions: 1.0 }
+  },
+  moonbeans: {
+    id: 'moonbeans',
+    name: 'Moonbeans',
+    unlock: 'start',
+    outputs: { provisions: 0.75, greens: 0.25 }
+  },
+  featherfern: {
+    id: 'featherfern',
+    name: 'Featherfern',
+    unlock: 'nature_l3',
+    outputs: { greens: 0.8 },
+    conditionNote: 'Requires Headmaster Nature Lv 3.'
+  },
+  silverleaf: {
+    id: 'silverleaf',
+    name: 'Silverleaf',
+    unlock: 'start',
+    outputs: { herbs: 0.6 }
+  },
+  glimmerberry: {
+    id: 'glimmerberry',
+    name: 'Glimmerberry',
+    unlock: 'draft',
+    outputs: { provisions: 0.5, nectar: 0.3 }
+  },
+  dreamthistle: {
+    id: 'dreamthistle',
+    name: 'Dreamthistle',
+    unlock: 'draft',
+    outputs: { herbs: 0.4, insight: 0.05 }
+  },
+  emberpepper: {
+    id: 'emberpepper',
+    name: 'Emberpepper',
+    unlock: 'draft',
+    outputs: { provisions: 0.6, reagents: 0.05 }
+  },
+  shadecap: {
+    id: 'shadecap',
+    name: 'Shadecap',
+    unlock: 'draft',
+    outputs: { herbs: 0.3, umbra: 0.05 },
+    conditionNote: 'Requires ground floor (Floor 1) or an adjacent Gloom habitat.'
+  },
+  sunwheat: {
+    id: 'sunwheat',
+    name: 'Sunwheat',
+    unlock: 'draft',
+    outputs: { provisions: 1.2 },
+    conditionNote: 'Requires an undamaged Rain Cistern in the Greenhouse.'
+  },
+  starfruit: {
+    id: 'starfruit',
+    name: 'Starfruit',
+    unlock: 'rift',
+    outputs: { provisions: 0.6, insight: 0.1, crystal: 0.02 },
+    conditionNote: 'Requires an active Gardener assigned to this Greenhouse.'
+  },
+  heartwood_sapling: {
+    id: 'heartwood_sapling',
+    name: 'Heartwood Sapling',
+    unlock: 'rift',
+    outputs: { herbs: 0.5, heartwood: 0.01 },
+    conditionNote: 'Requires an active Gardener assigned to this Greenhouse.'
+  },
+  lumen_lily: {
+    id: 'lumen_lily',
+    name: 'Lumen Lily',
+    unlock: 'rift',
+    outputs: { herbs: 0.4, radiance: 0.06 },
+    conditionNote: 'Requires an active Gardener assigned to this Greenhouse.'
+  }
+};
+
+export interface ScrollDefinition {
+  id: ScrollId;
+  name: string;
+  cost: Record<string, number>;
+  craftReviews: number;
+  effect: string;
+}
+
+/** 4 Scriptorium Scrolls (GDD §25.4) */
+export const SCROLL_DEFINITIONS: Record<ScrollId, ScrollDefinition> = {
+  rift_map: {
+    id: 'rift_map',
+    name: 'Rift Map',
+    cost: { insight: 20, cloth: 2 },
+    craftReviews: 30,
+    effect: '+2 Rift Fortune on one expedition (max 1 map per expedition).'
+  },
+  ward_scroll: {
+    id: 'ward_scroll',
+    name: 'Ward Scroll',
+    cost: { insight: 15, umbra: 10 },
+    craftReviews: 30,
+    effect: 'Prevents the next hazard on one floor.'
+  },
+  recipe_notes: {
+    id: 'recipe_notes',
+    name: 'Recipe Notes',
+    cost: { insight: 25 },
+    craftReviews: 20,
+    effect: 'Reveals one ingredient of an undiscovered potion recipe.'
+  },
+  calming_verse: {
+    id: 'calming_verse',
+    name: 'Calming Verse',
+    cost: { insight: 10, radiance: 10 },
+    craftReviews: 20,
+    effect: 'Ends a misbehavior chain and grants +20 Composure in one room.'
+  }
+};
+
+export interface SpellbookDefinition {
+  id: string;
+  name: string;
+  tier: 1 | 2 | 3;
+  effect: string;
+}
+
+/** All 21 Spellbooks across Tiers 1-3 (GDD §31.2). */
+export const SPELLBOOK_DEFINITIONS: Record<string, SpellbookDefinition> = {
+  // Tier 1 (7)
+  almanac_of_kind_weather: {
+    id: 'almanac_of_kind_weather',
+    name: 'Almanac of Kind Weather',
+    tier: 1,
+    effect: 'Plot outputs +10%; Rainy Week and Cold Snap effects halved.'
+  },
+  primer_of_patience: {
+    id: 'primer_of_patience',
+    name: 'Primer of Patience',
+    tier: 1,
+    effect: 'Draft price growth reduced.'
+  },
+  little_book_of_wards: {
+    id: 'little_book_of_wards',
+    name: 'Little Book of Wards',
+    tier: 1,
+    effect: 'Hazards -10% Academy-wide.'
+  },
+  housekeepers_hymnal: {
+    id: 'housekeepers_hymnal',
+    name: "Housekeeper's Hymnal",
+    tier: 1,
+    effect: 'All dirt -25%.'
+  },
+  the_tamers_pocketbook: {
+    id: 'the_tamers_pocketbook',
+    name: "The Tamer's Pocketbook",
+    tier: 1,
+    effect: 'Taming speed +15%.'
+  },
+  cookery_for_fifty: {
+    id: 'cookery_for_fifty',
+    name: 'Cookery for Fifty',
+    tier: 1,
+    effect: 'Meals use 10% fewer Provisions.'
+  },
+  notes_on_furnishing: {
+    id: 'notes_on_furnishing',
+    name: 'Notes on Furnishing',
+    tier: 1,
+    effect: 'Furniture material costs -10%.'
+  },
+
+  // Tier 2 (7)
+  treatise_on_thin_places: {
+    id: 'treatise_on_thin_places',
+    name: 'Treatise on Thin Places',
+    tier: 2,
+    effect: 'Veil cost -10%.'
+  },
+  codex_of_careful_hands: {
+    id: 'codex_of_careful_hands',
+    name: 'Codex of Careful Hands',
+    tier: 2,
+    effect: 'Lab explosions -50%; potion yield +10%.'
+  },
+  the_open_door: {
+    id: 'the_open_door',
+    name: 'The Open Door',
+    tier: 2,
+    effect: 'Applicant board +1 applicant per school; applicant quality one Renown band higher.'
+  },
+  field_guide_to_elsewhere: {
+    id: 'field_guide_to_elsewhere',
+    name: 'Field Guide to Elsewhere',
+    tier: 2,
+    effect: '+1 Rift Fortune and +1 supply slot.'
+  },
+  architects_folio: {
+    id: 'architects_folio',
+    name: "Architect's Folio",
+    tier: 2,
+    effect: 'Known Plans and Furniture Patterns stay unlocked across Timed Terms; build time -5%.'
+  },
+  healers_compendium: {
+    id: 'healers_compendium',
+    name: "Healer's Compendium",
+    tier: 2,
+    effect: 'Healing +20%.'
+  },
+  the_quiet_corridor: {
+    id: 'the_quiet_corridor',
+    name: 'The Quiet Corridor',
+    tier: 2,
+    effect: 'Misbehavior -15%.'
+  },
+
+  // Tier 3 (7)
+  the_eternal_index: {
+    id: 'the_eternal_index',
+    name: 'The Eternal Index',
+    tier: 3,
+    effect: 'Recent draws count half toward draft price growth.'
+  },
+  atlas_of_the_unmapped: {
+    id: 'atlas_of_the_unmapped',
+    name: 'Atlas of the Unmapped',
+    tier: 3,
+    effect: '+1 loot roll on every expedition that brings full rewards.'
+  },
+  book_of_bright_mornings: {
+    id: 'book_of_bright_mornings',
+    name: 'Book of Bright Mornings',
+    tier: 3,
+    effect: 'Mana per review +3%.'
+  },
+  covenant_of_the_veil: {
+    id: 'covenant_of_the_veil',
+    name: 'Covenant of the Veil',
+    tier: 3,
+    effect: 'Veil cost -10%; breaches only at Torn.'
+  },
+  menagerie_royale: {
+    id: 'menagerie_royale',
+    name: 'Menagerie Royale',
+    tier: 3,
+    effect: 'Creature buffs +15%; up to 3 of a species give buffs.'
+  },
+  the_founders_testament: {
+    id: 'the_founders_testament',
+    name: "The Founder's Testament",
+    tier: 3,
+    effect: 'Timed Terms start with x3 materials and +1 Known Plan choice.'
+  },
+  grimoire_of_swift_hands: {
+    id: 'grimoire_of_swift_hands',
+    name: 'Grimoire of Swift Hands',
+    tier: 3,
+    effect: 'Spell cooldowns -30%.'
+  }
+};
+
+export const ENDLESS_SPELLBOOK_MILESTONES: Array<{ renown: number; tier: 1 | 2 | 3 }> = [
+  { renown: 100, tier: 1 },
+  { renown: 250, tier: 1 },
+  { renown: 400, tier: 2 },
+  { renown: 600, tier: 2 },
+  { renown: 850, tier: 3 },
+  { renown: 1200, tier: 3 }
+];
+
+/** Alumni Career Bonus Category Caps (GDD §31.3). */
+export const ALUMNI_BONUS_CAPS = {
+  teacher: 0.15,
+  scholar: 0.05,
+  gardener: 0.20,
+  tamer_taming: 0.20,
+  tamer_creature: 0.10,
+  healer: 0.20,
+  warder: 0.10,
+  alchemist: 0.20,
+  builder: 0.10,
+  adventurer_fortune: 1,
+  resident_per_school: 0.10
+} as const;
+
+
+
+

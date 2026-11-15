@@ -23,7 +23,7 @@ import { FoundingDay, GuidedTour, GoalBanner } from './visual/onboarding/Foundin
 import { applyTutorialAction, phaseAfterCreate, STUDY_PARTS, tourUsesFurnishingsTab, tourStepId, tourView } from './visual/onboarding/flow';
 import { AnkicasterEngine } from './utils/engine';
 import type { DraftDeckId } from './utils/decks';
-import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS, SCHOOL_EVENTS } from './data/content';
+import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS, SCHOOL_EVENTS, SPELLBOOK_DEFINITIONS } from './data/content';
 
 // Components
 import { TopBar } from './components/TopBar';
@@ -119,6 +119,9 @@ export default function App() {
   const [activeEventModal, setActiveEventModal] = useState<SchoolEvent | null>(null);
   const [isCodexOpen, setIsCodexOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isVeilModalOpen, setIsVeilModalOpen] = useState(false);
+  const [veilDismissedCost, setVeilDismissedCost] = useState<number | null>(null);
+  const [selectedSpellbookPlan, setSelectedSpellbookPlan] = useState<string>('');
   // In-app reset confirm: window.confirm is blocked in some embedded previews (e.g. AI Studio)
   const [confirmReset, setConfirmReset] = useState(false);
   useEffect(() => { if (!confirmReset) return; const t = setTimeout(() => setConfirmReset(false), 5000); return () => clearTimeout(t); }, [confirmReset]);
@@ -312,7 +315,16 @@ export default function App() {
   }, [state.settings.sound]);
 
   // Add toast notification
-  const addToast = (text: string, type: string = 'info') => {
+  const addToast = (
+    text: string,
+    type: string = 'info',
+    kind: 'review' | 'bell' | 'event' | 'action' = 'action',
+    modeOverride?: FullGameState['settings']['toastMode']
+  ) => {
+    const mode = modeOverride ?? state.settings?.toastMode ?? 'every_review';
+    if (mode === 'off' && kind !== 'action') return;
+    if (mode === 'events_only' && (kind === 'review' || kind === 'bell')) return;
+    if (mode === 'every_bell' && kind === 'review') return;
     const id = `${Date.now()}-${Math.random()}`;
     setToasts(prev => [...prev.slice(-4), { id, text, type }]);
     setTimeout(() => {
@@ -324,12 +336,14 @@ export default function App() {
   const handleAnswerCard = useCallback((cardId: number, ease: 1 | 2 | 3 | 4, elapsedMs: number = 2400) => {
     setState(current => {
       const result = AnkicasterEngine.applyHonestReview(current, cardId, ease, elapsedMs);
+      const bellRung = result.state.bellIndex > current.bellIndex;
+      const toastMode = current.settings?.toastMode ?? 'every_review';
       if (result.toast) {
-        addToast(result.toast, ease === 1 ? 'warning' : 'success');
+        addToast(result.toast, ease === 1 ? 'warning' : 'success', bellRung ? 'bell' : 'review', toastMode);
       }
-      result.notifications.forEach(n => addToast(n, 'notice'));
+      result.notifications.forEach(n => addToast(n, 'notice', 'event', toastMode));
 
-      if (result.state.bellIndex > current.bellIndex) {
+      if (bellRung) {
         playChime('bell');
       } else {
         playChime('review');
@@ -359,11 +373,13 @@ export default function App() {
 
       setState(current => {
         const result = AnkicasterEngine.applyHonestReview(current, cid, payload.ease, ms, age, rid);
+        const bellRung = result.state.bellIndex > current.bellIndex;
+        const toastMode = current.settings?.toastMode ?? 'every_review';
         if (result.toast) {
-          addToast(result.toast, payload.ease === 1 ? 'warning' : 'success');
+          addToast(result.toast, payload.ease === 1 ? 'warning' : 'success', bellRung ? 'bell' : 'review', toastMode);
         }
-        result.notifications.forEach(n => addToast(n, 'notice'));
-        if (result.state.bellIndex > current.bellIndex) {
+        result.notifications.forEach(n => addToast(n, 'notice', 'event', toastMode));
+        if (bellRung) {
           playChime('bell');
         } else {
           playChime('review');
@@ -483,8 +499,10 @@ export default function App() {
           const rid = payload.reviewId ?? payload.review_id;
           setState(current => {
             const result = AnkicasterEngine.applyHonestReview(current, cid, payload.ease, ms, age, rid);
-            if (result.toast) addToast(result.toast, payload.ease === 1 ? 'warning' : 'success');
-            result.notifications.forEach(n => addToast(n, 'notice'));
+            const bellRung = result.state.bellIndex > current.bellIndex;
+            const toastMode = current.settings?.toastMode ?? 'every_review';
+            if (result.toast) addToast(result.toast, payload.ease === 1 ? 'warning' : 'success', bellRung ? 'bell' : 'review', toastMode);
+            result.notifications.forEach(n => addToast(n, 'notice', 'event', toastMode));
             return result.state;
           });
         }
@@ -522,6 +540,7 @@ export default function App() {
   // Handler: Batch Simulation of Honest Reviews (gated behind devMode)
   const handleSimulateBatch = (count: number) => {
     let curState = state;
+    const startMana = state.mana;
     const cardIds = Object.keys(curState.allCards).map(Number);
     for (let i = 0; i < count; i++) {
       const randomCardId = cardIds[Math.floor(Math.random() * cardIds.length)];
@@ -531,7 +550,8 @@ export default function App() {
     }
     setState(curState);
     playChime('bell');
-    addToast(`Completed ${count} simulated honest reviews (+${count * 10} Mana)!`, 'success');
+    const manaDelta = Math.max(0, curState.mana - startMana);
+    addToast(`Completed ${count} simulated honest reviews (+${manaDelta} Mana)!`, 'success');
   };
 
   // Handler: Day Rollover (Dev Mode / Test Tool)
@@ -816,14 +836,15 @@ export default function App() {
       addToast(res.error || 'Failed to brew.', 'warning');
     } else {
       setState(res.state);
-      addToast('Potion brewed in laboratory!', 'success');
+      const lastMsg = res.state.notices[res.state.notices.length - 1]?.text || 'Alchemy brew queued!';
+      addToast(lastMsg, 'success');
       playChime('review');
     }
   };
 
   // Handler: Use Potion
-  const handleUsePotion = (potionId: string) => {
-    const res = AnkicasterEngine.usePotion(state, potionId);
+  const handleUsePotion = (potionId: string, target?: number | import('./types/ankicaster').AlchemyTarget) => {
+    const res = AnkicasterEngine.usePotion(state, potionId, target);
     if (!res.success) {
       addToast(res.error || 'Failed to use potion', 'warning');
     } else {
@@ -842,6 +863,66 @@ export default function App() {
       setState(res.state);
       addToast('Hazard dispelled from room!', 'success');
       playChime('mastery');
+    }
+  };
+
+  // Handler: Reinforce Veil (Warding Chamber)
+  const handleReinforceVeil = () => {
+    const res = AnkicasterEngine.reinforceVeil(state);
+    if (!res.success) {
+      addToast(res.error || 'Could not reinforce the Veil', 'warning');
+    } else {
+      setState(res.state);
+      addToast(`Veil reinforced to ${res.state.veil.strength}%!`, 'success');
+      playChime('mastery');
+    }
+  };
+
+  // Handler: Resolve Wanderer Breach
+  const handleResolveWanderer = (roomId: number, method: 'feed' | 'tame') => {
+    const res = AnkicasterEngine.resolveWanderer(state, roomId, method);
+    if (!res.success) {
+      addToast(res.error || 'Could not resolve Wanderer', 'warning');
+    } else {
+      setState(res.state);
+      addToast(res.message || 'Wanderer action completed.', 'success');
+      playChime('mastery');
+    }
+  };
+
+  // Handler: Skip Forecasted Event (Foresight)
+  const handleSkipForecastEvent = (day: number) => {
+    const res = AnkicasterEngine.skipForecastedEvent(state, day);
+    if (!res.success) {
+      addToast(res.error || 'Could not skip event', 'warning');
+    } else {
+      setState(res.state);
+      addToast(`Averted forecasted event for Day ${day}.`, 'success');
+      playChime('review');
+    }
+  };
+
+  // Handler: Sunlit Sanctum Rite of Renewal
+  const handlePerformRiteOfRenewal = (characterId: number, traitId: string) => {
+    const res = AnkicasterEngine.performRiteOfRenewal(state, characterId, traitId);
+    if (!res.success) {
+      addToast(res.error || 'Could not perform Rite of Renewal', 'warning');
+    } else {
+      setState(res.state);
+      addToast('Rite of Renewal completed! Troublesome trait cleansed.', 'success');
+      playChime('mastery');
+    }
+  };
+
+  // Handler: Repair Damaged Furniture (25% materials)
+  const handleRepairFurniture = (roomId: number, furnitureId: number) => {
+    const res = AnkicasterEngine.repairFurniture(state, roomId, furnitureId);
+    if (!res.success) {
+      addToast(res.error || 'Could not repair furniture', 'warning');
+    } else {
+      setState(res.state);
+      addToast('Furniture repaired to full effectiveness!', 'success');
+      playChime('review');
     }
   };
 
@@ -888,6 +969,89 @@ export default function App() {
       setState(res.state);
       setSelectedCreatureId(cur => (cur === creatureId ? null : cur));
       addToast('Creature released back to the wild.', 'info');
+    }
+  };
+
+  // Handler: Configure Menagerie Habitat Modules
+  const handleSetMenagerieModules = (roomId: number, modules: import('./types/ankicaster').HabitatType[]) => {
+    const res = AnkicasterEngine.setMenagerieModules(state, roomId, modules);
+    if (!res.success) {
+      addToast(res.error || 'Cannot configure Menagerie modules.', 'warning');
+    } else {
+      setState(res.state);
+      addToast('Menagerie habitat modules updated!', 'success');
+    }
+  };
+
+  // Handler: Awaken Geode Golem at Workshop
+  const handleAwakenGeodeGolem = () => {
+    const res = AnkicasterEngine.awakenGeodeGolem(state);
+    if (!res.success) {
+      addToast(res.error || 'Cannot awaken Geode Golem.', 'warning');
+    } else {
+      setState(res.state);
+      addToast('Awakened a Geode Golem into your Crystal habitat!', 'success');
+      playChime('mastery');
+    }
+  };
+
+  // Handler: Greenhouse crop bed selection
+  const handleSetGreenhouseCrops = (roomId: number, crops: string[]) => {
+    const res = AnkicasterEngine.setGreenhouseCrops(state, roomId, crops);
+    if (!res.success) {
+      addToast(res.error || 'Cannot update Greenhouse crops.', 'warning');
+    } else {
+      setState(res.state);
+      addToast('Greenhouse crop beds updated!', 'success');
+    }
+  };
+
+  // Handler: Glassworks Stone->Glass toggle
+  const handleSetGlassworksActive = (roomId: number, active: boolean) => {
+    const res = AnkicasterEngine.setGlassworksActive(state, roomId, active);
+    if (!res.success) {
+      addToast(res.error || 'Cannot update Glassworks.', 'warning');
+    } else {
+      setState(res.state);
+      addToast(active ? 'Glassworks furnace lit.' : 'Glassworks furnace paused.', 'info');
+    }
+  };
+
+  // Handler: Library Recipe Research
+  const handleResearchRecipe = (roomId: number, recipeId?: string) => {
+    const res = AnkicasterEngine.researchRecipe(state, roomId, recipeId);
+    if (!res.success) {
+      addToast(res.error || 'Cannot research recipe.', 'warning');
+    } else {
+      setState(res.state);
+      const msg = res.state.notices[res.state.notices.length - 1]?.text || 'Recipe hint uncovered!';
+      addToast(msg, 'success');
+      playChime('review');
+    }
+  };
+
+  // Handler: Scriptorium Scroll Crafting
+  const handleStartScrollCraft = (roomId: number, scrollId: import('./types/ankicaster').ScrollId) => {
+    const res = AnkicasterEngine.startScrollCraft(state, roomId, scrollId);
+    if (!res.success) {
+      addToast(res.error || 'Cannot start scroll craft.', 'warning');
+    } else {
+      setState(res.state);
+      const msg = res.state.notices[res.state.notices.length - 1]?.text || 'Started inscribing scroll!';
+      addToast(msg, 'success');
+      playChime('review');
+    }
+  };
+
+  // Handler: Use crafted Scroll
+  const handleUseScroll = (scrollId: import('./types/ankicaster').ScrollId, target?: { roomId?: number; floorY?: number; recipeId?: string }) => {
+    const res = AnkicasterEngine.useScroll(state, scrollId, target);
+    if (!res.success) {
+      addToast(res.error || 'Cannot use scroll.', 'warning');
+    } else {
+      setState(res.state);
+      addToast(res.message || 'Scroll activated!', 'success');
+      playChime('review');
     }
   };
 
@@ -955,6 +1119,9 @@ export default function App() {
     setIsDaySummaryOpen(false);
     setIsCodexOpen(false);
     setIsSettingsOpen(false);
+    setIsVeilModalOpen(false);
+    setVeilDismissedCost(null);
+    setSelectedSpellbookPlan('');
   };
 
   const handleOpenRoomById = (roomId: number) => {
@@ -1017,10 +1184,11 @@ export default function App() {
             onFeedCreature={handleFeedCreature}
             onAssignTamer={handleAssignTamer}
             onSelectCreature={id => setSelectedCreatureId(id)}
+            onAwakenGeodeGolem={handleAwakenGeodeGolem}
           />
         );
       case 'alchemy':
-        return <AlchemyPanel state={state} onBrewPotion={handleBrewPotion} onUsePotion={handleUsePotion} />;
+        return <AlchemyPanel state={state} onBrewPotion={handleBrewPotion} onUsePotion={handleUsePotion} onUseScroll={handleUseScroll} />;
       case 'rift':
         return <RiftPanel state={state} onLaunchExpedition={handleLaunchExpedition} />;
       case 'stores':
@@ -1032,6 +1200,7 @@ export default function App() {
           <VisitorsPanel
             state={state}
             onOpenEvent={ev => { setOpenScreen(null); setActiveEventModal(ev); }}
+            onSkipForecastEvent={handleSkipForecastEvent}
           />
         );
       case 'ponder':
@@ -1196,7 +1365,10 @@ export default function App() {
   }, [tutorial?.phase]);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans select-none antialiased">
+    <div
+      className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans select-none antialiased"
+      style={{ fontSize: `${Math.round((state.settings.textScale || 1) * 100)}%` }}
+    >
       {/* Slim top bar: mana, day/term, Veil, hazards, Build, Academy menu, Settings */}
       <div className="sticky top-0 z-40">
         <TopBar
@@ -1206,6 +1378,7 @@ export default function App() {
           buildModeOpen={buildModeOpen}
           onToggleBuildMode={handleToggleBuildMode}
           forceAcademy={!!view?.forceAcademy}
+          onResolveVeil={() => setIsVeilModalOpen(true)}
           devControls={IS_DEV_MODE ? (
             <div className="hidden md:flex items-center gap-1.5">
               <button onClick={() => handleSimulateBatch(1)} className="px-2.5 py-1.5 min-h-[32px] bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-[12px] font-bold" title="Dev: one simulated review">+1 Rev</button>
@@ -1281,7 +1454,12 @@ export default function App() {
         <PonderOrbPicker state={state} onPick={sch => handleQueueWizardSession(sch, false)} onClose={() => setOpenScreen(null)} />
       )}
       {openScreen === 'grimoire' && (
-        <GrimoireBook state={state} onCast={handleCastSpell} onClose={() => setOpenScreen(null)} />
+        <GrimoireBook
+          state={state}
+          onCast={handleCastSpell}
+          onStudySpell={(sch, spellId) => handleQueueWizardSession(sch, true, spellId)}
+          onClose={() => setOpenScreen(null)}
+        />
       )}
 
       {/* Floating Notice Toasts */}
@@ -1318,6 +1496,17 @@ export default function App() {
           onAssignStaff={handleAssignRoomStaff}
           onClearStaff={handleClearRoomStaff}
           onResolveHazard={handleResolveHazard}
+          onReinforceVeil={handleReinforceVeil}
+          onResolveWanderer={handleResolveWanderer}
+          onSkipForecastEvent={handleSkipForecastEvent}
+          onPerformRiteOfRenewal={handlePerformRiteOfRenewal}
+          onRepairFurniture={handleRepairFurniture}
+          onSetMenagerieModules={handleSetMenagerieModules}
+          onAwakenGeodeGolem={handleAwakenGeodeGolem}
+          onSetGreenhouseCrops={handleSetGreenhouseCrops}
+          onSetGlassworksActive={handleSetGlassworksActive}
+          onResearchRecipe={handleResearchRecipe}
+          onStartScrollCraft={handleStartScrollCraft}
           onUpgrade={roomId => {
             const res = AnkicasterEngine.upgradeRoom(state, roomId);
             if (!res.success) addToast(res.error || 'Upgrade failed', 'warning');
@@ -1414,17 +1603,17 @@ export default function App() {
                 Rule BR-26 Arcane Inscription
               </span>
               <h3 className="text-lg md:text-xl font-bold text-amber-200 mt-1">
-                The Grimoire Reveals Three Destinies
+                The Grimoire Reveals {draftChoices.length === 4 ? 'Four' : 'Three'} Destinies
               </h3>
               <p className="text-xs text-slate-300">
-                Choose one card to keep. The other two return to the celestial archives.
+                Choose one card to keep. The other {draftChoices.length === 4 ? 'three' : 'two'} return to the celestial archives.
               </p>
               {draftTutorial && (
                 <p className="text-xs text-amber-100/90 mt-2" data-testid="draft-tutorial">{draftTutorial}</p>
               )}
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className={`grid grid-cols-1 ${draftChoices.length === 4 ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-4`}>
               {draftChoices.map(card => {
                 const rarityColor =
                   card.rarity === 'legendary'
@@ -1621,7 +1810,7 @@ export default function App() {
       {/* MODAL 6: SETTINGS & DEVELOPER DEBUG CONTROLS */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4 text-xs">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md max-h-[85vh] overflow-y-auto p-6 shadow-2xl space-y-4 text-xs">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
                 <SettingsIcon className="w-4 h-4 text-slate-400" />
@@ -1754,10 +1943,235 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Safe Floor indicator */}
+              {/* Economy & Display Controls */}
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-amber-300">Economy & Display</span>
+                  {(state.settings.manaPerReview ?? 10) !== 10 && (
+                    <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/40 text-[10px] font-bold">
+                      Custom Economy
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-slate-300 block">Mana per Review (1–20)</span>
+                    <span className="text-[10px] text-slate-500">Default is 10 mana per honest review</span>
+                  </div>
+                  <input
+                    aria-label="Mana per Review"
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={state.settings.manaPerReview ?? 10}
+                    onChange={e => {
+                      const val = Math.max(1, Math.min(20, Math.round(Number(e.target.value) || 10)));
+                      setState(prev => ({
+                        ...prev,
+                        settings: { ...prev.settings, manaPerReview: val }
+                      }));
+                    }}
+                    className="bg-slate-900 border border-slate-700 px-2 py-1 rounded-lg text-slate-200 text-xs w-16 text-center"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300">Toast Notifications</span>
+                  <select
+                    aria-label="Toast Notifications"
+                    value={state.settings.toastMode ?? 'every_review'}
+                    onChange={e => {
+                      const val = e.target.value as FullGameState['settings']['toastMode'];
+                      setState(prev => ({
+                        ...prev,
+                        settings: { ...prev.settings, toastMode: val }
+                      }));
+                    }}
+                    className="bg-slate-900 border border-slate-700 px-2.5 py-1.5 rounded-xl text-xs font-bold text-amber-200"
+                  >
+                    <option value="every_review">Every review</option>
+                    <option value="every_bell">Every bell</option>
+                    <option value="events_only">Events only</option>
+                    <option value="off">Off</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300">UI Text Scale</span>
+                  <select
+                    aria-label="UI Text Scale"
+                    value={String(state.settings.textScale ?? 1)}
+                    onChange={e => {
+                      const val = Number(e.target.value) || 1;
+                      setState(prev => ({
+                        ...prev,
+                        settings: { ...prev.settings, textScale: val }
+                      }));
+                    }}
+                    className="bg-slate-900 border border-slate-700 px-2.5 py-1.5 rounded-xl text-xs font-bold text-amber-200"
+                  >
+                    <option value="0.85">85% (Compact)</option>
+                    <option value="1">100% (Default)</option>
+                    <option value="1.15">115% (Large)</option>
+                    <option value="1.3">130% (Extra Large)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Veil Upkeep Mode */}
               <div className="flex items-center justify-between bg-slate-950 p-3.5 rounded-xl border border-slate-800">
-                <span>Daily Veil Upkeep</span>
-                <span className="font-semibold text-indigo-300">Auto-Pay (BR-25 10% Floor Active)</span>
+                <div>
+                  <span className="block font-medium text-slate-200">Daily Veil Upkeep</span>
+                  <span className="text-[11px] text-slate-400">BR-25 10% bank floor always active</span>
+                </div>
+                <select
+                  aria-label="Daily Veil Upkeep"
+                  value={state.settings.veilPayment ?? 'auto'}
+                  onChange={e => {
+                    const val = e.target.value as 'auto' | 'ask';
+                    setState(prev => ({
+                      ...prev,
+                      settings: { ...prev.settings, veilPayment: val },
+                      veil: { ...prev.veil, autoPay: val === 'auto' }
+                    }));
+                  }}
+                  className="bg-slate-900 border border-slate-700 px-2.5 py-1.5 rounded-xl text-xs font-bold text-indigo-200"
+                >
+                  <option value="auto">Auto-Pay</option>
+                  <option value="ask">Ask Daily</option>
+                </select>
+              </div>
+
+              {/* Card Linking Settings */}
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2.5">
+                <span className="font-bold text-indigo-300 block">Anki Card Linking</span>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300">Cards per Student (10–100)</span>
+                  <input
+                    aria-label="Cards per Student"
+                    type="number"
+                    min={10}
+                    max={100}
+                    value={state.settings.cardsPerStudent ?? 50}
+                    onChange={e => {
+                      const val = Math.max(10, Math.min(100, Math.round(Number(e.target.value) || 50)));
+                      setState(prev => ({
+                        ...prev,
+                        settings: { ...prev.settings, cardsPerStudent: val }
+                      }));
+                    }}
+                    className="bg-slate-900 border border-slate-700 px-2 py-1 rounded-lg text-slate-200 text-xs w-16 text-center"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300">Retirement Age (30–365d)</span>
+                  <input
+                    aria-label="Retirement Age"
+                    type="number"
+                    min={30}
+                    max={365}
+                    value={state.settings.retirementAgeDays ?? 90}
+                    onChange={e => {
+                      const val = Math.max(30, Math.min(365, Math.round(Number(e.target.value) || 90)));
+                      setState(prev => ({
+                        ...prev,
+                        settings: { ...prev.settings, retirementAgeDays: val }
+                      }));
+                    }}
+                    className="bg-slate-900 border border-slate-700 px-2 py-1 rounded-lg text-slate-200 text-xs w-16 text-center"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300">Deck Scope</span>
+                  <input
+                    aria-label="Deck Scope"
+                    type="text"
+                    placeholder="all"
+                    value={state.settings.deckScope ?? 'all'}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setState(prev => ({
+                        ...prev,
+                        settings: { ...prev.settings, deckScope: val || 'all' }
+                      }));
+                    }}
+                    className="bg-slate-900 border border-slate-700 px-2 py-1 rounded-lg text-slate-200 text-xs w-36"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300">Suspended Release (7–90d)</span>
+                  <input
+                    aria-label="Suspended Release Days"
+                    type="number"
+                    min={7}
+                    max={90}
+                    value={state.settings.suspendedReleaseDays ?? 21}
+                    onChange={e => {
+                      const val = Math.max(7, Math.min(90, Math.round(Number(e.target.value) || 21)));
+                      setState(prev => ({
+                        ...prev,
+                        settings: { ...prev.settings, suspendedReleaseDays: val }
+                      }));
+                    }}
+                    className="bg-slate-900 border border-slate-700 px-2 py-1 rounded-lg text-slate-200 text-xs w-16 text-center"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300">Avoid Siblings (same Note ID)</span>
+                  <button
+                    onClick={() => {
+                      setState(prev => ({
+                        ...prev,
+                        settings: { ...prev.settings, avoidSiblings: !prev.settings.avoidSiblings }
+                      }));
+                    }}
+                    className={`px-3 py-1 rounded-xl text-xs font-bold transition ${
+                      state.settings.avoidSiblings ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {state.settings.avoidSiblings ? 'On' : 'Off'}
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300">Honest Intervals Only</span>
+                  <button
+                    onClick={() => {
+                      setState(prev => ({
+                        ...prev,
+                        settings: { ...prev.settings, honestIntervalsOnly: !prev.settings.honestIntervalsOnly }
+                      }));
+                    }}
+                    className={`px-3 py-1 rounded-xl text-xs font-bold transition ${
+                      state.settings.honestIntervalsOnly ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {state.settings.honestIntervalsOnly ? 'On' : 'Off'}
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300">Allow Linking New Cards</span>
+                  <button
+                    onClick={() => {
+                      setState(prev => ({
+                        ...prev,
+                        settings: { ...prev.settings, linkNewCards: !prev.settings.linkNewCards }
+                      }));
+                    }}
+                    className={`px-3 py-1 rounded-xl text-xs font-bold transition ${
+                      state.settings.linkNewCards ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {state.settings.linkNewCards ? 'On' : 'Off'}
+                  </button>
+                </div>
               </div>
 
               {/* Timed Term / examTimer Configuration */}
@@ -1825,16 +2239,27 @@ export default function App() {
                       <span className="text-slate-300">Term Length:</span>
                       <div className="flex items-center gap-1.5">
                         <input
+                          aria-label="Term Length"
                           type="number"
                           min="7"
                           max="180"
                           value={state.settings.termLengthDays || 30}
                           onChange={e => {
-                            const val = Number(e.target.value) || 30;
-                            setState(prev => ({
-                              ...prev,
-                              settings: { ...prev.settings, termLengthDays: val }
-                            }));
+                            const val = Math.max(7, Math.min(180, Number(e.target.value) || 30));
+                            setState(prev => {
+                              const startMs = prev.termStartDateMs ?? Date.now();
+                              const endMs = startMs + val * 86_400_000;
+                              return {
+                                ...prev,
+                                settings: {
+                                  ...prev.settings,
+                                  termLengthDays: val,
+                                  termEndDate: new Date(endMs).toISOString().slice(0, 10)
+                                },
+                                termStartDateMs: startMs,
+                                termEndDateMs: endMs
+                              };
+                            });
                           }}
                           className="bg-slate-900 border border-slate-700 px-2 py-1 rounded-lg text-slate-200 text-xs w-16 text-center"
                         />
@@ -1938,6 +2363,192 @@ export default function App() {
                 className="py-3 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition text-xs"
               >
                 Close Report
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 7b: SPELLBOOK CHOICE MODAL (§31.1–§31.2) */}
+      {state.pendingSpellbookDraft && (() => {
+        const draft = state.pendingSpellbookDraft;
+        const unlockableRooms = Object.values(ROOM_DEFINITIONS).filter(r => !r.noDemolish);
+        const planPickValue = selectedSpellbookPlan || unlockableRooms[0]?.id || '';
+        return (
+          <div
+            data-testid="spellbook-draft-modal"
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          >
+            <div className="bg-slate-900 border border-indigo-500/40 rounded-2xl w-full max-w-xl p-6 shadow-2xl space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div>
+                  <h3 className="text-lg font-bold text-indigo-200 flex items-center gap-2">
+                    📚 Choose a Spellbook
+                    <span className="px-2 py-0.5 rounded bg-indigo-500/20 border border-indigo-500/40 text-xs text-indigo-300">
+                      Tier {draft.tier}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">{draft.source}</p>
+                </div>
+              </div>
+
+              {draft.allowPlanPick && (
+                <div className="p-3 bg-slate-950 rounded-xl border border-amber-500/30 space-y-1.5">
+                  <label className="text-xs font-bold text-amber-300 block">
+                    Founder&apos;s Testament Bonus Room Plan:
+                  </label>
+                  <select
+                    aria-label="Founder Bonus Room Plan"
+                    value={planPickValue}
+                    onChange={e => setSelectedSpellbookPlan(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 px-3 py-1.5 rounded-lg text-xs text-slate-100"
+                  >
+                    {unlockableRooms.map(r => (
+                      <option key={r.id} value={r.id}>
+                        {r.name} {(state.knownPlans || []).includes(r.id) ? '(+1 Copy)' : '(New Plan)'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 gap-3">
+                {draft.choices.map(sbId => {
+                  const def = SPELLBOOK_DEFINITIONS[sbId];
+                  if (!def) return null;
+                  return (
+                    <button
+                      key={sbId}
+                      data-testid={`choose-spellbook-${sbId}`}
+                      onClick={() => {
+                        const res = AnkicasterEngine.chooseSpellbook(
+                          state,
+                          sbId,
+                          draft.allowPlanPick ? planPickValue : undefined
+                        );
+                        if (!res.success) {
+                          addToast(res.error || 'Could not bind spellbook', 'warning');
+                          return;
+                        }
+                        setState(res.state);
+                        setSelectedSpellbookPlan('');
+                        addToast(`📚 Bound "${def.name}" to your Grimoire Shelf!`, 'success');
+                      }}
+                      className="text-left p-4 rounded-xl bg-slate-950 hover:bg-indigo-950/50 border border-slate-800 hover:border-indigo-500/60 transition space-y-1"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-amber-300 text-sm">{def.name}</span>
+                        <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-800 text-indigo-300">
+                          Tier {def.tier}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-300">{def.effect}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* MODAL 7c: FOUNDER'S TESTAMENT BONUS PLAN PICKER (§31.2) */}
+      {state.pendingFoundersPlanChoice && !state.pendingSpellbookDraft && (() => {
+        const unlockableRooms = Object.values(ROOM_DEFINITIONS).filter(r => !r.noDemolish);
+        const planPickValue = selectedSpellbookPlan || unlockableRooms[0]?.id || '';
+        return (
+          <div
+            data-testid="founders-plan-modal"
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          >
+            <div className="bg-slate-900 border border-amber-500/40 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+              <div>
+                <h3 className="text-lg font-bold text-amber-300">📜 Founder&apos;s Testament</h3>
+                <p className="text-xs text-slate-300 mt-1">
+                  Your bound Founder&apos;s Testament grants a bonus Known Room Plan for this term.
+                </p>
+              </div>
+              <select
+                aria-label="Select Bonus Room Plan"
+                value={planPickValue}
+                onChange={e => setSelectedSpellbookPlan(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-700 px-3 py-2 rounded-xl text-xs text-slate-100"
+              >
+                {unlockableRooms.map(r => (
+                  <option key={r.id} value={r.id}>
+                    {r.name} {(state.knownPlans || []).includes(r.id) ? '(+1 Copy)' : '(Unlock)'}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => {
+                  if (!planPickValue) return;
+                  const res = AnkicasterEngine.claimFoundersPlan(state, planPickValue);
+                  if (!res.success) {
+                    addToast(res.error || 'Could not claim room plan', 'warning');
+                    return;
+                  }
+                  setState(res.state);
+                  setSelectedSpellbookPlan('');
+                  addToast('Bonus room plan added to your blueprints!', 'success');
+                }}
+                className="w-full py-2.5 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-xs transition"
+              >
+                Claim Bonus Plan
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* MODAL 7d: MANUAL VEIL PAYMENT PROMPT (veilPayment === 'ask') */}
+      {state.pendingVeilPayment && (isVeilModalOpen || veilDismissedCost !== state.pendingVeilPayment.totalCost) && (
+        <div
+          data-testid="manual-veil-modal"
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <div className="bg-slate-900 border border-indigo-500/40 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+            <div>
+              <h3 className="text-lg font-bold text-indigo-200">🛡️ Daily Veil Upkeep Due</h3>
+              <p className="text-xs text-slate-300 mt-1">
+                {state.pendingVeilPayment.days} day(s) of Veil maintenance require{' '}
+                <strong className="text-amber-300">{state.pendingVeilPayment.totalCost} Mana</strong>{' '}
+                (10% bank floor protected). Current Veil strength: <strong>{state.veil.strength}%</strong>.
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <button
+                onClick={() => {
+                  const res = AnkicasterEngine.resolvePendingVeilPayment(state, true);
+                  setState(res.state);
+                  setIsVeilModalOpen(false);
+                  setVeilDismissedCost(null);
+                  addToast(res.message, 'success');
+                }}
+                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl text-xs transition"
+              >
+                Pay {state.pendingVeilPayment.totalCost} Mana
+              </button>
+              <button
+                onClick={() => {
+                  const res = AnkicasterEngine.resolvePendingVeilPayment(state, false);
+                  setState(res.state);
+                  setIsVeilModalOpen(false);
+                  setVeilDismissedCost(null);
+                  addToast(res.message, 'warning');
+                }}
+                className="py-2.5 px-3 bg-rose-950/70 hover:bg-rose-900 text-rose-200 border border-rose-800/60 font-bold rounded-xl text-xs transition"
+              >
+                Skip (-15% Veil)
+              </button>
+              <button
+                onClick={() => {
+                  setIsVeilModalOpen(false);
+                  setVeilDismissedCost(state.pendingVeilPayment?.totalCost ?? null);
+                }}
+                className="py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition"
+              >
+                Later
               </button>
             </div>
           </div>

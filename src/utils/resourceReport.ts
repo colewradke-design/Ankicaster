@@ -3,9 +3,10 @@
  * Bell production and one-off gains both stop at the cap. Stock already
  * above it is left alone.
  */
-import { FullGameState, PlacedRoom, ResourceInventory } from '../types/ankicaster';
+import { CreatureInstance, FullGameState, PlacedRoom, ResourceInventory } from '../types/ankicaster';
 import { academyFurnitureEffect } from './formulas';
 import { isRoomUnfinished } from './requiredFurniture';
+import { creatureCategoryBonus } from './creatures';
 
 export const CAPPED_RESOURCES = new Set(['timber', 'stone', 'glass', 'cloth', 'provisions', 'greens', 'fish', 'nectar']);
 
@@ -56,11 +57,19 @@ export function resourceLabel(resource: string): string {
   return RESOURCE_LABEL.get(resource) || resource;
 }
 
-/** 200, plus 100 for every Storage Vault that is built and not Unfinished, plus furniture storage bonuses. */
-export function storageCap(state: { rooms?: PlacedRoom[] }): number {
+/** 200, plus 100 for every Storage Vault that is built and not Unfinished, plus furniture storage bonuses, scaled by Geode Golem (+10%/copy). */
+export function storageCap(state: { rooms?: PlacedRoom[]; creatures?: CreatureInstance[]; spellbooks?: string[]; bellIndex?: number }): number {
   const vaults = (state.rooms || []).filter(r => r.defId === 'storage_vault' && r.state === 'built' && !isRoomUnfinished(r)).length;
   const bonus = academyFurnitureEffect(state.rooms || [], 'storage_bonus');
-  return 200 + 100 * vaults + bonus;
+  const base = 200 + 100 * vaults + bonus;
+  const golemBonus = state.creatures?.length
+    ? creatureCategoryBonus(
+        { creatures: state.creatures, rooms: state.rooms || [], spellbooks: state.spellbooks, bellIndex: state.bellIndex },
+        [{ defId: 'geode_golem', perCopy: 0.1 }],
+        0.5
+      )
+    : 0;
+  return Math.round(base * (1 + golemBonus));
 }
 
 /**

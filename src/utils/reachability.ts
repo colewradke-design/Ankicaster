@@ -20,32 +20,15 @@ export interface ReachabilityInfo {
   distance: number;
 }
 
-/**
- * Computes reachability and BFS distance for all rooms from the Entrance Hall.
- * Pure function: does not mutate rooms.
- */
-export function computeReachability(rooms: PlacedRoom[]): Map<number, ReachabilityInfo> {
-  const result = new Map<number, ReachabilityInfo>();
-
-  for (const r of rooms) {
-    result.set(r.id, { reachable: false, distance: Infinity });
-  }
-
-  // Find root Entrance Hall: built castle room with defId === 'entrance_hall' on floor 0
-  const entranceHalls = rooms.filter(
-    r => r.state === 'built' && r.defId === 'entrance_hall' && r.area === 'castle' && r.y === 0
-  );
-
-  if (entranceHalls.length === 0) {
-    return result;
-  }
-
-  // Build adjacency list
+function buildReachabilityAdjacency(rooms: PlacedRoom[]): Map<number, number[]> {
   const adj = new Map<number, number[]>();
   for (const r of rooms) {
     adj.set(r.id, []);
   }
 
+  const entranceHalls = rooms.filter(
+    r => r.state === 'built' && r.defId === 'entrance_hall' && r.area === 'castle' && r.y === 0
+  );
   const castleRooms = rooms.filter(r => r.state === 'built' && r.area === 'castle');
   const groundsRooms = rooms.filter(r => r.state === 'built' && r.area === 'grounds');
 
@@ -55,12 +38,10 @@ export function computeReachability(rooms: PlacedRoom[]): Map<number, Reachabili
     for (let j = i + 1; j < castleRooms.length; j++) {
       const b = castleRooms[j];
 
-      // Check vertical floor overlap
       const floorOverlapStart = Math.max(a.y, b.y);
       const floorOverlapEnd = Math.min(a.y + a.h, b.y + b.h);
 
       if (floorOverlapStart < floorOverlapEnd) {
-        // Must share vertical boundary: a.right === b.left or b.right === a.left
         const aRight = a.x + a.w;
         const bRight = b.x + b.w;
         if (aRight === b.x || bRight === a.x) {
@@ -87,9 +68,6 @@ export function computeReachability(rooms: PlacedRoom[]): Map<number, Reachabili
     }
   }
 
-  // Wizard's Study internal stair connects floor 0 and 1 intrinsically (handled since it spans y=0..2)
-  // Multi-floor rooms span floors so horizontal connections on any overlapping floor are already linked above.
-
   // 3. Grounds plots link to Entrance Hall via front path
   for (const eh of entranceHalls) {
     for (const g of groundsRooms) {
@@ -98,7 +76,61 @@ export function computeReachability(rooms: PlacedRoom[]): Map<number, Reachabili
     }
   }
 
-  // Run BFS starting from entrance hall(s)
+  return adj;
+}
+
+/**
+ * Computes minimum BFS step distance from any room in `originIds` to every room.
+ */
+export function computeDistanceFromRooms(rooms: PlacedRoom[], originIds: number[]): Map<number, number> {
+  const dists = new Map<number, number>();
+  for (const r of rooms) dists.set(r.id, Infinity);
+  if (originIds.length === 0) return dists;
+
+  const adj = buildReachabilityAdjacency(rooms);
+  const queue: Array<{ id: number; dist: number }> = [];
+  for (const oid of originIds) {
+    if (dists.has(oid)) {
+      dists.set(oid, 0);
+      queue.push({ id: oid, dist: 0 });
+    }
+  }
+
+  while (queue.length > 0) {
+    const { id, dist } = queue.shift()!;
+    const neighbors = adj.get(id) || [];
+    for (const nId of neighbors) {
+      const prev = dists.get(nId) ?? Infinity;
+      if (dist + 1 < prev) {
+        dists.set(nId, dist + 1);
+        queue.push({ id: nId, dist: dist + 1 });
+      }
+    }
+  }
+
+  return dists;
+}
+
+/**
+ * Computes reachability and BFS distance for all rooms from the Entrance Hall.
+ * Pure function: does not mutate rooms.
+ */
+export function computeReachability(rooms: PlacedRoom[]): Map<number, ReachabilityInfo> {
+  const result = new Map<number, ReachabilityInfo>();
+
+  for (const r of rooms) {
+    result.set(r.id, { reachable: false, distance: Infinity });
+  }
+
+  const entranceHalls = rooms.filter(
+    r => r.state === 'built' && r.defId === 'entrance_hall' && r.area === 'castle' && r.y === 0
+  );
+
+  if (entranceHalls.length === 0) {
+    return result;
+  }
+
+  const adj = buildReachabilityAdjacency(rooms);
   const queue: Array<{ id: number; dist: number }> = [];
   for (const eh of entranceHalls) {
     result.set(eh.id, { reachable: true, distance: 0 });

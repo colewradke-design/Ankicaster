@@ -27,7 +27,7 @@ import {
   isRoamingCompanion,
   originLabel
 } from '../utils/creatures';
-import type { CreatureRarity, HabitatType } from '../types/ankicaster';
+import type { CreatureRarity, HabitatType, ScrollId } from '../types/ankicaster';
 import React, { useEffect, useState } from 'react';
 import {
   FullGameState,
@@ -36,7 +36,8 @@ import {
   PlacedRoom,
   Character,
   RiftDestination,
-  CreatureInstance
+  CreatureInstance,
+  AlchemyTarget
 } from '../types/ankicaster';
 import {
   ROOM_DEFINITIONS,
@@ -44,8 +45,13 @@ import {
   POTION_RECIPES,
   RIFT_DESTINATIONS,
   SPELL_DEFINITIONS,
-  CREATURE_DEFINITIONS
+  CREATURE_DEFINITIONS,
+  TRAIT_DEFINITIONS,
+  PERSONALITY_DEFINITIONS,
+  SCROLL_DEFINITIONS,
+  SPELLBOOK_DEFINITIONS
 } from '../data/content';
+import { AnkicasterEngine } from '../utils/engine';
 import {
   academyFurnitureEffect,
   calculateStudentSkill,
@@ -55,10 +61,14 @@ import {
   getFacultySummary,
   careerAffinityMultiplier,
   classroomSchool,
+  computeAlumniBonuses,
+  computeStudyLevel,
   describeCareerAffinity,
+  maxStudySessionsForWizard,
   wizardMasteredSchools,
   wizardOrbQuote
 } from '../utils/formulas';
+import { grimoireStudyOption } from './StudyModals';
 import { ALL_SCHOOLS, buildAcademySchedule } from '../utils/schedule';
 import { isRoomUnfinished } from '../utils/requiredFurniture';
 import {
@@ -102,6 +112,10 @@ export const WizardStudyPanel: React.FC<{
 }> = ({ state, onQueueSession, onCastSpell }) => {
   const { wizard, mana } = state;
   const schools: SchoolType[] = ['arcane', 'nature', 'light', 'shadow', 'alchemy'];
+  const studyLevel = computeStudyLevel(wizard.levels);
+  const maxSessions = maxStudySessionsForWizard(studyLevel);
+  const totalSessions = (wizard.activeSession ? 1 : 0) + (wizard.queuedSessions ? wizard.queuedSessions.length : 0);
+  const unlearnedSpells = Object.values(SPELL_DEFINITIONS).filter(sp => !wizard.knownSpells.includes(sp.id));
 
   return (
     <div className="space-y-6">
@@ -115,7 +129,7 @@ export const WizardStudyPanel: React.FC<{
               {wizard.title} {wizard.name} ({wizard.pronouns})
             </h3>
             <p className="text-xs text-slate-300">
-              Headmaster of {wizard.academyName} · Arcane Study Tier {wizard.studyLevel}
+              Headmaster of {wizard.academyName} · Arcane Study Tier {studyLevel} (Queue {wizard.queuedSessions?.length || 0}/{maxSessions - 1})
             </p>
           </div>
         </div>
@@ -150,13 +164,22 @@ export const WizardStudyPanel: React.FC<{
                 style={{ width: `${Math.min(100, (wizard.activeSession.progress / wizard.activeSession.required) * 100)}%` }}
               />
             </div>
+            {(wizard.queuedSessions?.length || 0) > 0 && (
+              <div className="mt-2.5 flex flex-wrap gap-1.5">
+                {wizard.queuedSessions.map((q, idx) => (
+                  <span key={q.id || idx} className="text-[11px] px-2 py-0.5 rounded-full bg-slate-800/80 border border-slate-700 text-slate-300 capitalize">
+                    #{idx + 1}: {q.kind === 'orb' ? `${q.school} Lv ${q.targetLevel}` : SPELL_DEFINITIONS[q.spellId || '']?.name || 'Grimoire'} ({q.required}r)
+                  </span>
+                ))}
+              </div>
+            )}
             <p className="text-xs text-slate-400 mt-2">
               Rule BR-06/07: Completes strictly from honest reviews (25 × target level reviews). Pauses safely during breaks.
             </p>
           </div>
         ) : (
           <div className="text-xs text-slate-400 py-2">
-            No active session. Choose an orb below to ponder and enhance your magical mastery.
+            No active session. Choose an orb or grimoire below to enhance your magical mastery.
           </div>
         )}
       </div>
@@ -179,9 +202,8 @@ export const WizardStudyPanel: React.FC<{
             const targetLvl = quote.targetLevel;
             const isMax = quote.capped;
             const req = { mana: quote.mana, reviews: quote.reviews };
-            const totalSessions = (wizard.activeSession ? 1 : 0) + (wizard.queuedSessions ? wizard.queuedSessions.length : 0);
             const canAfford = mana >= req.mana;
-            const canQueue = !isMax && canAfford && totalSessions < 5;
+            const canQueue = !isMax && canAfford && totalSessions < maxSessions;
 
             const icon =
               sch === 'arcane' ? <BookOpen className="w-4 h-4 text-purple-400" /> :
@@ -273,6 +295,69 @@ export const WizardStudyPanel: React.FC<{
           })}
         </div>
       </div>
+
+      {/* Study Unlearned Grimoires */}
+      {unlearnedSpells.length > 0 && (
+        <div>
+          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 mb-3">
+            Study a Grimoire (Queue {totalSessions}/{maxSessions})
+          </h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {unlearnedSpells.map(sp => {
+              const opt = grimoireStudyOption(state, sp.id);
+              return (
+                <div key={sp.id} className="bg-slate-900 border border-slate-800 p-3.5 rounded-xl flex items-center justify-between gap-2 shadow">
+                  <div>
+                    <div className="font-bold text-xs text-slate-100 flex items-center gap-2 flex-wrap">
+                      <span>{sp.name}</span>
+                      <span className="text-[11px] text-purple-300 uppercase font-mono">({sp.school} {sp.tier})</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${opt.meetsLevel ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/30' : 'bg-rose-950/60 text-rose-300 border border-rose-500/30'}`}>
+                        Lv {opt.minSchoolLevel}+
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-300 mt-0.5 leading-relaxed">{sp.effect}</div>
+                    <div className="text-xs text-amber-400 font-mono mt-1">
+                      {opt.manaCost} Mana{opt.discounted ? ' (−10% Lib)' : ''} · {opt.reviews} revs
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => onQueueSession(sp.school, true, sp.id)}
+                    disabled={!opt.canStudy}
+                    title={opt.reason || `${opt.verb} ${sp.name}`}
+                    className="px-3.5 py-1.5 bg-purple-600/30 hover:bg-purple-600/50 text-purple-100 border border-purple-500/40 rounded-xl text-xs font-bold disabled:opacity-40 transition shrink-0 shadow"
+                  >
+                    {opt.alreadyStudying ? 'Queued' : opt.verb}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Bound Spellbooks Shelf (§31.2) */}
+      {(state.spellbooks?.length || 0) > 0 && (
+        <div data-testid="spellbook-shelf">
+          <h4 className="text-xs font-bold uppercase tracking-wider text-amber-300 mb-3">
+            Bound Spellbooks ({state.spellbooks.length} / 21)
+          </h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {state.spellbooks.map(sbId => {
+              const sb = SPELLBOOK_DEFINITIONS[sbId];
+              if (!sb) return null;
+              return (
+                <div key={sbId} className="bg-amber-950/20 border border-amber-500/30 p-3 rounded-xl">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-xs text-amber-200">📖 {sb.name}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono">T{sb.tier}</span>
+                  </div>
+                  <p className="text-xs text-slate-300 mt-1 leading-relaxed">{sb.effect}</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -328,6 +413,24 @@ export const RosterPanel: React.FC<{
   const schedule = buildAcademySchedule(state);
   const overenrolledSchools = ALL_SCHOOLS.filter(s => (schedule.overenrolledBySchool[s] || 0) > 0);
   const selectedAssignment = selectedChar ? schedule.studentAssignments.get(selectedChar.id) : undefined;
+  const alumniSummary = computeAlumniBonuses(alumniGallery);
+  const describeAlumnusBonus = (al: FullGameState['alumniGallery'][number]) => {
+    const career = al.career || al.bonusType || 'resident';
+    const pct = Math.round((al.bonusValue || 0) * 1000) / 10;
+    const extraRenown = (al.extraSchoolsMastered || 0) * 5;
+    const baseText =
+      career === 'teacher' ? `+${pct}% Classroom Essence (cap +15%)` :
+      career === 'scholar' ? `+${pct}% Mana per Review (cap +10%)` :
+      career === 'gardener' ? `+${pct}% Food & Herbs (cap +25%)` :
+      career === 'tamer' ? `+${pct}% Taming & +${pct}% Creature Buffs (cap +25%)` :
+      career === 'healer' ? `+${pct}% Injury Healing Speed (cap +25%)` :
+      career === 'warder' ? `-${pct}% Daily Veil Cost (cap -15%)` :
+      career === 'alchemist' ? `+${pct}% Potion Yield (cap +25%)` :
+      career === 'builder' ? `-${pct}% Build Time (cap -15%)` :
+      career === 'adventurer' ? `+${Number((al.bonusValue || 0).toFixed(2))} Rift Fortune (cap +3)` :
+      `+${pct}% Student Need Comfort`;
+    return extraRenown > 0 ? `${baseText} · +${extraRenown} Term-Persistent Renown` : baseText;
+  };
 
   return (
     <div className="space-y-4">
@@ -358,8 +461,22 @@ export const RosterPanel: React.FC<{
 
       {activeSubTab === 'alumni' ? (
         <div className="space-y-4">
-          <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl text-xs text-slate-300">
-            <h4 className="text-sm font-bold text-amber-300" title={`Graduated Masters whose flashcards matured past the ${retirementThreshold}-day retirement age. Their cards return to the free pool; they grant permanent Renown.`}>🏛️ Alumni ⓘ</h4>
+          <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl text-xs text-slate-300 space-y-2">
+            <h4 className="text-sm font-bold text-amber-300" title={`Graduated Masters whose flashcards matured past the ${retirementThreshold}-day retirement age. Their cards return to the free pool; they grant career-scaled permanent Academy bonuses.`}>🏛️ Alumni Legacy Bonuses ⓘ</h4>
+            {alumniGallery.length > 0 && (
+              <div className="flex flex-wrap gap-2 text-[11px]" data-testid="alumni-summary-strip">
+                {alumniSummary.teacherClassroomPct > 0 && <span className="px-2 py-0.5 rounded bg-slate-800 text-amber-200">Essence +{Math.round(alumniSummary.teacherClassroomPct * 100)}%</span>}
+                {alumniSummary.scholarManaPct > 0 && <span className="px-2 py-0.5 rounded bg-slate-800 text-sky-200">Mana +{Math.round(alumniSummary.scholarManaPct * 1000) / 10}%</span>}
+                {alumniSummary.gardenerFoodHerbsPct > 0 && <span className="px-2 py-0.5 rounded bg-slate-800 text-emerald-200">Food/Herbs +{Math.round(alumniSummary.gardenerFoodHerbsPct * 100)}%</span>}
+                {alumniSummary.tamerTamingPct > 0 && <span className="px-2 py-0.5 rounded bg-slate-800 text-lime-200">Taming/Creatures +{Math.round(alumniSummary.tamerTamingPct * 100)}%</span>}
+                {alumniSummary.healerHealingPct > 0 && <span className="px-2 py-0.5 rounded bg-slate-800 text-rose-200">Healing +{Math.round(alumniSummary.healerHealingPct * 100)}%</span>}
+                {alumniSummary.warderVeilReductionPct > 0 && <span className="px-2 py-0.5 rounded bg-slate-800 text-indigo-200">Veil -{Math.round(alumniSummary.warderVeilReductionPct * 100)}%</span>}
+                {alumniSummary.alchemistPotionPct > 0 && <span className="px-2 py-0.5 rounded bg-slate-800 text-orange-200">Potions +{Math.round(alumniSummary.alchemistPotionPct * 100)}%</span>}
+                {alumniSummary.builderBuildTimePct > 0 && <span className="px-2 py-0.5 rounded bg-slate-800 text-yellow-200">Build -{Math.round(alumniSummary.builderBuildTimePct * 100)}%</span>}
+                {alumniSummary.adventurerFortune > 0 && <span className="px-2 py-0.5 rounded bg-slate-800 text-purple-200">Fortune +{alumniSummary.adventurerFortune}</span>}
+                {alumniSummary.totalExtraSchoolsRenown > 0 && <span className="px-2 py-0.5 rounded bg-slate-800 text-amber-300">+{alumniSummary.totalExtraSchoolsRenown} Polymath Renown</span>}
+              </div>
+            )}
           </div>
 
           {alumniGallery.length === 0 ? (
@@ -374,7 +491,9 @@ export const RosterPanel: React.FC<{
                     <CharacterPortrait name={al.name} role="resident" size={48} />
                     <div>
                       <h4 className="font-bold text-sm text-slate-100">{al.name}</h4>
-                      <span className="text-xs text-amber-300">Retired Day {al.retiredDay}</span>
+                      <span className="text-xs text-amber-300">
+                        Retired Day {al.retiredDay} · {(al.career || al.bonusType || 'resident').toUpperCase()} ({al.retiredAgeDays || 90}d cards)
+                      </span>
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-1 mb-2">
@@ -385,7 +504,7 @@ export const RosterPanel: React.FC<{
                     ))}
                   </div>
                   <div className="text-xs text-emerald-400 font-semibold border-t border-slate-800 pt-2">
-                    ✨ +{al.bonusValue} Permanent Renown
+                    ✨ {describeAlumnusBonus(al)}
                   </div>
                 </div>
               ))}
@@ -681,19 +800,13 @@ export const RecruitmentPanel: React.FC<{
   }
 
   const allowNew = state.settings.linkNewCards ?? false;
-  const eligibleYoungCards = Object.values(allCards).filter(
-    c => c.honestIvl <= 30 && c.queue !== -1 && (allowNew || (c.type ?? 2) !== 0)
-  );
-  const freeYoungCards = eligibleYoungCards.filter(c => !linkedCardIds.has(c.id));
+  const deckScope = (state.settings.deckScope || 'all').trim();
+  const freeYoungCards = AnkicasterEngine.getEligibleFreeCards(state, 30);
+  const eligibleYoungCardsCount = freeYoungCards.length + linkedCardIds.size;
   const needed = state.settings.cardsPerStudent;
   const canEnroll = freeYoungCards.length >= needed;
 
-  const sampleApplicants = [
-    { name: 'Tamsin Reed', personality: 'Gentle' as const, traits: ['Green Thumb', 'Tidy'], bio: 'Loves tending mossy paddocks and gentle forest familiars.' },
-    { name: 'Corin Blackwood', personality: 'Bold' as const, traits: ['Brave', 'Lucky'], bio: 'Eager adventurer with an insatiable appetite for discovery.' },
-    { name: 'Lyra Starling', personality: 'Bookish' as const, traits: ['Star-Touched', 'Well-Read'], bio: 'Fascinated by ancient astronomical charts and celestial runes.' },
-    { name: 'Rowan Vale', personality: 'Steadfast' as const, traits: ['Keen Eye', 'Disciplined'], bio: 'Patient scholar interested in architectural runes and wards.' }
-  ];
+  const applicants = AnkicasterEngine.generateApplicants(state, 4);
 
   return (
     <div className="space-y-5">
@@ -702,6 +815,11 @@ export const RecruitmentPanel: React.FC<{
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs font-bold uppercase tracking-wider text-indigo-300 flex items-center gap-2">
             📊 Enrollment Tracker (Rule BR-23)
+            {deckScope && deckScope.toLowerCase() !== 'all' && (
+              <span className="px-2 py-0.5 rounded bg-indigo-950 border border-indigo-700/60 text-indigo-200 normal-case">
+                Deck: {deckScope}
+              </span>
+            )}
           </span>
           <span className={`text-xs font-bold px-2.5 py-0.5 rounded-lg ${canEnroll ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'}`}>
             {canEnroll ? '✔ Free Young Cards Available' : '❌ Enrollment Blocked'}
@@ -720,7 +838,7 @@ export const RecruitmentPanel: React.FC<{
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs text-slate-300">
-          <div>Eligible Young Cards (≤30d): <strong className="text-slate-100">{eligibleYoungCards.length}</strong></div>
+          <div>Eligible Young Cards (≤30d{allowNew ? ', +New' : ''}): <strong className="text-slate-100">{eligibleYoungCardsCount}</strong></div>
           <div>Linked to Students: <strong className="text-slate-100">{linkedCardIds.size}</strong></div>
           <div>Enrollment Fee: <strong className="text-amber-300 font-bold">60 Mana</strong></div>
         </div>
@@ -749,23 +867,35 @@ export const RecruitmentPanel: React.FC<{
 
       {/* Applicant Board */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {sampleApplicants.map((app, idx) => (
+        {applicants.map((app, idx) => (
           <div key={idx} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow">
             <div>
               <div className="flex items-center justify-between mb-1 gap-2">
                 <CharacterPortrait name={app.name} school={selectedSchool} role="student" size={40} />
                 <span className="font-bold text-sm text-slate-100">{app.name}</span>
-                <span className="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded">
+                <span
+                  className="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded"
+                  title={PERSONALITY_DEFINITIONS[app.personality]?.flavour}
+                >
                   {app.personality}
                 </span>
               </div>
               <p className="text-xs text-slate-300 mb-2 leading-relaxed">{app.bio}</p>
               <div className="flex flex-wrap gap-1 mb-3">
-                {app.traits.map(t => (
-                  <span key={t} className="text-xs bg-emerald-950/60 border border-emerald-800/40 text-emerald-300 px-2 py-0.5 rounded">
-                    {t}
-                  </span>
-                ))}
+                {app.traits.map(t => {
+                  const tDef = TRAIT_DEFINITIONS[t];
+                  const tone =
+                    tDef?.category === 'positive'
+                      ? 'bg-emerald-950/60 border-emerald-800/40 text-emerald-300'
+                      : tDef?.category === 'troublesome'
+                      ? 'bg-rose-950/60 border-rose-800/40 text-rose-300'
+                      : 'bg-slate-800/70 border-slate-700 text-slate-300';
+                  return (
+                    <span key={t} title={tDef?.effect || t} className={`text-xs border px-2 py-0.5 rounded ${tone}`}>
+                      {t}
+                    </span>
+                  );
+                })}
               </div>
             </div>
 
@@ -1000,7 +1130,8 @@ export const BestiaryPanel: React.FC<{
   onFeedCreature: (creatureId: number) => void;
   onAssignTamer: (creatureId: number, tamerId: number) => void;
   onSelectCreature?: (creatureId: number) => void;
-}> = ({ state, onFeedCreature, onAssignTamer, onSelectCreature }) => {
+  onAwakenGeodeGolem?: () => void;
+}> = ({ state, onFeedCreature, onAssignTamer, onSelectCreature, onAwakenGeodeGolem }) => {
   const creatures = state.creatures || [];
   const characters = state.characters || [];
   const [statusFilter, setStatusFilter] = useState<'all' | 'tamed' | 'wary' | 'loose' | 'away' | 'egg'>('all');
@@ -1019,6 +1150,8 @@ export const BestiaryPanel: React.FC<{
 
   const tamers = characters.filter(c => c.career === 'tamer' && c.status !== 'student' && c.careerState !== 'sabbatical');
   const filteredOwned = creatures.filter(c => statusFilter === 'all' || c.status === statusFilter);
+  const hasWorkshop = state.rooms.some(r => r.defId === 'workshop' && r.state === 'built' && !isRoomUnfinished(r));
+  const golemCores = state.resources.golem_core || 0;
 
   return (
     <div className="space-y-6">
@@ -1032,6 +1165,18 @@ export const BestiaryPanel: React.FC<{
           </p>
         </div>
         <div className="flex items-center gap-5 text-right">
+          {hasWorkshop && onAwakenGeodeGolem && (
+            <button
+              type="button"
+              data-action="bestiary-awaken-golem"
+              onClick={onAwakenGeodeGolem}
+              disabled={golemCores < 3}
+              title="Forge a Geode Golem at your Workshop into an open Crystal habitat (requires 3 Golem Cores)"
+              className="px-3 py-1.5 rounded-xl bg-sky-600/80 hover:bg-sky-500 disabled:opacity-40 text-white text-xs font-bold transition shadow"
+            >
+              💎 Awaken Geode Golem ({golemCores}/3 Cores)
+            </button>
+          )}
           <div>
             <div className="text-xs text-slate-400">Bestiary</div>
             <div className="text-xl font-bold text-amber-300" data-testid="bestiary-discovered-count">
@@ -1378,17 +1523,138 @@ export const BestiaryPanel: React.FC<{
 // ==========================================
 // 7. ALCHEMY & BREWING PANEL
 // ==========================================
+const TARGETED_POTION_TYPES = new Set([
+  'mending_draught',
+  'calming_tonic',
+  'growth_elixir',
+  'beast_biscuit',
+  'lure_musk',
+  'polishing_spirit',
+  'fireproof_salve',
+  'dreamless_draught',
+  'wardwater',
+  'quickmortar',
+  'transmutation_salts'
+]);
+
+const COMMON_TRANSMUTE_KEYS = ['timber', 'stone', 'glass', 'cloth', 'provisions', 'greens', 'fish', 'nectar'] as const;
+
 export const AlchemyPanel: React.FC<{
   state: FullGameState;
   onBrewPotion: (potionId: string) => void;
-  onUsePotion?: (potionId: string) => void;
-}> = ({ state, onBrewPotion, onUsePotion }) => {
+  onUsePotion?: (potionId: string, target?: number | AlchemyTarget) => void;
+  onUseScroll?: (scrollId: ScrollId, target?: { roomId?: number; floorY?: number; recipeId?: string }) => void;
+}> = ({ state, onBrewPotion, onUsePotion, onUseScroll }) => {
   const { resources, potions } = state;
-  const lab = state.rooms.find(r => r.defId === 'alchemy_lab' && r.state === 'built' && !isRoomUnfinished(r));
+  const labs = state.rooms.filter(r => r.defId === 'alchemy_lab' && r.state === 'built' && !isRoomUnfinished(r));
+  const lab = labs[0];
   const brewBonus = academyFurnitureEffect(state.rooms, 'brew_speed_pct', lab);
-  const alchemists = state.characters.filter(c => c.career === 'alchemist' && c.careerState === 'active' && (!lab || c.workplaceRoomId === lab.id));
+  const alchemists = state.characters.filter(
+    c => c.career === 'alchemist' && c.careerState === 'active' && c.status !== 'away' && !c.injury && (!lab || c.workplaceRoomId === lab.id)
+  );
   const bag = resources as unknown as Record<string, any>;
   const freePhilosopherBrew = (state.activeBuffs?.philosophersHourBrews || 0) > 0;
+  const totalStations = labs.reduce((sum, l) => sum + (l.level >= 3 ? 3 : 2), 0);
+  const queue = state.brewingQueue || [];
+  const stationsBusy = totalStations > 0 && queue.length >= totalStations;
+  const hasAlembic = labs.some(l => (l.furniture || []).some(f => f.defId === 'alembic_array' && !f.damaged));
+  const hasAthanor = labs.some(l => (l.furniture || []).some(f => f.defId === 'everburning_athanor' && !f.damaged));
+
+  const [pickingPotionId, setPickingPotionId] = useState<string | null>(null);
+  const [pickedId, setPickedId] = useState<string>('');
+  const [fromRes, setFromRes] = useState<string>('timber');
+  const [toRes, setToRes] = useState<string>('glass');
+
+  const getTargetCandidates = (pid: string): Array<{ value: string; label: string; kind: 'character' | 'room' | 'creature' }> => {
+    switch (pid) {
+      case 'mending_draught':
+        return state.characters
+          .filter(c => !!c.injury)
+          .map(c => ({ value: String(c.id), label: `${c.name} (${c.injury?.type})`, kind: 'character' }));
+      case 'calming_tonic':
+      case 'polishing_spirit':
+      case 'fireproof_salve':
+      case 'wardwater':
+        return state.rooms
+          .filter(r => r.state === 'built' && (pid !== 'wardwater' || r.area === 'castle'))
+          .map(r => ({
+            value: String(r.id),
+            label: `${ROOM_DEFINITIONS[r.defId]?.name || r.defId}${r.area === 'castle' ? ` (F${r.y + 1})` : ''} · ${Math.round(r.cleanliness)}% clean`,
+            kind: 'room'
+          }));
+      case 'growth_elixir':
+        return state.rooms
+          .filter(r => r.state === 'built' && ['greenhouse', 'vegetable_patch', 'herb_garden', 'woodlot', 'orchard', 'apiary'].includes(r.defId))
+          .map(r => ({ value: String(r.id), label: ROOM_DEFINITIONS[r.defId]?.name || r.defId, kind: 'room' }));
+      case 'dreamless_draught':
+        return state.rooms
+          .filter(r => r.state === 'built' && (r.defId === 'dormitory' || r.defId === 'grand_dormitory'))
+          .map(r => ({ value: String(r.id), label: ROOM_DEFINITIONS[r.defId]?.name || r.defId, kind: 'room' }));
+      case 'quickmortar':
+        return state.rooms
+          .filter(r => r.state === 'site')
+          .map(r => ({
+            value: String(r.id),
+            label: `${ROOM_DEFINITIONS[r.defId]?.name || r.defId} (${Math.round(r.buildProgress)}/${r.buildRequired})`,
+            kind: 'room'
+          }));
+      case 'lure_musk':
+        return state.rooms
+          .filter(r => r.state === 'built' && ['meadow_paddock', 'tide_tank', 'aviary', 'gloom_enclosure', 'ember_hearth', 'crystal_vivarium', 'menagerie'].includes(r.defId))
+          .map(r => ({ value: String(r.id), label: ROOM_DEFINITIONS[r.defId]?.name || r.defId, kind: 'room' }));
+      case 'beast_biscuit':
+        return state.creatures
+          .filter(c => c.status === 'loose' || c.status === 'wary')
+          .map(c => ({ value: String(c.id), label: `${c.nickname} (${c.status})`, kind: 'creature' }));
+      default:
+        return [];
+    }
+  };
+
+  const openPickerOrUse = (pid: string) => {
+    if (!onUsePotion) return;
+    if (!TARGETED_POTION_TYPES.has(pid)) {
+      onUsePotion(pid);
+      return;
+    }
+    if (pid === 'transmutation_salts') {
+      setPickingPotionId(pid);
+      setPickedId('');
+      return;
+    }
+    const cands = getTargetCandidates(pid);
+    if (cands.length === 0) {
+      onUsePotion(pid);
+      return;
+    }
+    setPickingPotionId(pid);
+    setPickedId(cands[0].value);
+  };
+
+  const confirmTargetUse = () => {
+    if (!pickingPotionId || !onUsePotion) return;
+    if (pickingPotionId === 'transmutation_salts') {
+      onUsePotion(pickingPotionId, { fromResource: fromRes, toResource: toRes });
+      setPickingPotionId(null);
+      return;
+    }
+    const cands = getTargetCandidates(pickingPotionId);
+    const chosen = cands.find(c => c.value === pickedId) || cands[0];
+    const num = chosen ? Number(chosen.value) : undefined;
+    const target: AlchemyTarget | undefined =
+      chosen && num !== undefined
+        ? chosen.kind === 'character'
+          ? { characterId: num }
+          : chosen.kind === 'creature'
+          ? { creatureId: num }
+          : { roomId: num }
+        : undefined;
+    onUsePotion(pickingPotionId, target);
+    setPickingPotionId(null);
+  };
+
+  const scrollInventoryEntries = (Object.values(SCROLL_DEFINITIONS)).filter(s => (state.scrolls?.[s.id] || 0) > 0);
+  const scrollQueue = state.scrollQueue || [];
 
   return (
     <div className="space-y-6">
@@ -1402,6 +1668,158 @@ export const AlchemyPanel: React.FC<{
         )}
       </div>
 
+      {(scrollInventoryEntries.length > 0 || scrollQueue.length > 0) && (
+        <div className="bg-purple-950/25 border border-purple-700/40 rounded-xl p-4 space-y-2.5" data-testid="scriptorium-scrolls-tray">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-bold text-purple-200 uppercase tracking-wider">Scriptorium Scrolls</span>
+            {scrollQueue.length > 0 && (
+              <span className="text-[11px] text-purple-300 font-mono">
+                {scrollQueue.length} in progress
+              </span>
+            )}
+          </div>
+          {scrollQueue.length > 0 && (
+            <div className="flex flex-wrap gap-2 text-[11px] text-purple-200">
+              {scrollQueue.map(j => (
+                <span key={j.id} className="px-2 py-1 rounded bg-slate-950/70 border border-purple-700/40 font-mono">
+                  {SCROLL_DEFINITIONS[j.scrollId]?.name || j.scrollId}: {Math.round(j.progress * 10) / 10}/{j.required}r
+                </span>
+              ))}
+            </div>
+          )}
+          {scrollInventoryEntries.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {scrollInventoryEntries.map(sc => {
+                const qty = state.scrolls?.[sc.id] || 0;
+                return (
+                  <div key={sc.id} className="bg-slate-950/70 border border-slate-800 rounded-lg p-2.5 flex items-center justify-between gap-2 text-xs">
+                    <div className="min-w-0">
+                      <div className="font-bold text-slate-100">{sc.name} <span className="text-amber-300 font-mono">×{qty}</span></div>
+                      <div className="text-[11px] text-slate-400 truncate">{sc.effect}</div>
+                    </div>
+                    {onUseScroll && (
+                      <button
+                        type="button"
+                        data-action={`use-scroll-${sc.id}`}
+                        onClick={() => onUseScroll(sc.id)}
+                        className="shrink-0 px-2.5 py-1 rounded bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/40 text-purple-100 font-bold text-[11px]"
+                      >
+                        Use
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {labs.length > 0 && (
+        <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-4 space-y-3" data-testid="alchemy-stations">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-bold text-amber-200 uppercase tracking-wider">
+              Brewing Stations ({queue.length}/{totalStations} Active)
+            </span>
+            <span className="text-slate-400">
+              {alchemists.length > 0 ? '👩‍🔬 Alchemist on duty (x2 speed, +1 bonus every 4 brews)' : 'No Alchemist assigned (Basic only, 1x speed)'}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            {labs.flatMap(l => {
+              const cap = l.level >= 3 ? 3 : 2;
+              return Array.from({ length: cap }, (_, sIdx) => {
+                const job = queue.find(j => j.roomId === l.id && j.stationIndex === sIdx);
+                const rec = job ? potions.find(p => p.id === job.recipeId) : undefined;
+                const pct = job ? Math.min(100, Math.round((job.progress / Math.max(1, job.required)) * 100)) : 0;
+                return (
+                  <div key={`${l.id}-${sIdx}`} className="bg-slate-950/70 border border-slate-800 rounded-lg p-2.5 text-xs space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-slate-300">Station {sIdx + 1}</span>
+                      <span className="text-slate-400">{job ? `${job.progress}/${job.required} reviews` : 'Open'}</span>
+                    </div>
+                    {job ? (
+                      <>
+                        <div className="font-bold text-amber-300 truncate">{rec?.name || job.recipeId}</div>
+                        <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                          <div className="h-full bg-amber-500 transition-all" style={{ width: `${pct}%` }} />
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-[11px] text-slate-500">Ready to brew</div>
+                    )}
+                  </div>
+                );
+              });
+            })}
+          </div>
+        </div>
+      )}
+
+      {pickingPotionId && (
+        <div className="bg-amber-950/30 border border-amber-700/50 rounded-xl p-4 space-y-3" data-testid="potion-target-picker">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-amber-200 uppercase tracking-wider">
+              Choose Target for {potions.find(p => p.id === pickingPotionId)?.name || pickingPotionId}
+            </span>
+            <button
+              onClick={() => setPickingPotionId(null)}
+              className="text-xs text-slate-400 hover:text-slate-200"
+            >
+              Cancel
+            </button>
+          </div>
+          {pickingPotionId === 'transmutation_salts' ? (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <label className="text-slate-300">Convert 50</label>
+              <select
+                value={fromRes}
+                onChange={e => setFromRes(e.target.value)}
+                className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100"
+              >
+                {COMMON_TRANSMUTE_KEYS.map(k => (
+                  <option key={k} value={k}>{k} ({Math.floor(Number(bag[k]) || 0)})</option>
+                ))}
+              </select>
+              <span className="text-slate-400">to 40</span>
+              <select
+                value={toRes}
+                onChange={e => setToRes(e.target.value)}
+                className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100"
+              >
+                {COMMON_TRANSMUTE_KEYS.map(k => (
+                  <option key={k} value={k}>{k} ({Math.floor(Number(bag[k]) || 0)})</option>
+                ))}
+              </select>
+              <button
+                onClick={confirmTargetUse}
+                className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 rounded-lg font-bold"
+              >
+                Transmute
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <select
+                value={pickedId}
+                onChange={e => setPickedId(e.target.value)}
+                className="flex-1 min-w-[200px] bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100"
+              >
+                {getTargetCandidates(pickingPotionId).map(cand => (
+                  <option key={cand.value} value={cand.value}>{cand.label}</option>
+                ))}
+              </select>
+              <button
+                onClick={confirmTargetUse}
+                className="px-3.5 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 rounded-lg font-bold"
+              >
+                Confirm Use
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {potions.map(rec => {
           const count = resources.potions[rec.id] || 0;
@@ -1411,7 +1829,11 @@ export const AlchemyPanel: React.FC<{
           const baseManaCost = Math.max(10, Math.round(30 * Math.max(0.5, 1 - brewBonus / 100)));
           const manaCost = freePhilosopherBrew ? 0 : Math.max(10, Math.round(baseManaCost / alchMult));
           const hasIngredients = rec.ingredients.every(ing => (Number(bag[ing]) || 0) >= 1);
-          const canBrew = rec.discovered && !!lab && state.mana >= manaCost && hasIngredients;
+          const isInstant = freePhilosopherBrew || (rec.tier === 'basic' && hasAthanor);
+          const requiresAlchemist = rec.tier !== 'basic' && alchemists.length === 0;
+          const revCount = isInstant ? 0 : Math.max(1, Math.round((rec.reviewsToBrew || 20) * (hasAlembic ? 0.8 : 1)));
+          const canBrew = rec.discovered && !!lab && !requiresAlchemist && (isInstant || !stationsBusy) && state.mana >= manaCost && hasIngredients;
+          const hintsForRecipe = state.discoveredHints?.[rec.id] || [];
 
           return (
             <div key={rec.id} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow space-y-3">
@@ -1422,17 +1844,31 @@ export const AlchemyPanel: React.FC<{
                     x{count} Owned
                   </span>
                 </div>
+                <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-1">
+                  {rec.tier}{rec.school ? ` · ${rec.school}` : ''}
+                </div>
                 <div className="text-xs text-slate-300 leading-relaxed mb-2">{rec.effect}</div>
                 <div className="text-xs text-slate-400 font-mono flex flex-wrap gap-1.5">
-                  <span>Ingredients:</span>
-                  {rec.ingredients.map(ing => {
-                    const owned = Math.floor(Number(bag[ing]) || 0);
-                    return (
-                      <span key={ing} className={owned >= 1 ? 'text-slate-300' : 'text-rose-400'}>
-                        {ing} ({owned}/1)
-                      </span>
-                    );
-                  })}
+                  <span>{rec.discovered ? 'Ingredients:' : 'Hints:'}</span>
+                  {rec.discovered ? (
+                    rec.ingredients.map(ing => {
+                      const owned = Math.floor(Number(bag[ing]) || 0);
+                      return (
+                        <span key={ing} className={owned >= 1 ? 'text-slate-300' : 'text-rose-400'}>
+                          {ing} ({owned}/1)
+                        </span>
+                      );
+                    })
+                  ) : (
+                    rec.ingredients.map((ing, idx) => {
+                      const known = hintsForRecipe.includes(ing);
+                      return (
+                        <span key={idx} className={known ? 'text-sky-300' : 'text-slate-600'}>
+                          {known ? ing : '???'}
+                        </span>
+                      );
+                    })
+                  )}
                 </div>
               </div>
 
@@ -1440,17 +1876,22 @@ export const AlchemyPanel: React.FC<{
                 <button
                   onClick={() => onBrewPotion(rec.id)}
                   disabled={!canBrew}
+                  title={requiresAlchemist ? 'Requires an Alchemist on duty in the Alchemy Lab' : stationsBusy && !isInstant ? 'All brewing stations busy' : undefined}
                   className={`flex-1 py-2 rounded-xl text-xs font-bold transition shadow border ${
                     canBrew
                       ? 'bg-orange-600/20 hover:bg-orange-600/40 text-orange-200 border-orange-500/30'
                       : 'bg-slate-800/60 text-slate-500 border-slate-700/50 cursor-not-allowed'
                   }`}
                 >
-                  {!rec.discovered ? 'Undiscovered' : `Brew (${manaCost}m)`}
+                  {!rec.discovered
+                    ? 'Undiscovered'
+                    : requiresAlchemist
+                    ? 'Needs Alchemist'
+                    : `Brew (${manaCost}m · ${isInstant ? 'Instant' : `${revCount}r`})`}
                 </button>
                 {count > 0 && onUsePotion && (
                   <button
-                    onClick={() => onUsePotion(rec.id)}
+                    onClick={() => openPickerOrUse(rec.id)}
                     className="px-3.5 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 rounded-xl text-xs font-bold transition shadow"
                   >
                     Drink / Use
@@ -1499,9 +1940,14 @@ export const RiftPanel: React.FC<{
   const adventurers = characters.filter(c => c.career === 'adventurer' && c.status !== 'student' && c.careerState !== 'sabbatical');
   const tamedCreatures = creatures.filter(c => c.status === 'tamed');
   const maxSupplies = 1 + academyFurnitureEffect(state.rooms, 'rift_supply_slots');
-  const availablePotions = Object.entries(state.resources.potions || {}).filter(
-    ([pid, count]) => count > 0 && (pid === 'rift_elixir' || pid === 'courage_draught')
-  );
+  const availablePotions: Array<[string, number, string]> = [
+    ...Object.entries(state.resources.potions || {})
+      .filter(([pid, count]) => count > 0 && (pid === 'rift_elixir' || pid === 'courage_draught'))
+      .map(([pid, count]): [string, number, string] => [pid, count, POTION_RECIPES.find(p => p.id === pid)?.name || pid]),
+    ...((state.scrolls?.rift_map || 0) > 0
+      ? ([['rift_map', state.scrolls!.rift_map!, SCROLL_DEFINITIONS.rift_map.name]] as Array<[string, number, string]>)
+      : [])
+  ];
   const provisionsNeeded = dest ? dest.supplies * selectedHeroIds.length : 0;
   const hasElixir = (state.activeBuffs?.riftElixirCharges || 0) > 0 || selectedSupplies.includes('rift_elixir');
 
@@ -1711,9 +2157,8 @@ export const RiftPanel: React.FC<{
                   Expedition Supplies ({selectedSupplies.length}/{maxSupplies} slots):
                 </h4>
                 <div className="flex flex-wrap gap-1.5">
-                  {availablePotions.map(([pid, count]) => {
+                  {availablePotions.map(([pid, count, label]) => {
                     const active = selectedSupplies.includes(pid);
-                    const label = POTION_RECIPES.find(p => p.id === pid)?.name || pid;
                     return (
                       <button
                         key={pid}

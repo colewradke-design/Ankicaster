@@ -439,44 +439,54 @@ test('Automated check: every creature id referenced in engine.ts exists in conte
   assert.ok(checkedIds.has('bramblefox'), 'Should include bramblefox');
 });
 
-test('5. Wizard Cost & Queue: targetLevel accounts for active and queued sessions; capped at 5', () => {
+test('5. Wizard Cost & Queue: targetLevel accounts for active & queued sessions; Study Level caps at 2 / 3 / 5', () => {
   const state = createInitialGameState();
   state.mana = 5000;
   state.wizard.levels.arcane = 1;
 
-  // 1st Arcane session: targetLevel = 1 + 0 + 0 + 1 = 2
-  // Cost: 80 * 2 = 160, Reviews: 25 * 2 = 50
+  // Study Lv 1 (total < 15): max 2 sessions (1 active + 1 queued)
   const res1 = AnkicasterEngine.queueWizardSession(state, 'arcane', false);
   assert.equal(res1.success, true);
   assert.equal(res1.state.wizard.activeSession?.targetLevel, 2);
   assert.equal(res1.state.wizard.activeSession?.costPaid, 160);
   assert.equal(res1.state.wizard.activeSession?.required, 50);
 
-  // 2nd Arcane session queued: targetLevel = 1 + 1 (active) + 0 (queued) + 1 = 3
-  // Cost: 80 * 3 = 240, Reviews: 25 * 3 = 75
   const res2 = AnkicasterEngine.queueWizardSession(res1.state, 'arcane', false);
   assert.equal(res2.success, true);
   assert.equal(res2.state.wizard.queuedSessions[0].targetLevel, 3);
   assert.equal(res2.state.wizard.queuedSessions[0].costPaid, 240);
   assert.equal(res2.state.wizard.queuedSessions[0].required, 75);
 
-  // 3rd Arcane session queued: targetLevel = 1 + 1 + 1 + 1 = 4
-  const res3 = AnkicasterEngine.queueWizardSession(res2.state, 'arcane', false);
+  const blockedLv1 = AnkicasterEngine.queueWizardSession(res2.state, 'arcane', false);
+  assert.equal(blockedLv1.success, false);
+  assert.ok(blockedLv1.error?.includes('Maximum of 2'));
+
+  // Study Lv 2 (total >= 15): max 3 sessions (1 active + 2 queued)
+  const lv2State = structuredClone(res2.state);
+  lv2State.wizard.levels.nature = 10;
+  lv2State.wizard.levels.light = 4; // total = 1 + 10 + 4 = 15
+  const res3 = AnkicasterEngine.queueWizardSession(lv2State, 'arcane', false);
   assert.equal(res3.success, true);
   assert.equal(res3.state.wizard.queuedSessions[1].targetLevel, 4);
   assert.equal(res3.state.wizard.queuedSessions[1].costPaid, 320);
 
-  // Queue 4th and 5th sessions (reaching 5 total sessions)
-  const res4 = AnkicasterEngine.queueWizardSession(res3.state, 'nature', false);
+  const blockedLv2 = AnkicasterEngine.queueWizardSession(res3.state, 'shadow', false);
+  assert.equal(blockedLv2.success, false);
+  assert.ok(blockedLv2.error?.includes('Maximum of 3'));
+
+  // Study Lv 3 (total >= 30): max 5 sessions (1 active + 4 queued)
+  const lv3State = structuredClone(res3.state);
+  lv3State.wizard.levels.shadow = 10;
+  lv3State.wizard.levels.alchemy = 5; // total = 30
+  const res4 = AnkicasterEngine.queueWizardSession(lv3State, 'alchemy', false);
   assert.equal(res4.success, true);
   const res5 = AnkicasterEngine.queueWizardSession(res4.state, 'light', false);
   assert.equal(res5.success, true);
   assert.equal((res5.state.wizard.activeSession ? 1 : 0) + res5.state.wizard.queuedSessions.length, 5);
 
-  // Attempting 6th session should be rejected by the 5-session cap
-  const res6 = AnkicasterEngine.queueWizardSession(res5.state, 'shadow', false);
-  assert.equal(res6.success, false);
-  assert.ok(res6.error?.includes('Maximum of 5'));
+  const blockedLv3 = AnkicasterEngine.queueWizardSession(res5.state, 'shadow', false);
+  assert.equal(blockedLv3.success, false);
+  assert.ok(blockedLv3.error?.includes('Maximum of 5'));
 });
 
 test('founding school first ponder is free once, and every other ponder keeps the normal price', () => {

@@ -10,10 +10,12 @@
  * see groundsLayout.ts) and cover plots x..x+w-1; y is always 0.
  */
 
-import { FullGameState, PlacedRoom, RoomDefinition } from '../types/ankicaster';
+import { CreatureInstance, FullGameState, PlacedRoom, RoomDefinition } from '../types/ankicaster';
 import { ROOM_DEFINITIONS } from '../data/content';
 import { computeReachability } from './reachability';
 import { unlockedPlotIndices, adjacentPlots } from './groundsLayout';
+import { creatureSpeciesBuffSum } from './creatures';
+import { computeAlumniBonuses } from './formulas';
 
 /** GDD 15.2: the castle starts at 8 columns x 5 floors (expansion plans are not implemented yet). */
 export const CASTLE_START_COLS = 8;
@@ -254,19 +256,117 @@ export const BUILD_MATERIALS = [
   'reagents', 'crystal', 'heartwood', 'sunstone', 'void_pearl', 'ember_salt'
 ] as const;
 
+/**
+ * Global cost/time reduction helpers (GDD §7.6 Alchemy Lv 6-10 & §33.6 -40% cap, Bond separate).
+ * Used for both room builds and furniture purchases.
+ */
+type MaterialDiscountState = Pick<FullGameState, 'wizard' | 'rooms'> & {
+  creatures?: CreatureInstance[];
+  spellbooks?: string[];
+  bellIndex?: number;
+};
+
+export function materialDiscountPct(state?: MaterialDiscountState): number {
+  if (!state) return 0;
+  const alchemySteps = Math.min(5, Math.max(0, (state.wizard?.levels?.alchemy || 0) - 5));
+  const wizPct = 0.03 * alchemySteps;
+  if (!state.creatures?.length) return Math.min(0.4, wizPct);
+  const ctx = {
+    creatures: state.creatures,
+    rooms: state.rooms || [],
+    spellbooks: state.spellbooks,
+    bellIndex: state.bellIndex
+  };
+  const baseChimera = 0.08 * creatureSpeciesBuffSum(ctx, 'philosophers_chimera', { includeBond: false });
+  const bondedChimera = 0.08 * creatureSpeciesBuffSum(ctx, 'philosophers_chimera', { includeBond: true });
+  const rawBase = wizPct + baseChimera;
+  if (rawBase <= 0.4) {
+    return wizPct + bondedChimera;
+  }
+  const chimeraAllowance = Math.max(0, 0.4 - wizPct);
+  const scale = baseChimera > 0 ? chimeraAllowance / baseChimera : 0;
+  return wizPct + bondedChimera * scale;
+}
+
+export function buildTimeDiscountPct(
+  state?: Pick<FullGameState, 'wizard'> & {
+    spellbooks?: string[];
+    alumniGallery?: FullGameState['alumniGallery'];
+  }
+): number {
+  if (!state) return 0;
+  const alchemySteps = Math.min(5, Math.max(0, (state.wizard?.levels?.alchemy || 0) - 5));
+  const folioPct = state.spellbooks?.includes('architects_folio') ? 0.05 : 0;
+  const alumniBuilderPct = computeAlumniBonuses(state.alumniGallery || []).builderBuildTimePct;
+  return Math.min(0.4, 0.03 * alchemySteps + folioPct + alumniBuilderPct);
+}
+
+export function discountedBuildReviews(
+  baseReviews: number,
+  state?: Pick<FullGameState, 'wizard'> & {
+    spellbooks?: string[];
+    alumniGallery?: FullGameState['alumniGallery'];
+  }
+): number {
+  if (baseReviews <= 0) return 0;
+  const pct = buildTimeDiscountPct(state);
+  if (pct <= 0) return baseReviews;
+  return Math.max(1, Math.round(baseReviews * (1 - pct)));
+}
+
+export function furnitureMaterialDiscountPct(state?: MaterialDiscountState): number {
+  const basePct = materialDiscountPct(state);
+  const furnSpellbook = state?.spellbooks?.includes('notes_on_furnishing') ? 0.1 : 0;
+  return Math.min(0.5, basePct + furnSpellbook);
+}
+
+export function discountedFurnitureCost<T extends Record<string, number | undefined>>(
+  cost: T,
+  state?: MaterialDiscountState
+): T {
+  const pct = furnitureMaterialDiscountPct(state);
+  if (pct <= 0) return { ...cost };
+  const out: Record<string, number | undefined> = { ...cost };
+  for (const k of BUILD_MATERIALS) {
+    const val = out[k];
+    if (typeof val === 'number' && val > 0) {
+      out[k] = Math.max(1, Math.round(val * (1 - pct)));
+    }
+  }
+  return out as T;
+}
+
+export function discountedResourceCost<T extends Record<string, number | undefined>>(
+  cost: T,
+  state?: MaterialDiscountState
+): T {
+  const pct = materialDiscountPct(state);
+  if (pct <= 0) return { ...cost };
+  const out: Record<string, number | undefined> = { ...cost };
+  for (const k of BUILD_MATERIALS) {
+    const val = out[k];
+    if (typeof val === 'number' && val > 0) {
+      out[k] = Math.max(1, Math.round(val * (1 - pct)));
+    }
+  }
+  return out as T;
+}
+
 /** What placing `defId` charges. Rooms cost materials only; mana is never charged. */
-export function placementCharge(defId: string): NonNullable<PlacedRoom['spent']> {
+export function placementCharge(defId: string, state?: MaterialDiscountState): NonNullable<PlacedRoom['spent']> {
   const c = ROOM_DEFINITIONS[defId]?.cost || { mana: 0 };
+  const pct = materialDiscountPct(state);
+  const scaleMat = (n: number) => (n > 0 && pct > 0 ? Math.max(1, Math.round(n * (1 - pct))) : n);
   const out: NonNullable<PlacedRoom['spent']> = {
     mana: 0,
-    timber: c.timber || 0,
-    stone: c.stone || 0,
-    glass: c.glass || 0,
-    cloth: c.cloth || 0
+    timber: scaleMat(c.timber || 0),
+    stone: scaleMat(c.stone || 0),
+    glass: scaleMat(c.glass || 0),
+    cloth: scaleMat(c.cloth || 0)
   };
   for (const k of BUILD_MATERIALS) {
     const n = (c as unknown as Record<string, number | undefined>)[k] || 0;
-    if (n) (out as unknown as Record<string, number>)[k] = n;
+    if (n) (out as unknown as Record<string, number>)[k] = scaleMat(n);
   }
   return out;
 }

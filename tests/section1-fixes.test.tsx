@@ -99,7 +99,7 @@ test('brewPotion enforces discovered, built+finished Alchemy Lab, and deducts in
   const unfinRes = AnkicasterEngine.brewPotion(withUnfinishedLab, 'mending_draught');
   assert.equal(unfinRes.success, false);
 
-  // Built & furnished Alchemy Lab succeeds and deducts 1 of each ingredient + mana
+  // Built & furnished Alchemy Lab queues brew, deducts 1 of each ingredient + mana, and grants base 2x on completion
   const ready = makeState();
   addBuiltRoom(ready, 'alchemy_lab', 1, false);
   const beforeHerbs = ready.resources.herbs;
@@ -107,13 +107,22 @@ test('brewPotion enforces discovered, built+finished Alchemy Lab, and deducts in
   const beforeGreens = ready.resources.greens;
   const beforeMana = ready.mana;
 
-  const brewed = AnkicasterEngine.brewPotion(ready, 'mending_draught');
-  assert.equal(brewed.success, true);
-  assert.equal(brewed.state.resources.potions.mending_draught, 1);
-  assert.equal(brewed.state.resources.herbs, beforeHerbs - 1);
-  assert.equal(brewed.state.resources.radiance, beforeRadiance - 1);
-  assert.equal(brewed.state.resources.greens, beforeGreens - 1);
-  assert.ok(brewed.state.mana < beforeMana);
+  const queued = AnkicasterEngine.brewPotion(ready, 'mending_draught');
+  assert.equal(queued.success, true);
+  assert.equal(queued.state.brewingQueue?.length, 1);
+  assert.equal(queued.state.brewingQueue?.[0].required, 20);
+  assert.equal(queued.state.resources.potions.mending_draught || 0, 0);
+  assert.equal(queued.state.resources.herbs, beforeHerbs - 1);
+  assert.equal(queued.state.resources.radiance, beforeRadiance - 1);
+  assert.equal(queued.state.resources.greens, beforeGreens - 1);
+  assert.ok(queued.state.mana < beforeMana);
+
+  let afterRevs = queued.state;
+  for (let i = 0; i < 20; i++) {
+    afterRevs = AnkicasterEngine.applyHonestReview(afterRevs, 1, 3, 2000).state;
+  }
+  assert.equal(afterRevs.brewingQueue?.length, 0);
+  assert.equal(afterRevs.resources.potions.mending_draught, 2);
 
   // Missing ingredient fails
   const noHerbs = makeState();
@@ -190,14 +199,30 @@ test('all 18 POTION_RECIPES execute real effects in usePotion', () => {
   assert.ok(ticked.state.creatures.length >= 1);
 });
 
-test('AlchemyPanel renders mana cost instead of revs and disables when requirements not met', () => {
+test('AlchemyPanel renders mana + review duration and disables when requirements not met', () => {
   const s = makeState();
   const htmlNoLab = renderToStaticMarkup(
     <AlchemyPanel state={s} onBrewPotion={() => {}} />
   );
-  assert.doesNotMatch(htmlNoLab, /revs\)/);
-  assert.match(htmlNoLab, /Brew \(\d+m\)/);
+  assert.match(htmlNoLab, /Brew \(\d+m · \d+r\)/);
   assert.match(htmlNoLab, /Requires a built and furnished Alchemy Lab/);
+
+  addBuiltRoom(s, 'alchemy_lab', 1, false);
+  const labId = s.rooms[s.rooms.length - 1].id;
+  s.brewingQueue = [{
+    id: 1,
+    recipeId: 'mending_draught',
+    stationIndex: 0,
+    roomId: labId,
+    progress: 7,
+    required: 20,
+    usedAlchemist: false
+  }];
+  const htmlQueue = renderToStaticMarkup(
+    <AlchemyPanel state={s} onBrewPotion={() => {}} />
+  );
+  assert.match(htmlQueue, /Station 1/);
+  assert.match(htmlQueue, /7\/20 reviews/);
 });
 
 test('castSpell enforces knownSpells, L3 study discount, transmute pre-check, and implements all 25 spells', () => {
@@ -267,7 +292,7 @@ test('castSpell enforces knownSpells, L3 study discount, transmute pre-check, an
   const phBrew = AnkicasterEngine.brewPotion(afterPh.state, 'mending_draught');
   assert.equal(phBrew.success, true);
   assert.equal(phBrew.state.mana, manaBeforePhBrew);
-  assert.equal(phBrew.state.resources.potions.mending_draught, 2);
+  assert.equal(phBrew.state.resources.potions.mending_draught, 4);
   assert.equal(phBrew.state.activeBuffs?.philosophersHourBrews, 2);
 });
 

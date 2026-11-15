@@ -167,6 +167,11 @@ function isClassroomActive(
   return classroomDeskCount(room) >= 1;
 }
 
+export function effectiveWorkplaceSlots(room: PlacedRoom): number {
+  if (CLASSROOM_TO_SCHOOL[room.defId] && (room.level || 1) >= 3) return 2;
+  return ROOM_DEFINITIONS[room.defId]?.workplace?.slots ?? 0;
+}
+
 /**
  * Pure schedule builder for student groups, periods, teachers, and headmaster coverage.
  * Does not mutate `state` (safe for deep-frozen snapshots in visual tests).
@@ -306,12 +311,14 @@ export function buildAcademySchedule(
     alchemy: []
   };
 
-  // Max useful teachers for a school: if 1 room, up to 2 teachers can share it; if N >= 2 rooms, up to N teachers.
+  // Max useful teachers for a school: each L3 classroom (or a sole L1-2 room) can split 2 teachers across periods; L1-2 rooms in multi-room schools host 1.
+  const roomTeacherCapacity = (r: PlacedRoom, schoolRoomCount: number): number =>
+    schoolRoomCount === 1 || effectiveWorkplaceSlots(r) >= 2 ? 2 : 1;
+
   const maxUsefulTeachersForSchool = (s: SchoolType): number => {
-    const n = activeRoomsBySchool[s].length;
-    if (n === 0) return 0;
-    if (n === 1) return 2;
-    return n;
+    const list = activeRoomsBySchool[s];
+    if (list.length === 0) return 0;
+    return list.reduce((sum, r) => sum + roomTeacherCapacity(r, list.length), 0);
   };
 
   // Pass 1a: preserve teachers with an explicit workplaceRoomId pointing to an active qualifying classroom first
@@ -363,10 +370,10 @@ export function buildAcademySchedule(
         }
       }
     }
-    // Otherwise prefer school with 1 room and 1 teacher (can split periods 1-2 / 3-4)
+    // Otherwise prefer school with room for a 2-teacher split (single room or L3 classroom)
     if (!chosen) {
       for (const s of t.masteredSchools) {
-        if (hasNonAvoidedRoom(s) && activeRoomsBySchool[s].length === 1 && teachersBySchool[s].length < 2) {
+        if (hasNonAvoidedRoom(s) && teachersBySchool[s].length < maxUsefulTeachersForSchool(s)) {
           chosen = s;
           break;
         }
@@ -374,7 +381,7 @@ export function buildAcademySchedule(
     }
     if (!chosen) {
       for (const s of t.masteredSchools) {
-        if (activeRoomsBySchool[s].length === 1 && teachersBySchool[s].length < 2) {
+        if (teachersBySchool[s].length < maxUsefulTeachersForSchool(s)) {
           chosen = s;
           break;
         }
@@ -402,81 +409,85 @@ export function buildAcademySchedule(
       continue;
     }
 
-    if (rooms.length === 1 && pool.length >= 2) {
-      const singleRoomId = rooms[0].id;
-      const tierOf = (t: Character) => {
-        if (t.workplaceRoomId === singleRoomId) return 0;
-        if (avoidRoomByCharId?.get(t.id) === singleRoomId) return 2;
-        return 1;
-      };
-      const sortedPool = pool.slice().sort((a, b) => tierOf(a) - tierOf(b) || a.id - b.id);
-      const roomInfo = classrooms.get(singleRoomId)!;
-      const tA = sortedPool[0];
-      const tB = sortedPool[1];
-      roomInfo.isStaffed = true;
-      roomInfo.teacherIds = [tA.id, tB.id];
-      roomInfo.periods[1].instructor = tA.id;
-      roomInfo.periods[2].instructor = tA.id;
-      roomInfo.periods[3].instructor = tB.id;
-      roomInfo.periods[4].instructor = tB.id;
+    // Track assigned teachers per room (1st covers periods 1-4; 2nd splits into 1-2 / 3-4 when room cap == 2)
+    const assignedPerRoom = new Map<number, Character[]>();
+    for (const r of rooms) assignedPerRoom.set(r.id, []);
+    const assignedTeachers = new Set<number>();
 
-      teacherAssignments.set(tA.id, {
-        teacherId: tA.id,
-        school,
-        classRoomId: singleRoomId,
-        periods: [1, 2]
-      });
-      teacherAssignments.set(tB.id, {
-        teacherId: tB.id,
-        school,
-        classRoomId: singleRoomId,
-        periods: [3, 4]
-      });
-      for (let i = 2; i < sortedPool.length; i++) {
-        spareTeacherIds.add(sortedPool[i].id);
-      }
-    } else {
-      const remainingRooms = rooms.slice();
-      const assignedTeachers = new Set<number>();
-      const takeRoomForTeacher = (t: Character, room: PlacedRoom) => {
-        const roomInfo = classrooms.get(room.id)!;
-        roomInfo.isStaffed = true;
-        roomInfo.teacherIds = [t.id];
-        for (const p of ALL_PERIODS) {
-          roomInfo.periods[p].instructor = t.id;
-        }
-        teacherAssignments.set(t.id, {
-          teacherId: t.id,
-          school,
-          classRoomId: room.id,
-          periods: [1, 2, 3, 4]
-        });
-        assignedTeachers.add(t.id);
-        const idx = remainingRooms.indexOf(room);
-        if (idx >= 0) remainingRooms.splice(idx, 1);
-      };
-
-      // Preserve existing explicit workplaceRoomId if it points to an available active classroom of this school
-      for (const t of pool) {
-        if (remainingRooms.length === 0) break;
-        if (t.workplaceRoomId != null && avoidRoomByCharId?.get(t.id) !== t.workplaceRoomId) {
-          const preferred = remainingRooms.find(r => r.id === t.workplaceRoomId);
-          if (preferred) {
-            takeRoomForTeacher(t, preferred);
+    // Step 1: Respect explicit workplaceRoomId onto rooms not yet holding 1 teacher (or 2 if capacity == 2)
+    for (const t of pool) {
+      if (t.workplaceRoomId != null && avoidRoomByCharId?.get(t.id) !== t.workplaceRoomId) {
+        const preferred = rooms.find(r => r.id === t.workplaceRoomId);
+        if (preferred) {
+          const list = assignedPerRoom.get(preferred.id)!;
+          if (list.length < roomTeacherCapacity(preferred, rooms.length)) {
+            list.push(t);
+            assignedTeachers.add(t.id);
           }
         }
       }
+    }
 
-      // Assign remaining teachers in id order, preferring rooms other than avoidRoomByCharId
-      for (const t of pool) {
-        if (assignedTeachers.has(t.id)) continue;
-        if (remainingRooms.length > 0) {
-          const avoidId = avoidRoomByCharId?.get(t.id);
-          const pick = (avoidId != null ? remainingRooms.find(r => r.id !== avoidId) : undefined) ?? remainingRooms[0];
-          takeRoomForTeacher(t, pick);
-        } else {
-          spareTeacherIds.add(t.id);
-        }
+    // Step 2: Fill empty rooms first so every active classroom is covered
+    for (const t of pool) {
+      if (assignedTeachers.has(t.id)) continue;
+      const avoidId = avoidRoomByCharId?.get(t.id);
+      const emptyRooms = rooms.filter(r => assignedPerRoom.get(r.id)!.length === 0);
+      if (emptyRooms.length === 0) break;
+      const pick = (avoidId != null ? emptyRooms.find(r => r.id !== avoidId) : undefined) ?? emptyRooms[0];
+      assignedPerRoom.get(pick.id)!.push(t);
+      assignedTeachers.add(t.id);
+    }
+
+    // Step 3: Place extra teachers into rooms supporting 2-teacher period-splits (single room or Lv 3 classroom)
+    for (const t of pool) {
+      if (assignedTeachers.has(t.id)) continue;
+      const avoidId = avoidRoomByCharId?.get(t.id);
+      const splitRooms = rooms.filter(r => assignedPerRoom.get(r.id)!.length < roomTeacherCapacity(r, rooms.length));
+      if (splitRooms.length > 0) {
+        const pick = (avoidId != null ? splitRooms.find(r => r.id !== avoidId) : undefined) ?? splitRooms[0];
+        assignedPerRoom.get(pick.id)!.push(t);
+        assignedTeachers.add(t.id);
+      } else {
+        spareTeacherIds.add(t.id);
+      }
+    }
+
+    // Populate ClassroomScheduleInfo & teacherAssignments
+    for (const r of rooms) {
+      const list = assignedPerRoom.get(r.id)!;
+      if (list.length === 0) continue;
+      const roomInfo = classrooms.get(r.id)!;
+      roomInfo.isStaffed = true;
+      if (list.length === 1) {
+        const t = list[0];
+        roomInfo.teacherIds = [t.id];
+        for (const p of ALL_PERIODS) roomInfo.periods[p].instructor = t.id;
+        teacherAssignments.set(t.id, {
+          teacherId: t.id,
+          school,
+          classRoomId: r.id,
+          periods: [1, 2, 3, 4]
+        });
+      } else {
+        const [tA, tB] = list;
+        roomInfo.teacherIds = [tA.id, tB.id];
+        roomInfo.periods[1].instructor = tA.id;
+        roomInfo.periods[2].instructor = tA.id;
+        roomInfo.periods[3].instructor = tB.id;
+        roomInfo.periods[4].instructor = tB.id;
+        teacherAssignments.set(tA.id, {
+          teacherId: tA.id,
+          school,
+          classRoomId: r.id,
+          periods: [1, 2]
+        });
+        teacherAssignments.set(tB.id, {
+          teacherId: tB.id,
+          school,
+          classRoomId: r.id,
+          periods: [3, 4]
+        });
       }
     }
   }

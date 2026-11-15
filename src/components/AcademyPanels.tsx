@@ -125,31 +125,83 @@ export const JournalPanel: React.FC<{ state: FullGameState }> = ({ state }) => {
   );
 };
 
+import { AnkicasterEngine } from '../utils/engine';
+
 export function pendingEvents(state: FullGameState): SchoolEvent[] {
   return state.activeEvents
     .map(e => SCHOOL_EVENTS.find(ev => ev.id === e.eventId))
     .filter((e): e is SchoolEvent => !!e);
 }
 
-export const VisitorsPanel: React.FC<{ state: FullGameState; onOpenEvent: (ev: SchoolEvent) => void }> = ({ state, onOpenEvent }) => {
+export const VisitorsPanel: React.FC<{
+  state: FullGameState;
+  onOpenEvent: (ev: SchoolEvent) => void;
+  onSkipForecastEvent?: (day: number) => void;
+}> = ({ state, onOpenEvent, onSkipForecastEvent }) => {
   const events = pendingEvents(state);
+  const forecast = AnkicasterEngine.getVisibleForecast(state);
+  const skips = state.activeBuffs?.foresightSkips || 0;
   return (
-    <div className="space-y-2" data-testid="visitors-panel">
-      {events.length === 0 ? (
-        <div className="text-[13px] text-slate-500 text-center py-8">No one at the gate.</div>
-      ) : (
-        events.map(ev => (
-          <button
-            key={ev.id}
-            onClick={() => onOpenEvent(ev)}
-            className="w-full text-left flex items-center gap-3 bg-slate-950/60 border border-slate-800 hover:border-amber-500/40 rounded-xl px-3 py-2.5 min-h-[44px]"
-            title={ev.description}
-          >
-            <span className="text-xl">📜</span>
-            <span className="text-[13px] font-bold text-amber-200 flex-1">{ev.name}</span>
-            <span className="text-[12px] text-slate-400">{ev.options.length} choices</span>
-          </button>
-        ))
+    <div className="space-y-4" data-testid="visitors-panel">
+      <div className="space-y-2">
+        {events.length === 0 ? (
+          <div className="text-[13px] text-slate-500 text-center py-6">No one at the gate.</div>
+        ) : (
+          events.map(ev => (
+            <button
+              key={ev.id}
+              onClick={() => onOpenEvent(ev)}
+              className="w-full text-left flex items-center gap-3 bg-slate-950/60 border border-slate-800 hover:border-amber-500/40 rounded-xl px-3 py-2.5 min-h-[44px]"
+              title={ev.description}
+            >
+              <span className="text-xl">📜</span>
+              <span className="text-[13px] font-bold text-amber-200 flex-1">{ev.name}</span>
+              <span className="text-[12px] text-slate-400">{ev.options.length} choices</span>
+            </button>
+          ))
+        )}
+      </div>
+
+      {forecast.length > 0 && (
+        <section className="space-y-2 pt-2 border-t border-slate-800" data-testid="upcoming-forecast">
+          <div className="flex items-center justify-between">
+            <h4 className="text-[12px] uppercase tracking-wider font-bold text-indigo-300">
+              Upcoming Forecast ({forecast.length}d)
+            </h4>
+            {skips > 0 && (
+              <span className="text-[11px] font-bold text-purple-300 bg-purple-950/60 border border-purple-500/40 px-2 py-0.5 rounded">
+                Foresight Skips: {skips}
+              </span>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            {forecast.map(item => (
+              <div
+                key={item.day}
+                data-forecast-day={item.day}
+                className="flex items-center justify-between gap-2 bg-indigo-950/30 border border-indigo-800/50 rounded-xl px-3 py-2 text-[12px]"
+              >
+                <div className="min-w-0">
+                  <div className="font-bold text-indigo-100">
+                    Day {item.day}: {item.eventName}
+                  </div>
+                  <div className="text-slate-400 truncate">{item.description}</div>
+                </div>
+                {onSkipForecastEvent && skips > 0 && item.eventId !== 'none' && (
+                  <button
+                    type="button"
+                    data-action="skip-forecast-event"
+                    onClick={() => onSkipForecastEvent(item.day)}
+                    className="shrink-0 px-2.5 py-1 min-h-[28px] bg-purple-700 hover:bg-purple-600 text-white font-bold rounded-lg text-[11px]"
+                    title="Spend 1 Foresight skip charge to avert this incoming event"
+                  >
+                    Skip Event
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
       )}
     </div>
   );
