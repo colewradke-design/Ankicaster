@@ -796,6 +796,7 @@ export default function App() {
 
   // Handler: Draw Draft Deck
   const handleDrawDeck = (deck: DraftDeckId) => {
+    if (isDraftModalOpen) return;
     const res = AnkicasterEngine.drawDraftCards(state, deck);
     if (res.error) {
       addToast(res.error, 'warning');
@@ -1606,7 +1607,7 @@ export default function App() {
 
       {/* MODAL 2: GRIMOIRE DRAFT PICKER */}
       {isDraftModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[65] bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-purple-500/50 rounded-2xl w-full max-w-3xl p-6 shadow-2xl space-y-6">
             <div className="text-center">
               <span className="text-xs font-bold uppercase tracking-widest text-purple-400">
