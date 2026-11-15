@@ -119,8 +119,16 @@ function roomDefinitionSummaryLine(room: PlacedRoom, def: RoomDefinition | undef
   }
   const cap = def.capacity;
   if (cap) {
-    if (cap.beds) parts.push(`${cap.beds} beds`);
-    if (cap.facultyBeds) parts.push(`${cap.facultyBeds} faculty beds`);
+    if (cap.beds) {
+      const placedBeds = room.state === 'built' ? roomBedCapacityForChip(room, def) : cap.beds;
+      parts.push(`${placedBeds} ${placedBeds === 1 ? 'bed' : 'beds'}`);
+    }
+    if (cap.facultyBeds) {
+      const totalFacultyBeds = room.defId === 'faculty_quarters'
+        ? cap.facultyBeds + Math.max(0, (room.level || 1) - 1)
+        : cap.facultyBeds;
+      parts.push(`${totalFacultyBeds} faculty beds`);
+    }
     if (cap.seats) parts.push(`${cap.seats} seats`);
     if (cap.leisureSeats) parts.push(`${cap.leisureSeats} lounge seats`);
     if (cap.cropBeds) parts.push(`${room.defId === 'greenhouse' && (room.level || 1) >= 3 ? 3 : cap.cropBeds} crop beds`);
@@ -580,7 +588,21 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                   />
                 )}
                 <Chip icon={<Droplets className="w-3.5 h-3.5 text-sky-400" />} label="Clean" value={`${Math.round(room.cleanliness)}%`} title="Cleanliness" />
-                <Chip icon={<Shield className="w-3.5 h-3.5 text-indigo-300" />} label="Veil" value={`${def?.veil ?? 4}/day`} title="Daily Veil upkeep (mana)" tone="text-indigo-300" />
+                {(() => {
+                  const baseVeil = def?.veil ?? 4;
+                  const levelMult = lvl === 3 ? 1.5 : lvl === 2 ? 1.25 : 1.0;
+                  const sizePts = Math.round(baseVeil * levelMult * 10) / 10;
+                  const baseMana = Math.round(sizePts * 3 * 10) / 10;
+                  return (
+                    <Chip
+                      icon={<Shield className="w-3.5 h-3.5 text-indigo-300" />}
+                      label="Veil"
+                      value={`${sizePts} pts`}
+                      title={`Veil size points: ${sizePts} (${baseMana} base Mana/day before academy reductions)`}
+                      tone="text-indigo-300"
+                    />
+                  );
+                })()}
                 <Chip label="Q" value={Math.round(q)} title="Quality score" tone="text-amber-300" />
               </div>
 

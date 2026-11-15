@@ -22,6 +22,7 @@ import { CharacterCreationModal } from './visual/onboarding/CharacterCreationMod
 import { FoundingDay, GuidedTour, GoalBanner } from './visual/onboarding/FoundingTour';
 import { applyTutorialAction, phaseAfterCreate, STUDY_PARTS, tourUsesFurnishingsTab, tourStepId, tourView } from './visual/onboarding/flow';
 import { AnkicasterEngine } from './utils/engine';
+import { calculateReviewMana, computeAlumniBonuses, computeSpellbookBonuses } from './utils/formulas';
 import type { DraftDeckId } from './utils/decks';
 import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS, SCHOOL_EVENTS, SPELLBOOK_DEFINITIONS } from './data/content';
 
@@ -942,7 +943,7 @@ export default function App() {
   const handleAssignTamer = (creatureId: number, tamerId: number) => {
     const res = AnkicasterEngine.assignTamerToCreature(state, creatureId, tamerId);
     if (!res.success) {
-      addToast('Cannot assign tamer.', 'warning');
+      addToast(res.error || 'Cannot assign tamer.', 'warning');
     } else {
       setState(res.state);
       addToast('Tamer assigned to familiar!', 'success');
@@ -1148,16 +1149,25 @@ export default function App() {
   // Body of each screen window. Exhaustive over ScreenId so no screen can be left unrendered.
   const renderScreenBody = (id: ScreenId): React.ReactNode => {
     switch (id) {
-      case 'reviewer':
+      case 'reviewer': {
+        const sbRev = computeSpellbookBonuses(state.spellbooks || []);
+        const alumniRev = computeAlumniBonuses(state.alumniGallery || []);
+        const currentReviewMana = calculateReviewMana(
+          state.wizard.levels.arcane,
+          sbRev.manaPct + alumniRev.scholarManaPct,
+          state.settings?.manaPerReview ?? 10
+        );
         return (
           <FlashcardReviewer
             cards={state.allCards}
             onAnswerCard={handleAnswerCard}
             onSimulateBatch={handleSimulateBatch}
+            manaPerReview={currentReviewMana}
             devMode={IS_DEV_MODE}
             isAddonMode={isAddonMode}
           />
         );
+      }
       case 'students':
       case 'faculty':
       case 'alumni':

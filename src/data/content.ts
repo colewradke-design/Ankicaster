@@ -156,7 +156,7 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     optionalSlots: 5,
     stats: { primary: ['comfort', 'charm'], secondary: 'order' },
     level3Perk: '+5 Leisure target for residents.',
-    description: 'Spacious dormitory holding 7 beds (+1/level) with reduced Veil upkeep per bed.'
+    description: 'Spacious dormitory with room for many beds and reduced Veil upkeep per bed.'
   },
   faculty_quarters: {
     id: 'faculty_quarters',
@@ -255,6 +255,7 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     cost: { mana: 450, stone: 20, glass: 15 },
     buildReviews: 60,
     veil: 5,
+    capacity: { leisureSeats: 8 },
     requiredFurniture: [{ role: 'soaking_tub', count: 1, name: 'Soaking Tub' }],
     optionalSlots: 4,
     stats: { primary: ['comfort', 'aura'], secondary: 'charm' },
@@ -2476,7 +2477,7 @@ export const CREATURE_DEFINITIONS: Record<string, CreatureDefinition> = {
     roamsFreely: false,
     tamingReviews: 90,
     diet: { nectar: 1 },
-    buffDescription: '+5 Renown when tamed; Trophy Hall artifacts Renown x1.5',
+    buffDescription: '+5 Renown when tamed (Trophy Hall artifact bonus coming later)',
     buffType: 'trophy_renown',
     buffValue: 1.5,
     troubleDescription: 'Rolls off with 10 Glass (returned on recapture)',
@@ -3694,7 +3695,7 @@ export const TRAIT_DEFINITIONS: Record<string, TraitDefinition> = {
   'Kind Heart': { id: 'Kind Heart', name: 'Kind Heart', category: 'positive', effect: '+3 Composure per bell to dorm roommates' },
   'Iron Stomach': { id: 'Iron Stomach', name: 'Iron Stomach', category: 'positive', effect: 'Hunger decays 30% slower' },
   'Lucky': { id: 'Lucky', name: 'Lucky', category: 'positive', effect: '+1 loot roll on successful expeditions; -20% chance of hazard hits' },
-  'Quick Hands': { id: 'Quick Hands', name: 'Quick Hands', category: 'positive', effect: 'Builder or Alchemist output +15%' },
+  'Quick Hands': { id: 'Quick Hands', name: 'Quick Hands', category: 'positive', effect: 'Builder construction speed & Alchemist brewing speed +15%' },
   'Steady Hand': { id: 'Steady Hand', name: 'Steady Hand', category: 'positive', effect: 'Alchemy Lab explosion chance -50% when present' },
   'Sunny': { id: 'Sunny', name: 'Sunny', category: 'positive', effect: '+5 morale; +2 Composure per bell to classmates' },
   'Warded': { id: 'Warded', name: 'Warded', category: 'positive', effect: 'Immune to Hexed injuries' },

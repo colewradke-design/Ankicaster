@@ -10,7 +10,7 @@
 import React, { useState } from 'react';
 import { Hammer, Layers, X, AlertTriangle, PackageOpen } from 'lucide-react';
 import type { FullGameState, PlacedRoom } from '../types/ankicaster';
-import { roomDisplayName } from '../data/content';
+import { CREATURE_DEFINITIONS, roomDisplayName } from '../data/content';
 import { penAcceptedHabitats } from '../utils/creatures';
 import type { PlacementMode } from '../visual/AcademyCanvas';
 import { BuildMenuPanel } from './GamePanels';
@@ -40,7 +40,11 @@ export const BuildModePanel: React.FC<BuildModePanelProps> = ({
 
   const shelvedPenIds = new Set(shelved.filter(r => penAcceptedHabitats(r.defId).length > 0).map(r => r.id));
   const creaturesInShelvedPens = (state.creatures || []).filter(
-    c => c.roomId !== undefined && shelvedPenIds.has(c.roomId) && (c.status === 'wary' || c.status === 'tamed')
+    c =>
+      c.roomId !== undefined &&
+      shelvedPenIds.has(c.roomId) &&
+      (c.status === 'wary' || c.status === 'tamed') &&
+      !CREATURE_DEFINITIONS[c.defId]?.roamsFreely
   );
 
   return (

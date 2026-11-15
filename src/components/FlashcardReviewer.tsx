@@ -16,6 +16,7 @@ interface FlashcardReviewerProps {
   cards: Record<number, AnkiCardSnapshot>;
   onAnswerCard: (cardId: number, ease: 1 | 2 | 3 | 4, elapsedMs: number) => void;
   onSimulateBatch: (count: number) => void;
+  manaPerReview?: number;
   devMode?: boolean;
   isAddonMode?: boolean;
 }
@@ -24,6 +25,7 @@ export const FlashcardReviewer: React.FC<FlashcardReviewerProps> = ({
   cards,
   onAnswerCard,
   onSimulateBatch,
+  manaPerReview = 10,
   devMode = false,
   isAddonMode = false
 }) => {
@@ -91,14 +93,14 @@ export const FlashcardReviewer: React.FC<FlashcardReviewerProps> = ({
             <button
               onClick={() => onSimulateBatch(1)}
               className="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-xs font-semibold transition"
-              title="Simulate 1 Honest Review (+10 Mana)"
+              title={`Simulate 1 Honest Review (+${Math.round(manaPerReview)} Mana)`}
             >
               +1 Review
             </button>
             <button
               onClick={() => onSimulateBatch(10)}
               className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-lg text-xs font-semibold transition"
-              title="Simulate 10 Honest Reviews (+100 Mana & Rings Bell)"
+              title={`Simulate 10 Honest Reviews (+${Math.round(manaPerReview * 10)} Mana & Rings Bell)`}
             >
               +10 Reviews
             </button>
@@ -120,7 +122,7 @@ export const FlashcardReviewer: React.FC<FlashcardReviewerProps> = ({
           {lastElapsedSec < 0.8 ? (
             <span className="font-bold text-rose-300">Too Fast (&lt;0.8s) · 0 Mana Earned (Rule H5)</span>
           ) : (
-            <span className="font-bold text-emerald-300">Honest Pace · +10 Neutral Mana Earned</span>
+            <span className="font-bold text-emerald-300">Honest Pace · +{Math.round(manaPerReview)} Neutral Mana Earned</span>
           )}
         </div>
       )}
@@ -192,7 +194,7 @@ export const FlashcardReviewer: React.FC<FlashcardReviewerProps> = ({
           {showAnswer && (
             <div className="space-y-2 pt-1">
               <div className="text-xs text-center text-slate-400">
-                Grade your honest memory recall. All 4 buttons award identical mana (+10 neutral mana).
+                Grade your honest memory recall. All 4 buttons award identical mana (+{Math.round(manaPerReview)} neutral mana).
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                 <button

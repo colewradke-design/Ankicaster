@@ -964,6 +964,11 @@ function characterMoraleBonuses(state: FullGameState, char: Character): number {
   if (hasTrait(char, 'Bird Person')) bonus += activeCreatures.some(cr => AVIAN_CREATURES.has(cr.defId)) ? 10 : -3;
   if (hasTrait(char, 'Bug Person')) bonus += activeCreatures.some(cr => INSECT_CREATURES.has(cr.defId)) ? 10 : -3;
 
+  const hasHeartyMeals = built.some(
+    k => k.defId === 'kitchen' && built.some(ref => ref.defId === 'refectory' && roomsAreAdjacent(k, ref))
+  );
+  if (hasHeartyMeals) bonus += 5;
+
   return bonus;
 }
 
@@ -2415,11 +2420,13 @@ export class AnkicasterEngine {
           remainingBrews.push(job);
           continue;
         }
-        const hasAlchemist = next.characters.some(
+        const labAlchemists = next.characters.filter(
           c => c.career === 'alchemist' && c.careerState === 'active' && c.status !== 'away' && !c.injury && c.workplaceRoomId === lab.id
         );
+        const hasAlchemist = labAlchemists.length > 0;
         if (hasAlchemist) job.usedAlchemist = true;
-        job.progress += hasAlchemist ? 2 : 1;
+        const alchemistQuickHands = labAlchemists.some(c => hasTrait(c, 'Quick Hands'));
+        job.progress += hasAlchemist ? (alchemistQuickHands ? 2 * 1.15 : 2) : 1;
         if (job.progress >= job.required) {
           completeBrewJob(next, job.recipeId, lab, job.usedAlchemist, false, notifications);
         } else {
@@ -6615,7 +6622,7 @@ export class AnkicasterEngine {
   static resolveHazard(
     state: FullGameState,
     roomId: number,
-    method: 'warder' | 'spell' | 'clean'
+    method: 'warder' | 'spell'
   ): { state: FullGameState; success: boolean; error?: string } {
     const next = structuredClone(state);
     const room = next.rooms.find(r => r.id === roomId);
@@ -6629,6 +6636,8 @@ export class AnkicasterEngine {
     } else if (method === 'warder') {
       const hasWarder = next.characters.some(c => c.career === 'warder' && c.careerState === 'active' && c.status !== 'away');
       if (!hasWarder) return { state, success: false, error: 'Requires an active Warder on faculty.' };
+    } else {
+      return { state, success: false, error: 'Invalid hazard resolution method.' };
     }
 
     const hazardName = room.hazard.name;
@@ -6719,10 +6728,18 @@ export class AnkicasterEngine {
     state: FullGameState,
     creatureId: number,
     tamerId: number
-  ): { state: FullGameState; success: boolean } {
+  ): { state: FullGameState; success: boolean; error?: string } {
     const next = structuredClone(state);
     const creature = next.creatures.find(c => c.id === creatureId);
-    if (!creature) return { state, success: false };
+    if (!creature) return { state, success: false, error: 'Creature not found.' };
+
+    if (tamerId !== 0) {
+      const tamer = next.characters.find(c => c.id === tamerId);
+      if (!tamer) return { state, success: false, error: 'Tamer not found.' };
+      if (tamer.career !== 'tamer' || tamer.careerState !== 'active' || tamer.status === 'away') {
+        return { state, success: false, error: `${tamer.name} is not an active Tamer.` };
+      }
+    }
 
     creature.tamerId = tamerId;
     return { state: next, success: true };

@@ -14,7 +14,6 @@
  */
 
 import { roomLimitStatus } from '../utils/placement';
-import { WizardPortrait } from './WizardPortrait';
 import { CharacterPortrait } from './CharacterPortrait';
 import { CreaturePortrait } from './CreaturePortrait';
 import {
@@ -44,12 +43,10 @@ import {
   FURNITURE_DEFINITIONS,
   POTION_RECIPES,
   RIFT_DESTINATIONS,
-  SPELL_DEFINITIONS,
   CREATURE_DEFINITIONS,
   TRAIT_DEFINITIONS,
   PERSONALITY_DEFINITIONS,
-  SCROLL_DEFINITIONS,
-  SPELLBOOK_DEFINITIONS
+  SCROLL_DEFINITIONS
 } from '../data/content';
 import { AnkicasterEngine } from '../utils/engine';
 import {
@@ -62,13 +59,10 @@ import {
   careerAffinityMultiplier,
   classroomSchool,
   computeAlumniBonuses,
-  computeStudyLevel,
+  computeSpellbookBonuses,
   describeCareerAffinity,
-  maxStudySessionsForWizard,
-  wizardMasteredSchools,
-  wizardOrbQuote
+  wizardMasteredSchools
 } from '../utils/formulas';
-import { grimoireStudyOption } from './StudyModals';
 import { ALL_SCHOOLS, buildAcademySchedule } from '../utils/schedule';
 import { isRoomUnfinished } from '../utils/requiredFurniture';
 import {
@@ -103,267 +97,7 @@ import { canAffordMaterials, formatMaterialCost } from '../utils/resourceReport'
 import type { DraftDeckId } from '../utils/decks';
 
 // ==========================================
-// 1. WIZARD STUDY PANEL
-// ==========================================
-export const WizardStudyPanel: React.FC<{
-  state: FullGameState;
-  onQueueSession: (school: SchoolType, isGrimoire?: boolean, spellId?: string) => void;
-  onCastSpell: (spellId: string) => void;
-}> = ({ state, onQueueSession, onCastSpell }) => {
-  const { wizard, mana } = state;
-  const schools: SchoolType[] = ['arcane', 'nature', 'light', 'shadow', 'alchemy'];
-  const studyLevel = computeStudyLevel(wizard.levels);
-  const maxSessions = maxStudySessionsForWizard(studyLevel);
-  const totalSessions = (wizard.activeSession ? 1 : 0) + (wizard.queuedSessions ? wizard.queuedSessions.length : 0);
-  const unlearnedSpells = Object.values(SPELL_DEFINITIONS).filter(sp => !wizard.knownSpells.includes(sp.id));
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between bg-slate-900/80 p-5 rounded-2xl border border-amber-900/30 shadow-lg">
-        <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-full bg-gradient-to-tr from-purple-800 to-amber-500 flex items-center justify-center shadow-inner border-2 border-amber-300/50 overflow-hidden">
-            <WizardPortrait appearance={wizard.appearance} size={52} />
-          </div>
-          <div>
-            <h3 className="text-base md:text-lg font-bold text-amber-200">
-              {wizard.title} {wizard.name} ({wizard.pronouns})
-            </h3>
-            <p className="text-xs text-slate-300">
-              Headmaster of {wizard.academyName} · Arcane Study Tier {studyLevel} (Queue {wizard.queuedSessions?.length || 0}/{maxSessions - 1})
-            </p>
-          </div>
-        </div>
-        <div className="text-right">
-          <div className="text-xs text-slate-400">Total Wizard Mastery</div>
-          <div className="text-xl font-bold text-amber-300">
-            {Object.values(wizard.levels).reduce((a, b) => a + b, 0)} / 50
-          </div>
-        </div>
-      </div>
-
-      {/* Active Training Session */}
-      <div className="bg-gradient-to-r from-purple-950/60 to-slate-900 p-5 rounded-2xl border border-purple-500/30 shadow-md">
-        <h4 className="text-xs font-bold uppercase tracking-wider text-purple-300 mb-2 flex items-center gap-2">
-          <Sparkles className="w-4 h-4 text-purple-400" /> Active Arcane Meditation
-        </h4>
-        {wizard.activeSession ? (
-          <div>
-            <div className="flex justify-between text-xs font-medium mb-1.5">
-              <span className="text-slate-100 font-bold capitalize">
-                {wizard.activeSession.kind === 'orb'
-                  ? `Pondering the ${wizard.activeSession.school} Orb (Level ${wizard.activeSession.targetLevel})`
-                  : `Studying Grimoire: ${SPELL_DEFINITIONS[wizard.activeSession.spellId || '']?.name || 'Spell'}`}
-              </span>
-              <span className="text-purple-300 font-mono text-xs">
-                {wizard.activeSession.progress} / {wizard.activeSession.required} reviews
-              </span>
-            </div>
-            <div className="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden border border-purple-500/30">
-              <div
-                className="bg-gradient-to-r from-purple-500 to-amber-400 h-full transition-all"
-                style={{ width: `${Math.min(100, (wizard.activeSession.progress / wizard.activeSession.required) * 100)}%` }}
-              />
-            </div>
-            {(wizard.queuedSessions?.length || 0) > 0 && (
-              <div className="mt-2.5 flex flex-wrap gap-1.5">
-                {wizard.queuedSessions.map((q, idx) => (
-                  <span key={q.id || idx} className="text-[11px] px-2 py-0.5 rounded-full bg-slate-800/80 border border-slate-700 text-slate-300 capitalize">
-                    #{idx + 1}: {q.kind === 'orb' ? `${q.school} Lv ${q.targetLevel}` : SPELL_DEFINITIONS[q.spellId || '']?.name || 'Grimoire'} ({q.required}r)
-                  </span>
-                ))}
-              </div>
-            )}
-            <p className="text-xs text-slate-400 mt-2">
-              Rule BR-06/07: Completes strictly from honest reviews (25 × target level reviews). Pauses safely during breaks.
-            </p>
-          </div>
-        ) : (
-          <div className="text-xs text-slate-400 py-2">
-            No active session. Choose an orb or grimoire below to enhance your magical mastery.
-          </div>
-        )}
-      </div>
-
-      {/* 5 Schools of Magic Training Dials */}
-      <div>
-        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 mb-3">
-          The Five Schools of Magic (Maximum Level 10 per School)
-        </h4>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {schools.map(sch => {
-            const quote = wizardOrbQuote({
-              foundingSchool: wizard.foundingSchool,
-              levels: wizard.levels,
-              active: wizard.activeSession,
-              queued: wizard.queuedSessions,
-              school: sch
-            });
-            const currentLvl = wizard.levels[sch] || 0;
-            const targetLvl = quote.targetLevel;
-            const isMax = quote.capped;
-            const req = { mana: quote.mana, reviews: quote.reviews };
-            const canAfford = mana >= req.mana;
-            const canQueue = !isMax && canAfford && totalSessions < maxSessions;
-
-            const icon =
-              sch === 'arcane' ? <BookOpen className="w-4 h-4 text-purple-400" /> :
-              sch === 'nature' ? <Leaf className="w-4 h-4 text-emerald-400" /> :
-              sch === 'light' ? <Sun className="w-4 h-4 text-amber-400" /> :
-              sch === 'shadow' ? <Moon className="w-4 h-4 text-indigo-400" /> :
-              <FlaskConical className="w-4 h-4 text-orange-400" />;
-
-            const buffText =
-              sch === 'arcane' ? `+${Math.max(0, currentLvl - 5) * 2}% Mana` :
-              sch === 'nature' ? `+${Math.max(0, currentLvl - 5) * 3}% Food, Herbs, Taming` :
-              sch === 'light' ? `+${Math.max(0, currentLvl - 5) * 3}% Recovery & Teaching` :
-              sch === 'shadow' ? `-${Math.max(0, currentLvl - 5) * 3}% Veil & Hazards` :
-              `-${Math.max(0, currentLvl - 5) * 3}% Build, +${Math.max(0, currentLvl - 5) * 3}% Potions`;
-
-            return (
-              <div key={sch} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-bold text-slate-100 capitalize flex items-center gap-1.5 text-xs">
-                      {icon} {sch}
-                    </span>
-                    <span className="text-xs font-bold text-amber-300">Level {currentLvl}/10</span>
-                  </div>
-                  <div className="text-xs text-slate-300 mb-2">
-                    {currentLvl >= 5 ? (
-                      <span className="text-emerald-400 font-semibold">Classroom Teaching Unlocked</span>
-                    ) : (
-                      <span className="text-slate-400">Unlocks Classroom at Level 5</span>
-                    )}
-                  </div>
-                  {currentLvl >= 6 && (
-                    <div className="text-xs text-amber-300 bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/20 mb-2">
-                      Passive Buff: {buffText}
-                    </div>
-                  )}
-                </div>
-
-                {!isMax ? (
-                  <button
-                    onClick={() => onQueueSession(sch, false)}
-                    disabled={!canQueue}
-                    className="w-full mt-2 py-2 px-3 bg-purple-600/20 hover:bg-purple-600/40 text-purple-200 border border-purple-500/40 rounded-xl text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed transition"
-                  >
-                    {totalSessions > 0
-                      ? `Queue Level ${targetLvl} (${quote.free ? 'Free' : `${req.mana}m`} · ${req.reviews} revs)`
-                      : `Ponder Level ${targetLvl} (${quote.free ? 'Free' : `${req.mana}m`} · ${req.reviews} revs)`}
-                  </button>
-                ) : (
-                  <span className="text-center text-xs text-amber-400 font-bold py-1.5 bg-amber-500/10 rounded-lg border border-amber-500/20">
-                    {currentLvl >= 10 ? `Archmagus of ${sch.toUpperCase()}` : `Level 10 Queued`}
-                  </span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Spells & Grimoires Known */}
-      <div>
-        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 mb-3">
-          Known Wizard Spells (Instant Cast with Mana)
-        </h4>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {wizard.knownSpells.map(spId => {
-            const sp = SPELL_DEFINITIONS[spId];
-            if (!sp) return null;
-            const onCooldown = !!wizard.spellCooldowns[spId];
-            return (
-              <div key={spId} className="bg-slate-900 border border-slate-800 p-3.5 rounded-xl flex items-center justify-between shadow">
-                <div>
-                  <div className="font-bold text-xs text-slate-100 flex items-center gap-2">
-                    <span>{sp.name}</span>
-                    <span className="text-xs text-purple-300 uppercase font-mono">({sp.school} {sp.tier})</span>
-                  </div>
-                  <div className="text-xs text-slate-300 mt-0.5 leading-relaxed">{sp.effect}</div>
-                  <div className="text-xs text-amber-400 font-mono mt-1">Cost: {sp.manaCost} Mana</div>
-                </div>
-                <button
-                  onClick={() => onCastSpell(spId)}
-                  disabled={mana < sp.manaCost || onCooldown}
-                  className="px-3.5 py-1.5 bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/40 rounded-xl text-xs font-bold disabled:opacity-40 transition shrink-0 ml-2 shadow"
-                >
-                  {onCooldown ? `${wizard.spellCooldowns[spId]}r CD` : 'Cast'}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Study Unlearned Grimoires */}
-      {unlearnedSpells.length > 0 && (
-        <div>
-          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 mb-3">
-            Study a Grimoire (Queue {totalSessions}/{maxSessions})
-          </h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {unlearnedSpells.map(sp => {
-              const opt = grimoireStudyOption(state, sp.id);
-              return (
-                <div key={sp.id} className="bg-slate-900 border border-slate-800 p-3.5 rounded-xl flex items-center justify-between gap-2 shadow">
-                  <div>
-                    <div className="font-bold text-xs text-slate-100 flex items-center gap-2 flex-wrap">
-                      <span>{sp.name}</span>
-                      <span className="text-[11px] text-purple-300 uppercase font-mono">({sp.school} {sp.tier})</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${opt.meetsLevel ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/30' : 'bg-rose-950/60 text-rose-300 border border-rose-500/30'}`}>
-                        Lv {opt.minSchoolLevel}+
-                      </span>
-                    </div>
-                    <div className="text-xs text-slate-300 mt-0.5 leading-relaxed">{sp.effect}</div>
-                    <div className="text-xs text-amber-400 font-mono mt-1">
-                      {opt.manaCost} Mana{opt.discounted ? ' (−10% Lib)' : ''} · {opt.reviews} revs
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => onQueueSession(sp.school, true, sp.id)}
-                    disabled={!opt.canStudy}
-                    title={opt.reason || `${opt.verb} ${sp.name}`}
-                    className="px-3.5 py-1.5 bg-purple-600/30 hover:bg-purple-600/50 text-purple-100 border border-purple-500/40 rounded-xl text-xs font-bold disabled:opacity-40 transition shrink-0 shadow"
-                  >
-                    {opt.alreadyStudying ? 'Queued' : opt.verb}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Bound Spellbooks Shelf (§31.2) */}
-      {(state.spellbooks?.length || 0) > 0 && (
-        <div data-testid="spellbook-shelf">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-amber-300 mb-3">
-            Bound Spellbooks ({state.spellbooks.length} / 21)
-          </h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {state.spellbooks.map(sbId => {
-              const sb = SPELLBOOK_DEFINITIONS[sbId];
-              if (!sb) return null;
-              return (
-                <div key={sbId} className="bg-amber-950/20 border border-amber-500/30 p-3 rounded-xl">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-bold text-xs text-amber-200">📖 {sb.name}</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono">T{sb.tier}</span>
-                  </div>
-                  <p className="text-xs text-slate-300 mt-1 leading-relaxed">{sb.effect}</p>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-// ==========================================
-// 2. ROSTER & CONSTELLATION PANEL
+// 1. ROSTER & CONSTELLATION PANEL
 // ==========================================
 export const RosterPanel: React.FC<{
   state: FullGameState;
@@ -802,7 +536,7 @@ export const RecruitmentPanel: React.FC<{
   const allowNew = state.settings.linkNewCards ?? false;
   const deckScope = (state.settings.deckScope || 'all').trim();
   const freeYoungCards = AnkicasterEngine.getEligibleFreeCards(state, 30);
-  const eligibleYoungCardsCount = freeYoungCards.length + linkedCardIds.size;
+  const eligibleYoungCardsCount = AnkicasterEngine.getEligibleFreeCards({ ...state, cardSets: [] }, 30).length;
   const needed = state.settings.cardsPerStudent;
   const canEnroll = freeYoungCards.length >= needed;
 
@@ -1939,7 +1673,8 @@ export const RiftPanel: React.FC<{
   const activeExpedition = expeditions.find(e => e.state === 'active');
   const adventurers = characters.filter(c => c.career === 'adventurer' && c.status !== 'student' && c.careerState !== 'sabbatical');
   const tamedCreatures = creatures.filter(c => c.status === 'tamed');
-  const maxSupplies = 1 + academyFurnitureEffect(state.rooms, 'rift_supply_slots');
+  const sb = computeSpellbookBonuses(state.spellbooks || []);
+  const maxSupplies = 1 + academyFurnitureEffect(state.rooms, 'rift_supply_slots') + sb.supplySlotBonus;
   const availablePotions: Array<[string, number, string]> = [
     ...Object.entries(state.resources.potions || {})
       .filter(([pid, count]) => count > 0 && (pid === 'rift_elixir' || pid === 'courage_draught'))
