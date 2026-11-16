@@ -263,6 +263,7 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
     achievements: [], // doors_open earned on first enrolment
     spellbooks: [],
     alumniGallery: [],
-    processedReviewIds: []
+    processedReviewIds: [],
+    revlogCursor: 0
   };
 }

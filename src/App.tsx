@@ -120,6 +120,7 @@ export default function App() {
   const [activeEventModal, setActiveEventModal] = useState<SchoolEvent | null>(null);
   const [isCodexOpen, setIsCodexOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [syncSaves, setSyncSaves] = useState(false);
   const [isVeilModalOpen, setIsVeilModalOpen] = useState(false);
   const [veilDismissedCost, setVeilDismissedCost] = useState<number | null>(null);
   const [selectedSpellbookPlan, setSelectedSpellbookPlan] = useState<string>('');
@@ -355,6 +356,10 @@ export default function App() {
 
   // Real Anki Review Bridge (receives reviews and snapshots from Anki addon pycmd/runJavaScript)
   useEffect(() => {
+    (window as any).ankicasterSetSyncSaves = (on: boolean) => {
+      setSyncSaves(!!on);
+    };
+
     // 1. Live Review Handler
     (window as any).ankicasterOnReview = (payload: {
       card_id?: number;
@@ -534,6 +539,7 @@ export default function App() {
       delete (window as any).ankicasterLoadSavedGame;
       delete (window as any).ankicasterLoadSnapshot;
       delete (window as any).ankicasterReplayPendingReviews;
+      delete (window as any).ankicasterSetSyncSaves;
       window.removeEventListener('message', handleMessage);
     };
   }, [playChime, isAddonMode]);
@@ -1864,6 +1870,31 @@ export default function App() {
                   }`}
                 >
                   {state.settings.sound ? 'Enabled' : 'Disabled'}
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+                <div>
+                  <span className="block font-medium text-slate-200">Sync this school</span>
+                  <span className="text-[11px] text-slate-400">Off unless you study on more than one computer. Turn it on here and on the other computer, then sync Anki before you open the school.</span>
+                </div>
+                <button
+                  onClick={() => {
+                    const next = !syncSaves;
+                    setSyncSaves(next);
+                    if (isAddonMode && typeof (window as any).pycmd === 'function') {
+                      try {
+                        (window as any).pycmd(next ? 'ankicaster:syncSaves:1' : 'ankicaster:syncSaves:0');
+                      } catch (e) {
+                        console.error('Sync setting failed:', e);
+                      }
+                    }
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition shrink-0 ${
+                    syncSaves ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  {syncSaves ? 'On' : 'Off'}
                 </button>
               </div>
 

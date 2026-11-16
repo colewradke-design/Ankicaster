@@ -1731,6 +1731,25 @@ function checkSuspendedLinkedCards(state: FullGameState, summary: string[]): voi
   }
 }
 
+function noteReviewSeen(state: FullGameState, reviewId?: string): FullGameState {
+  if (!reviewId) return state;
+  const ids = state.processedReviewIds ? [...state.processedReviewIds] : [];
+  if (!ids.includes(reviewId)) {
+    ids.push(reviewId);
+    if (ids.length > 2000) ids.shift();
+  }
+  const numericId = Number(reviewId);
+  const cursor = Number.isFinite(numericId) && numericId > (state.revlogCursor ?? 0)
+    ? numericId
+    : (state.revlogCursor ?? 0);
+  return {
+    ...state,
+    processedReviewIds: ids,
+    revlogCursor: cursor,
+    lastProcessedReviewId: reviewId
+  };
+}
+
 export class AnkicasterEngine {
   /** One-off resource changes (builds, draws, events). Display only. */
   static logResourceChange(state: FullGameState, resource: string, amount: number, label: string): void {
@@ -1775,15 +1794,19 @@ export class AnkicasterEngine {
 
     // Deduplication check: ignore if this review has already been processed (only reviewId is used)
     if (reviewId) {
-      if (state.processedReviewIds && state.processedReviewIds.includes(reviewId)) {
+      const numericId = Number(reviewId);
+      const alreadyPaid = state.processedReviewIds?.includes(reviewId)
+        || (Number.isFinite(numericId) && numericId > 0 && numericId <= (state.revlogCursor ?? 0));
+      if (alreadyPaid) {
         return { state, notifications };
       }
     }
 
-    // H5 check: Anti-mash guard (answers < 800ms grant 0)
-    if (elapsedMs < 800) {
+    // A recorded answer under 800ms does not pay. Time 0 means the device did not report a duration, so it counts.
+    // Either way the id is consumed so a later revlog scan does not try it again.
+    if (elapsedMs > 0 && elapsedMs < 800) {
       notifications.push('Review answered too quickly (<0.8s) — honest study pace required for mana.');
-      return { state, notifications };
+      return { state: noteReviewSeen(state, reviewId), notifications };
     }
 
     const next: FullGameState = {
@@ -1876,6 +1899,10 @@ export class AnkicasterEngine {
         next.processedReviewIds!.shift();
       }
       next.lastProcessedReviewId = reviewId;
+      const numericId = Number(reviewId);
+      if (Number.isFinite(numericId) && numericId > (next.revlogCursor ?? 0)) {
+        next.revlogCursor = numericId;
+      }
     }
 
     // 1. Mana gain (F1)
@@ -2521,9 +2548,10 @@ export class AnkicasterEngine {
     let lastReviewId: string | undefined;
 
     for (const r of reviews) {
+      const before = curState.reviewIndex ?? 0;
       const res = this.applyHonestReview(curState, r.cardId, r.ease, r.elapsedMs ?? 2400, r.cardAge, r.reviewId);
-      if (res.state !== curState) {
-        curState = res.state;
+      curState = res.state;
+      if ((curState.reviewIndex ?? 0) > before) {
         count++;
         if (r.reviewId) lastReviewId = r.reviewId;
       }
@@ -5371,6 +5399,14 @@ export class AnkicasterEngine {
     if (!Array.isArray(out.scrollQueue)) out.scrollQueue = [];
     if (!Array.isArray(out.spellbooks)) out.spellbooks = [];
     if (!out.suspendedSinceDay) out.suspendedSinceDay = {};
+    if (typeof out.revlogCursor !== 'number') {
+      let cursor = 0;
+      for (const id of out.processedReviewIds || []) {
+        const n = Number(id);
+        if (Number.isFinite(n) && n > cursor) cursor = n;
+      }
+      out.revlogCursor = cursor;
+    }
     if (out.settings) {
       out.settings = {
         ...out.settings,

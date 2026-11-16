@@ -39,7 +39,8 @@ ADDON_PACKAGE_NAME = "ankicaster_magic_academy"
 DEFAULT_CONFIG = {
     "install_baseline_ms": 0,
     "min_answer_elapsed_ms": 800,
-    "auto_open_on_startup": False
+    "auto_open_on_startup": False,
+    "sync_saves": False
 }
 
 _card_shown_timestamp: float = 0.0
@@ -72,6 +73,156 @@ def get_or_create_install_baseline() -> int:
         cfg["install_baseline_ms"] = baseline
         mw.addonManager.writeConfig(pkg, cfg)
     return baseline
+
+def sync_saves_enabled() -> bool:
+    return bool(get_config().get("sync_saves", False))
+
+def set_sync_saves(enabled: bool) -> None:
+    if not mw or not mw.addonManager:
+        return
+    pkg = get_package_name()
+    cfg = mw.addonManager.getConfig(pkg) or {}
+    cfg["sync_saves"] = bool(enabled)
+    if "install_baseline_ms" not in cfg:
+        cfg["install_baseline_ms"] = get_or_create_install_baseline()
+    mw.addonManager.writeConfig(pkg, cfg)
+
+def _revision(save: Optional[Dict[str, Any]]) -> int:
+    if not isinstance(save, dict):
+        return 0
+    try:
+        return int(save.get("saveRevisionMs") or 0)
+    except Exception:
+        return 0
+
+def _review_count(save: Optional[Dict[str, Any]]) -> int:
+    if not isinstance(save, dict):
+        return 0
+    try:
+        return int(save.get("reviewIndex") or 0)
+    except Exception:
+        return 0
+
+def review_cursor(save: Optional[Dict[str, Any]]) -> int:
+    """Newest revlog id already considered. Missing cursor falls back to the paid id list."""
+    if not isinstance(save, dict):
+        return 0
+    raw = save.get("revlogCursor")
+    if isinstance(raw, (int, float)) and int(raw) > 0:
+        return int(raw)
+    cursor = 0
+    for entry in save.get("processedReviewIds") or []:
+        try:
+            cursor = max(cursor, int(entry))
+        except Exception:
+            continue
+    return cursor
+
+def review_baseline(save: Optional[Dict[str, Any]]) -> int:
+    if isinstance(save, dict):
+        try:
+            baseline = int(save.get("installBaselineMs") or 0)
+            if baseline > 0:
+                return baseline
+        except Exception:
+            pass
+    return get_or_create_install_baseline()
+
+def load_collection_save() -> Optional[Dict[str, Any]]:
+    if not mw or not mw.col:
+        return None
+    try:
+        raw = mw.col.get_config("ankicasterSave", None)
+    except Exception as e:
+        print(f"[Ankicaster] Collection save read failed: {e}")
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return None
+    return raw if isinstance(raw, dict) else None
+
+def choose_save(local: Optional[Dict[str, Any]], remote: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Local file always wins unless this computer opted into save sync."""
+    if not sync_saves_enabled() or remote is None:
+        return local
+    if local is None:
+        return remote
+    # A brand-new school on this machine must not bury a school that already has reviews.
+    if _review_count(local) == 0 and _review_count(remote) > 0 and not (local.get("characters") or []):
+        return remote
+    return remote if _revision(remote) > _revision(local) else local
+
+def query_reviews_since(cursor_ms: int, baseline_ms: int) -> list:
+    """
+    Study rows from every device. type 0/1/2 are learning, review, and relearn.
+    type 3 is a cram, type 4 is a hand reschedule.
+    """
+    if not mw or not mw.col or not mw.col.db:
+        return []
+    floor = max(int(cursor_ms), int(baseline_ms) - 1)
+    try:
+        rows = mw.col.db.all(
+            """
+            SELECT id, cid, ease, ivl, lastIvl, time, type
+            FROM revlog
+            WHERE id > ? AND type IN (0, 1, 2)
+            ORDER BY id ASC
+            """,
+            floor,
+        )
+    except Exception as e:
+        print(f"[Ankicaster] Revlog catch-up query error: {e}")
+        return []
+
+    reviews = []
+    for row in rows or []:
+        try:
+            revlog_id = int(row[0])
+            if revlog_id < baseline_ms:
+                continue
+            ease = int(row[2] or 3)
+            if ease < 1 or ease > 4:
+                ease = 3
+            ivl = int(row[3] or 0)
+            last_ivl = int(row[4] or 0)
+            if ivl < 0:
+                ivl = 0
+            if last_ivl < 0:
+                last_ivl = 0
+            age = max(0, min(ivl, last_ivl))
+            reviews.append({
+                "card_id": int(row[1]),
+                "ease": ease,
+                "elapsed_ms": max(0, int(row[5] or 0)),
+                "card_age": age,
+                "review_id": str(revlog_id),
+                "answered_at_ms": revlog_id
+            })
+        except Exception:
+            continue
+    return reviews
+
+def push_revlog_catchup() -> None:
+    dialog = _ankicaster_dialog
+    if dialog is None or not getattr(dialog, "is_ready", False) or not getattr(dialog, "web_view", None):
+        return
+    save = load_saved_game_state()
+    reviews = query_reviews_since(review_cursor(save), review_baseline(save))
+    if not reviews:
+        return
+    try:
+        payload = json.dumps(reviews)
+        dialog.web_view.page().runJavaScript(
+            f"if (window.ankicasterReplayPendingReviews) {{ window.ankicasterReplayPendingReviews({payload}); }}"
+        )
+    except Exception as e:
+        print(f"[Ankicaster] Revlog catch-up send failed: {e}")
+
+def on_sync_finished(*_args: Any) -> None:
+    push_revlog_catchup()
+
 
 def query_previous_interval(card_id: int) -> int:
     """
@@ -313,28 +464,44 @@ def get_save_file_path() -> str:
     return os.path.join(user_files_dir, "save.json")
 
 def load_saved_game_state() -> Optional[Dict[str, Any]]:
-    """Load game state from user_files/<profile name>/save.json."""
+    """Local save.json, or the newer collection copy when save sync is on."""
+    local = None
     path = get_save_file_path()
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                local = loaded
         except Exception as e:
             print(f"[Ankicaster] Error loading save.json: {e}")
-    return None
+    return choose_save(local, load_collection_save())
 
 def write_saved_game_state(save_data: str) -> bool:
-    """Write game state JSON string atomically to user_files/<profile name>/save.json using tmp file + os.replace."""
+    """Write save.json. Also write the collection when this computer opted in."""
+    try:
+        parsed = json.loads(save_data)
+    except Exception:
+        parsed = None
+    if isinstance(parsed, dict):
+        parsed["saveRevisionMs"] = int(time.time() * 1000)
+        save_data = json.dumps(parsed)
     try:
         path = get_save_file_path()
         tmp_path = path + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(save_data)
         os.replace(tmp_path, path)
-        return True
     except Exception as e:
         print(f"[Ankicaster] Error saving save.json: {e}")
         return False
+    if sync_saves_enabled() and isinstance(parsed, dict) and mw and mw.col:
+        try:
+            mw.col.set_config("ankicasterSave", parsed)
+        except Exception as e:
+            print(f"[Ankicaster] Collection save write failed: {e}")
+            return False
+    return True
 
 class AnkicasterDialog(QDialog):
     """Dedicated window inside Anki running the production Ankicaster web application."""
@@ -377,6 +544,23 @@ class AnkicasterDialog(QDialog):
         elif cmd.startswith("ankicaster:save:"):
             save_payload = cmd[len("ankicaster:save:"):]
             write_saved_game_state(save_payload)
+        elif cmd == "ankicaster:syncSaves:1" or cmd == "ankicaster:syncSaves:0":
+            enabled = cmd.endswith(":1")
+            set_sync_saves(enabled)
+            if enabled and self.web_view:
+                chosen = load_saved_game_state()
+                reviews = query_reviews_since(review_cursor(chosen), review_baseline(chosen))
+                parts = []
+                if chosen is not None:
+                    parts.append(
+                        f"if (window.ankicasterLoadSavedGame) {{ window.ankicasterLoadSavedGame({json.dumps(chosen)}); }}"
+                    )
+                if reviews:
+                    parts.append(
+                        f"if (window.ankicasterReplayPendingReviews) {{ window.ankicasterReplayPendingReviews({json.dumps(reviews)}); }}"
+                    )
+                if parts:
+                    self.web_view.page().runJavaScript("\n".join(parts))
 
     def on_frontend_ready(self) -> None:
         """Called once the App bridge effect has registered all handlers and emitted ankicaster:ready."""
@@ -392,6 +576,11 @@ class AnkicasterDialog(QDialog):
             js_load = "if (window.ankicasterLoadSavedGame) { window.ankicasterLoadSavedGame(null); }"
         self.web_view.page().runJavaScript(js_load)
 
+        sync_flag = "true" if sync_saves_enabled() else "false"
+        self.web_view.page().runJavaScript(
+            f"if (window.ankicasterSetSyncSaves) {{ window.ankicasterSetSyncSaves({sync_flag}); }}"
+        )
+
         # 2. Send full collection snapshot
         snapshot = get_non_suspended_cards_snapshot()
         if snapshot:
@@ -399,10 +588,16 @@ class AnkicasterDialog(QDialog):
             js_snap = f"if (window.ankicasterLoadSnapshot) {{ window.ankicasterLoadSnapshot({snap_json}); }}"
             self.web_view.page().runJavaScript(js_snap)
 
-        # 3. Send all pending reviews
+        # 3. Reviews answered on any device since the cursor, plus anything still queued locally
         pending = get_all_pending_reviews()
-        if pending:
-            pending_json = json.dumps(pending)
+        caught_up = query_reviews_since(review_cursor(saved_state), review_baseline(saved_state))
+        seen = {str(r.get("review_id")) for r in caught_up}
+        merged = list(caught_up)
+        for row in pending:
+            if str(row.get("review_id")) not in seen:
+                merged.append(row)
+        if merged:
+            pending_json = json.dumps(merged)
             js_replay = f"if (window.ankicasterReplayPendingReviews) {{ window.ankicasterReplayPendingReviews({pending_json}); }}"
             self.web_view.page().runJavaScript(js_replay)
 
@@ -447,6 +642,8 @@ def init_addon() -> None:
     # 3. Card timing hooks
     gui_hooks.reviewer_did_show_question.append(on_card_will_show)
     gui_hooks.reviewer_did_answer_card.append(on_card_answered)
+    if hasattr(gui_hooks, "sync_did_finish"):
+        gui_hooks.sync_did_finish.append(on_sync_finished)
 
     # 4. Menu item under Tools (removed undefined export_collection_snapshot)
     action_open = mw.form.menuTools.addAction("Open Ankicaster Magic Academy")

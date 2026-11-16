@@ -43,6 +43,26 @@ test('H5: Anti-mash guard grants 0 mana if answered in <800ms', () => {
   assert.equal(honestRes.state.mana, initialMana + 10, 'Mana should increase for honest answer pace');
 });
 
+test('revlog catch-up pays a review with no recorded time and does not pay it twice', () => {
+  const state = createInitialGameState();
+  const cardId = Number(Object.keys(state.allCards)[0]);
+  const start = state.mana;
+
+  const unknown = AnkicasterEngine.applyHonestReview(state, cardId, 3, 0, 12, '1000');
+  assert.equal(unknown.state.mana, start + 10, 'time 0 is an untimed synced review and still pays');
+  assert.equal(unknown.state.revlogCursor, 1000);
+
+  const again = AnkicasterEngine.applyHonestReview(unknown.state, cardId, 3, 0, 12, '1000');
+  assert.equal(again.state.mana, unknown.state.mana);
+
+  const fast = AnkicasterEngine.applyHonestReview(unknown.state, cardId, 3, 200, 12, '1001');
+  assert.equal(fast.state.mana, unknown.state.mana, 'a recorded fast answer does not pay');
+  assert.equal(fast.state.revlogCursor, 1001);
+
+  const older = AnkicasterEngine.applyHonestReview(fast.state, cardId, 3, 2000, 12, '999');
+  assert.equal(older.state.mana, fast.state.mana, 'an id behind the cursor is already considered');
+});
+
 test('BR-25: 10% Bank Floor preserves bank and holds Veil steady during days away', () => {
   const state = createInitialGameState();
   state.mana = 200;

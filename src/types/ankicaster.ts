@@ -756,6 +756,10 @@ export interface FullGameState {
   }>;
   lastProcessedReviewId?: string;
   processedReviewIds?: string[];
+  /** Newest revlog id already considered. Older rows are not paid again. */
+  revlogCursor?: number;
+  /** Write time of this save. Used only to pick the newer copy when save sync is on. */
+  saveRevisionMs?: number;
   /** Furniture returned by demolition (GDD 15.4 / 17.1); re-installing a stored item is free. */
   furnitureInventory?: Record<string, number>;
   /**
