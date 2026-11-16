@@ -889,7 +889,6 @@ const HABITAT_ROOM_DEFS = new Set([
 const FELINE_CREATURES = new Set(['glyph_cat', 'night_lynx']);
 const AVIAN_CREATURES = new Set(['meadow_lark', 'dawn_finch', 'star_heron', 'mistfeather_owl', 'chronoflare_owl', 'hush_raven', 'dawnhart_gryphon']);
 const INSECT_CREATURES = new Set(['brook_beetle', 'prism_beetle', 'orrery_moth', 'lantern_moth']);
-const COSMETIC_PRANK_LABELS = ['Green Hair', 'Floating Boots', 'Tiny Voice', 'Sparkling Ears'];
 const SECRET_CLUB_NAMES = ['The Midnight Ink Society', 'The Gargoyle Watch', 'The Secret Waffle Guild', 'Order of the Floating Feather'];
 
 function hasTrait(c: Character | undefined, trait: string): boolean {
@@ -1155,15 +1154,6 @@ function rollMisbehaviorForStudent(
           cr.status = 'loose';
           extraText = `${cr.nickname} was set loose!`;
         }
-        break;
-      }
-      case 'potion_prank': {
-        const label = COSMETIC_PRANK_LABELS[Math.floor(Math.random() * COSMETIC_PRANK_LABELS.length)];
-        char.cosmeticStatus = { label, expiresDay: state.day + 1 };
-        for (const other of state.characters) {
-          if (other.id !== char.id) other.needs.composure = Math.min(100, other.needs.composure + 5);
-        }
-        extraText = `${char.name} now has ${label} for 1 day (Onlookers +5 Composure)!`;
         break;
       }
       case 'midnight_feast': {
@@ -3536,278 +3526,32 @@ export class AnkicasterEngine {
   }
 
   /**
-   * Process Real-Time Days Elapsed from System Clock (BR-04, BR-25)
-   * Calculates days passed based on actual Date.now() - state.lastSessionTimeMs.
-   * Auto-pays the Veil from banked mana for each missed day down to the 10% bank floor,
-   * then holds the Veil steady at its current strength without further decay.
-   * Advances real-day mastery countdowns and random occurrences.
-   */
-  static processRealTimeElapsedDays(
-    state: FullGameState,
-    currentTimeMs: number = Date.now()
-  ): { state: FullGameState; daysPassed: number; summary: string[] } {
-    const next = structuredClone(state);
-    const summary: string[] = [];
-
-    // Anki 4:00 AM calendar day rollover
-    const lastDayNum = getAnkiDayNumber(next.lastSessionTimeMs || currentTimeMs);
-    const currentDayNum = getAnkiDayNumber(currentTimeMs);
-    const daysPassed = Math.max(0, currentDayNum - lastDayNum);
-
-    // Update lastSessionTimeMs carrying over leftover hours
-    next.lastSessionTimeMs = currentTimeMs;
-
-    if (daysPassed <= 0) {
-      return { state: next, daysPassed: 0, summary };
-    }
-
-    // Process each missed day (clamped to max 30 days to protect performance)
-    const processedDays = Math.min(30, daysPassed);
-    const startDay = next.day;
-    next.day += daysPassed;
-
-    let totalVeilPaid = 0;
-    let floorReached = false;
-
-    // 10% Bank floor rule (BR-25)
-    const bankFloor = Math.max(10, Math.round((next.bankAtLastReview || next.mana) * 0.1));
-    const standingStonesCount = next.rooms.filter(r => r.defId === 'standing_stones' && r.state === 'built' && !isRoomUnfinished(r)).length;
-    const ehRoom = next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || next.rooms[0];
-
-    ensureUpcomingEventsQueue(next);
-
-    for (let d = 0; d < processedDays; d++) {
-      const warders = next.characters.filter(isActiveWarder).length;
-      const veilInfo = computeAcademyVeilSummary(next);
-
-      next.veil.costToday = veilInfo.cost;
-      next.veil.reductions = veilInfo.reductions;
-
-      const isManualVeil = !next.veil.autoPay || next.settings?.veilPayment === 'ask';
-      if (isManualVeil) {
-        next.veil.paidToday = 0;
-        next.pendingVeilPayment = {
-          totalCost: (next.pendingVeilPayment?.totalCost || 0) + veilInfo.cost,
-          days: (next.pendingVeilPayment?.days || 0) + 1
-        };
-      } else {
-        if (next.mana > bankFloor) {
-          const availableToSpend = next.mana - bankFloor;
-          const pay = Math.min(availableToSpend, veilInfo.cost);
-          next.mana -= pay;
-          totalVeilPaid += pay;
-          next.veil.paidToday = pay;
-
-          if (pay >= veilInfo.cost) {
-            next.veil.strength = Math.min(100, next.veil.strength + 3 + standingStonesCount * 2);
-          } else {
-            const unpaidRatio = (veilInfo.cost - pay) / Math.max(1, veilInfo.cost);
-            next.veil.strength = Math.max(0, next.veil.strength - Math.round(15 * unpaidRatio));
-            if (next.mana <= bankFloor) floorReached = true;
-          }
-        } else {
-          // Reached 10% bank floor!
-          // Under BR-25 / BR-04: Breaks are safe! Auto-pay ceases and the Veil HOLDS STEADY without further decay.
-          floorReached = true;
-          next.veil.paidToday = 0;
-        }
-      }
-
-      // Real Day Mastery Delays & Graduations
-      const realSchedule = buildAcademySchedule(next);
-      let anyGraduated = false;
-      for (const char of next.characters) {
-        if (char.status === 'student' && char.studySetId) {
-          const studySet = next.cardSets.find(s => s.id === char.studySetId);
-          if (studySet) {
-            const ivls = studySet.cardIds.map(id => next.allCards[id]?.honestIvl || 0);
-            if (isMasteryReady(ivls, next.settings.cardsPerStudent)) {
-              const sch = char.currentSchool || 'nature';
-              char.readyDays[sch] = (char.readyDays[sch] || 0) + 1;
-
-              const delaySrc = getStudentDelaySource(next, realSchedule, char);
-              const delay = calculateTeacherDelay(
-                delaySrc.teacherType,
-                delaySrc.teacherIvls,
-                next.wizard.levels[sch],
-                next.wizard.levels.light
-              );
-
-              if (char.readyDays[sch] >= delay && !char.masteredSchools.includes(sch)) {
-                const gradRoomId = char.seatRoomId ?? ehRoom?.id;
-                char.masteredSchools.push(sch);
-                char.title = `Master of ${sch.toUpperCase()}`;
-                char.status = 'resident';
-                char.currentSchool = undefined;
-                char.classRoomId = undefined;
-                char.period = undefined;
-                char.seatRoomId = undefined;
-                anyGraduated = true;
-                const renownGain = 10 + academyFurnitureEffect(next.rooms, 'renown_bonus');
-                next.renown += renownGain;
-                checkEndlessSpellbookMilestones(next);
-                summary.push(`🎓 ${char.name} completed real-time mastery countdown and graduated as Master of ${sch.toUpperCase()}!`);
-                next.notices.push({
-                  id: uniqueNoticeId(`master-${char.id}`, next),
-                  time: Date.now(),
-                  type: 'mastery',
-                  text: `${char.name} graduated as Master of ${sch.toUpperCase()} (+${renownGain} Renown)!`,
-                  data: {
-                    roomId: gradRoomId,
-                    characterIds: [char.id],
-                    school: sch,
-                    visualEventType: 'master_graduated'
-                  }
-                });
-                AnkicasterEngine.grantRiftGate(next);
-              }
-            }
-          }
-        }
-      }
-      if (anyGraduated) AnkicasterEngine.syncWorkplaces(next);
-
-      // Real-day event arrival (consumed from upcomingEvents forecast queue)
-      const simDay = startDay + d + 1;
-      const qIdx = (next.upcomingEvents || []).findIndex(e => e.day === simDay);
-      let chosenEventId = qIdx >= 0 ? next.upcomingEvents!.splice(qIdx, 1)[0].eventId : undefined;
-      if (!chosenEventId && Math.random() < 0.4) {
-        const availableEvents = SCHOOL_EVENTS.filter(ev => !next.activeEvents.some(ae => ae.eventId === ev.id));
-        if (availableEvents.length > 0) {
-          chosenEventId = availableEvents[Math.floor(Math.random() * availableEvents.length)].id;
-        }
-      }
-      if (chosenEventId && chosenEventId !== 'none') {
-        const chosen = SCHOOL_EVENTS.find(ev => ev.id === chosenEventId);
-        if (chosen && !next.activeEvents.some(ae => ae.eventId === chosen.id)) {
-          next.activeEvents.push({ eventId: chosen.id, dayArrived: simDay });
-          summary.push(`📜 Event arrived at Academy gates: ${chosen.name}.`);
-          next.notices.push({
-            id: uniqueNoticeId(`event-arrive-${chosen.id}`, next),
-            time: Date.now(),
-            type: 'event',
-            text: `📜 Event arrived at Academy gates: ${chosen.name}.`,
-            data: { roomId: ehRoom?.id }
-          });
-        }
-      }
-      if (next.activeBuffs?.foresightDays && next.activeBuffs.foresightDays > 0) {
-        next.activeBuffs.foresightDays -= 1;
-      }
-      ensureUpcomingEventsQueue(next);
-
-      // Check thin Veil hazard spawn if Veil band is 'thin' or 'torn' (< 50%)
-      // Rule BR-25: While the player is away and the bank has hit the 10% floor, skip hazard rolls
-      const veilBand = getVeilBand(next.veil.strength);
-      if (!floorReached && next.mana > bankFloor && (next.activeBuffs?.wardPulseBells || 0) <= 0) {
-        const baseHazardChance = Math.max(0.02, 0.25 * Math.pow(0.7, warders));
-        if (veilBand === 'thin' || veilBand === 'torn') {
-          const shadowSteps = wizardSchoolBuffs(next.wizard.levels).shadowSteps;
-          const sbDaily = computeSpellbookBonuses(next.spellbooks || []);
-          const creatureHazRed = creatureCategoryBonus(
-            next,
-            [
-              { defId: 'night_lynx', perCopy: 0.15 },
-              { defId: 'velvet_bat_swarm', perCopy: 0.08 },
-              { defId: 'glyph_cat', perCopy: 0.08 }
-            ],
-            0.5
-          );
-          const globalRed = Math.min(0.75, shadowSteps * 0.03 + warders * 0.1 + creatureHazRed + sbDaily.hazardReductionPct);
-          const moonMult = (next.activeBuffs?.moonlessNightBells || 0) > 0 ? 0.4 : 1;
-          if (Math.random() < baseHazardChance * (1 - globalRed) * moonMult) {
-            const eligibleDefs = Object.values(HAZARD_CATALOG)
-              .filter(def => def.weight > 0 && !(def.id === 'kitchen_fire' && (next.activeBuffs?.fireproofBells || 0) > 0 && !next.activeBuffs?.fireproofRoomId))
-              .map(def => ({ def, rooms: filterRoomsForHazard(next, def) }))
-              .filter(e => e.rooms.length > 0);
-            const pickedEntry = weightedPick(eligibleDefs, e => e.def.weight);
-            const target = pickedEntry ? weightedPick(pickedEntry.rooms, r => ROOM_DEFINITIONS[r.defId]?.veil || 1) : undefined;
-            if (pickedEntry && target) {
-              if (!consumeFloorWardProtection(next, target, summary) && Math.random() >= localHazardFizzleChance(next, target)) {
-                applyHazardInstance(next, pickedEntry.def, target, summary);
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // Lure Musk guaranteed visitor
-    if (next.activeBuffs?.lureMuskPending) {
-      next.activeBuffs.lureMuskPending = false;
-      const allDefs = Object.values(CREATURE_DEFINITIONS);
-      if (allDefs.length > 0) {
-        const cDef = allDefs[Math.floor(Math.random() * allDefs.length)];
-        const newCid = uniqueNumericId(next.creatures.map(c => c.id));
-        next.creatures.push({
-          id: newCid,
-          defId: cDef.id,
-          nickname: cDef.name,
-          status: 'wary',
-          hungry: false,
-          hatchProgress: 0,
-          tamingProgress: 0,
-          bondLevel: 1,
-          bondProgress: 0,
-          arrivedDay: next.day
-        });
-        syncDiscoveredCreatures(next);
-        summary.push(`🐾 Lure Musk attracted a wild ${cDef.name} to the Academy!`);
-        next.notices.push({
-          id: uniqueNoticeId(`creature-arrive-${newCid}`, next),
-          time: Date.now(),
-          type: 'creature_arrival',
-          text: `🐾 Lure Musk attracted a wild ${cDef.name} to the Academy!`,
-          data: { roomId: ehRoom?.id, creatureId: newCid, visualEventType: 'creature_arrival' }
-        });
-      }
-    }
-
-    if (totalVeilPaid > 0) {
-      summary.push(`Veil upkeep processed over ${daysPassed} day(s): ${totalVeilPaid} mana paid from reserve. Dome strength: ${next.veil.strength}%.`);
-    }
-
-    if (next.pendingVeilPayment && next.pendingVeilPayment.totalCost > 0) {
-      summary.push(`🛡️ Manual Veil Upkeep awaiting confirmation: ${next.pendingVeilPayment.totalCost} mana across ${next.pendingVeilPayment.days} day(s).`);
-    }
-
-    if (floorReached) {
-      summary.push(`🛡️ 10% Bank Floor reached (${bankFloor} mana preserved). The Veil is holding steady in safe rest state (Rule BR-25).`);
-    }
-
-    // Check automatic retirements
-    this.checkAutomaticRetirements(next, summary);
-
-    // Check Timed Term / examTimer
-    this.checkTimedTermStatus(next, currentTimeMs);
-
-    return { state: next, daysPassed, summary };
-  }
-
   /**
-   * Day Tick (simulating dawn / calendar day rollover)
+   * One in-game morning. `state.day` is already the day being processed.
+   * Overnight rollover and the dev Dawn button both call this.
+   * `flags.floorReached` stays set for the rest of an absence once the 10% bank floor is hit,
+   * so later mornings in that gap do not roll hazards or decay the Veil further.
+   * Returns mana paid toward the Veil this morning.
    */
-  static triggerDayTick(state: FullGameState): { state: FullGameState; summary: string[] } {
-    const next = structuredClone(state);
-    const summary: string[] = [];
-    next.day += 1;
-
-    // 1. Veil Upkeep Calculation (F23 / §18.3) with 10% Floor (BR-25)
+  private static advanceOneMorning(
+    next: FullGameState,
+    summary: string[],
+    flags: { floorReached: boolean }
+  ): number {
     const warders = next.characters.filter(isActiveWarder).length;
     const standingStonesCount = next.rooms.filter(r => r.defId === 'standing_stones' && r.state === 'built' && !isRoomUnfinished(r)).length;
     const ehRoom = next.rooms.find(r => r.defId === 'entrance_hall' && r.state === 'built') || next.rooms[0];
 
     ensureUpcomingEventsQueue(next);
     const veilInfo = computeAcademyVeilSummary(next);
-
     next.veil.costToday = veilInfo.cost;
     next.veil.reductions = veilInfo.reductions;
 
     const bankFloor = Math.max(10, Math.round((next.bankAtLastReview || next.mana) * 0.1));
-    let floorHit = false;
+    let veilPaid = 0;
     let paidFully = veilInfo.cost <= 0;
-
     const isManualVeil = !next.veil.autoPay || next.settings?.veilPayment === 'ask';
+
     if (isManualVeil) {
       next.veil.paidToday = 0;
       next.pendingVeilPayment = {
@@ -3815,28 +3559,26 @@ export class AnkicasterEngine {
         days: (next.pendingVeilPayment?.days || 0) + 1
       };
       summary.push(`🛡️ Manual Veil Upkeep awaiting decision: ${next.pendingVeilPayment.totalCost} mana (${next.pendingVeilPayment.days} day(s)).`);
-    } else {
-      if (next.mana > bankFloor) {
-        const available = next.mana - bankFloor;
-        const paid = Math.min(available, veilInfo.cost);
-        next.mana -= paid;
-        next.veil.paidToday = paid;
-
-        if (paid >= veilInfo.cost) {
-          paidFully = true;
-          next.veil.strength = Math.min(100, next.veil.strength + 5 + warders * 5 + standingStonesCount * 2);
-          summary.push(`Veil upkeep paid: ${paid} mana. Dome holds Strong (${next.veil.strength}%).`);
-        } else {
-          const unpaidRatio = (veilInfo.cost - paid) / Math.max(1, veilInfo.cost);
-          next.veil.strength = Math.max(0, next.veil.strength - Math.round(15 * unpaidRatio));
-          if (next.mana <= bankFloor) floorHit = true;
-          summary.push(`⚠️ Partial Veil upkeep paid (${paid}/${veilInfo.cost} mana). Bank reached 10% floor (${bankFloor} mana). Dome holds steady at ${next.veil.strength}%.`);
-        }
+    } else if (next.mana > bankFloor) {
+      const available = next.mana - bankFloor;
+      const paid = Math.min(available, veilInfo.cost);
+      next.mana -= paid;
+      veilPaid = paid;
+      next.veil.paidToday = paid;
+      if (paid >= veilInfo.cost) {
+        paidFully = true;
+        next.veil.strength = Math.min(100, next.veil.strength + 3 + warders * 2 + standingStonesCount * 2);
+        summary.push(`Veil upkeep paid: ${paid} mana. Dome strength ${next.veil.strength}%.`);
       } else {
-        floorHit = true;
-        next.veil.paidToday = 0;
-        summary.push(`🛡️ 10% Bank Floor active (${next.mana} mana). Veil holds steady at ${next.veil.strength}% without further decay.`);
+        const unpaidRatio = (veilInfo.cost - paid) / Math.max(1, veilInfo.cost);
+        next.veil.strength = Math.max(0, next.veil.strength - Math.round(15 * unpaidRatio));
+        flags.floorReached = true;
+        summary.push(`⚠️ Partial Veil upkeep paid (${paid}/${veilInfo.cost} mana). 10% Bank Floor reached (${bankFloor} mana). Dome holds steady at ${next.veil.strength}%.`);
       }
+    } else {
+      flags.floorReached = true;
+      next.veil.paidToday = 0;
+      summary.push(`🛡️ 10% Bank Floor active (${bankFloor} mana preserved). Veil holds steady at ${next.veil.strength}% without further decay.`);
     }
 
     next.notices.push({
@@ -3854,9 +3596,8 @@ export class AnkicasterEngine {
       }
     });
 
-    // 2. Mastery Delays and Graduation Checks
-    const tickSchedule = buildAcademySchedule(next);
-    let anyTickGraduated = false;
+    const schedule = buildAcademySchedule(next);
+    let anyGraduated = false;
     for (const char of next.characters) {
       if (char.status === 'student' && char.studySetId) {
         const studySet = next.cardSets.find(s => s.id === char.studySetId);
@@ -3865,15 +3606,13 @@ export class AnkicasterEngine {
           if (isMasteryReady(ivls, next.settings.cardsPerStudent)) {
             const sch = char.currentSchool || 'nature';
             char.readyDays[sch] = (char.readyDays[sch] || 0) + 1;
-
-            const delaySrc = getStudentDelaySource(next, tickSchedule, char);
+            const delaySrc = getStudentDelaySource(next, schedule, char);
             const delay = calculateTeacherDelay(
               delaySrc.teacherType,
               delaySrc.teacherIvls,
               next.wizard.levels[sch],
               next.wizard.levels.light
             );
-
             if (char.readyDays[sch] >= delay && !char.masteredSchools.includes(sch)) {
               const gradRoomId = char.seatRoomId ?? ehRoom?.id;
               char.masteredSchools.push(sch);
@@ -3883,11 +3622,11 @@ export class AnkicasterEngine {
               char.classRoomId = undefined;
               char.period = undefined;
               char.seatRoomId = undefined;
-              anyTickGraduated = true;
+              anyGraduated = true;
               const renownGain = 10 + academyFurnitureEffect(next.rooms, 'renown_bonus');
               next.renown += renownGain;
               checkEndlessSpellbookMilestones(next);
-              summary.push(`🎓 Congratulations! ${char.name} has graduated as a Master of ${sch.toUpperCase()}!`);
+              summary.push(`🎓 ${char.name} graduated as Master of ${sch.toUpperCase()}!`);
               next.notices.push({
                 id: uniqueNoticeId(`master-${char.id}`, next),
                 time: Date.now(),
@@ -3906,9 +3645,8 @@ export class AnkicasterEngine {
         }
       }
     }
-    if (anyTickGraduated) AnkicasterEngine.syncWorkplaces(next);
+    if (anyGraduated) AnkicasterEngine.syncWorkplaces(next);
 
-    // 3. Event Arrival (consumed from upcomingEvents forecast queue)
     const qIdx = (next.upcomingEvents || []).findIndex(e => e.day === next.day);
     let chosenEventId = qIdx >= 0 ? next.upcomingEvents!.splice(qIdx, 1)[0].eventId : undefined;
     if (!chosenEventId && Math.random() < 0.4) {
@@ -3936,9 +3674,8 @@ export class AnkicasterEngine {
     }
     ensureUpcomingEventsQueue(next);
 
-    // 3b. Thin Veil hazard spawn if Veil band is 'thin' or 'torn' (< 50%, skipped at 10% bank floor)
-    const tickVeilBand = getVeilBand(next.veil.strength);
-    if (!floorHit && next.mana > bankFloor && (tickVeilBand === 'thin' || tickVeilBand === 'torn') && (next.activeBuffs?.wardPulseBells || 0) <= 0) {
+    const veilBand = getVeilBand(next.veil.strength);
+    if (!flags.floorReached && next.mana > bankFloor && (veilBand === 'thin' || veilBand === 'torn') && (next.activeBuffs?.wardPulseBells || 0) <= 0) {
       const baseHazardChance = Math.max(0.02, 0.25 * Math.pow(0.7, warders));
       const shadowSteps = wizardSchoolBuffs(next.wizard.levels).shadowSteps;
       const sbDaily = computeSpellbookBonuses(next.spellbooks || []);
@@ -3968,20 +3705,19 @@ export class AnkicasterEngine {
       }
     }
 
-    // 4. Lure Musk guaranteed visitor
     if (next.activeBuffs?.lureMuskPending) {
       next.activeBuffs.lureMuskPending = false;
       const targetHabId = next.activeBuffs.lureMuskRoomId;
       next.activeBuffs.lureMuskRoomId = undefined;
       const lureRoom = targetHabId != null
-        ? next.rooms.find(r => r.id === targetHabId && r.state === 'built' && !isRoomUnfinished(r))
+        ? next.rooms.find(r => r.id === targetHabId && r.state === 'built')
         : undefined;
       const allDefs = Object.values(CREATURE_DEFINITIONS);
       const acceptedHabs = lureRoom ? roomAcceptedHabitats(lureRoom) : [];
       const matchingDefs = acceptedHabs.length > 0
         ? allDefs.filter(d => d.habitats.some(h => acceptedHabs.includes(h)))
-        : allDefs;
-      const pool = matchingDefs.length > 0 ? matchingDefs : allDefs;
+        : [];
+      const pool = lureRoom ? matchingDefs : allDefs;
       if (pool.length > 0) {
         const cDef = pool[Math.floor(Math.random() * pool.length)];
         const newCid = uniqueNumericId(next.creatures.map(c => c.id));
@@ -4033,12 +3769,64 @@ export class AnkicasterEngine {
       }
     }
 
-    checkSuspendedLinkedCards(next, summary);
     grantAlumniVisitGift(next, summary);
     checkEndlessSpellbookMilestones(next);
+    return veilPaid;
+  }
+
+  /**
+   * Process Real-Time Days Elapsed from System Clock (BR-04, BR-25).
+   * Every missed morning runs the same step as the dev Dawn button.
+   */
+  static processRealTimeElapsedDays(
+    state: FullGameState,
+    currentTimeMs: number = Date.now()
+  ): { state: FullGameState; daysPassed: number; summary: string[] } {
+    const next = structuredClone(state);
+    const summary: string[] = [];
+
+    const lastDayNum = getAnkiDayNumber(next.lastSessionTimeMs || currentTimeMs);
+    const currentDayNum = getAnkiDayNumber(currentTimeMs);
+    const daysPassed = Math.max(0, currentDayNum - lastDayNum);
+
+    next.lastSessionTimeMs = currentTimeMs;
+
+    if (daysPassed <= 0) {
+      return { state: next, daysPassed: 0, summary };
+    }
+
+    const flags = { floorReached: false };
+    let totalVeilPaid = 0;
+    for (let d = 0; d < daysPassed; d++) {
+      next.day += 1;
+      totalVeilPaid += AnkicasterEngine.advanceOneMorning(next, summary, flags);
+    }
+
+    if (totalVeilPaid > 0) {
+      summary.push(`Veil upkeep processed over ${daysPassed} day(s): ${totalVeilPaid} mana paid from reserve. Dome strength: ${next.veil.strength}%.`);
+    }
+    if (next.pendingVeilPayment && next.pendingVeilPayment.totalCost > 0) {
+      summary.push(`🛡️ Manual Veil Upkeep awaiting confirmation: ${next.pendingVeilPayment.totalCost} mana across ${next.pendingVeilPayment.days} day(s).`);
+    }
+    if (flags.floorReached) {
+      const bankFloor = Math.max(10, Math.round((next.bankAtLastReview || next.mana) * 0.1));
+      summary.push(`🛡️ 10% Bank Floor reached (${bankFloor} mana preserved). The Veil is holding steady in safe rest state (Rule BR-25).`);
+    }
+
+    this.checkAutomaticRetirements(next, summary);
+    this.checkTimedTermStatus(next, currentTimeMs);
+
+    return { state: next, daysPassed, summary };
+  }
+
+  /** Dev Dawn button. One morning, the same step as an overnight rollover. */
+  static triggerDayTick(state: FullGameState): { state: FullGameState; summary: string[] } {
+    const next = structuredClone(state);
+    const summary: string[] = [];
+    next.day += 1;
+    AnkicasterEngine.advanceOneMorning(next, summary, { floorReached: false });
     this.checkAutomaticRetirements(next, summary);
     this.checkTimedTermStatus(next, Date.now());
-
     return { state: next, summary };
   }
 

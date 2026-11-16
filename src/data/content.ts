@@ -139,7 +139,7 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     optionalSlots: 4,
     stats: { primary: ['comfort', 'charm'], secondary: 'order' },
     level3Perk: 'Roommates share Kind Heart and Sunny effects at double strength.',
-    description: 'Cozy quarters for up to 4 students (+1/level) to rest and restore energy.'
+    description: 'Cozy quarters. Students rest in the beds you place.'
   },
   grand_dormitory: {
     id: 'grand_dormitory',
@@ -3784,14 +3784,6 @@ export const MISBEHAVIOR_INCIDENTS: MisbehaviorIncidentDef[] = [
     likelyTraits: ['Beast Whisperer'],
     effectSummary: 'One habitat creature becomes Loose.',
     silverLining: 'None.'
-  },
-  {
-    id: 'potion_prank',
-    name: 'Potion Prank',
-    likelyPersonalities: ['Curious'],
-    likelyTraits: ['Prankster'],
-    effectSummary: 'Cosmetic prank status for 1 day (green hair, floating, tiny voice).',
-    silverLining: 'Composure +5 for onlookers.'
   },
   {
     id: 'midnight_feast',

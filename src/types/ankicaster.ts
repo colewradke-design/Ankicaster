@@ -121,7 +121,7 @@ export interface Character {
   careerSetIds: number[];
   /** Hunger drifts toward this every bell. 100 seated, 50 standing, 25 no food. New characters start at 50. */
   mealTarget?: number;
-  /** Temporary cosmetic prank status (e.g. Green Hair, Floating Boots) expiring after 1 day. */
+  /** Leftover cosmetic label from an older save. Cleared on the morning of expiresDay. Nothing new sets it. */
   cosmeticStatus?: { label: string; expiresDay: number };
   /** Active misbehavior chains associated with a room until calmed or cleaned. */
   misbehaviorChains?: Array<{ roomId: number; incidentId: string; penaltyCharm?: number; expiresBell?: number }>;

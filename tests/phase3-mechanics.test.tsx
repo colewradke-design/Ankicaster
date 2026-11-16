@@ -267,7 +267,8 @@ test('Phase3 Group 2: All 14 hazards + 4 breaches, Warding Chamber, Standing Sto
 test('Phase3 Group 3: Personalities/Traits catalogs, Rite of Renewal cooldown, and §20 misbehavior + calming', () => {
   assert.equal(Object.keys(PERSONALITY_DEFINITIONS).length, 8);
   assert.ok(Object.keys(TRAIT_DEFINITIONS).length >= 35);
-  assert.equal(MISBEHAVIOR_INCIDENTS.length, 16);
+  assert.equal(MISBEHAVIOR_INCIDENTS.length, 15);
+  assert.equal(MISBEHAVIOR_INCIDENTS.some(i => i.id === 'potion_prank'), false);
 
   // Renown-weighted applicant generation respects The Open Door (+1 applicant)
   const sApp = makeBaseState();
