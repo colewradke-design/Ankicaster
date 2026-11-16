@@ -212,6 +212,8 @@ export interface PlacedRoom {
   buildRequired: number;
   buildProgress: number;
   buildPaused?: boolean;
+  /** Queue position among construction sites. Lower builds first. */
+  buildOrder?: number;
   cleanliness: number; // 0-100
   lockedUntilReviewIndex?: number;
   lockReason?: string;

@@ -735,6 +735,11 @@ export default function App() {
     }
   };
 
+  const handleMoveSite = (roomId: number, direction: -1 | 1) => {
+    const res = AnkicasterEngine.moveConstruction(state, roomId, direction);
+    if (res.success) setState(res.state);
+  };
+
   const handlePlacementConfirm = (x: number, y: number) => {
     if (!placement) return;
     if (placement.kind === 'build') {
@@ -1191,7 +1196,7 @@ export default function App() {
       case 'admissions':
         return <RecruitmentPanel state={state} onEnroll={handleEnrollStudent} />;
       case 'build':
-        return <BuildMenuPanel state={state} onPlaceRoom={handlePlaceRoom} onAutoPlace={handleAutoPlaceRoom} onOpenDraft={() => handleOpenScreen('draft')} />;
+        return <BuildMenuPanel state={state} onPlaceRoom={handlePlaceRoom} onAutoPlace={handleAutoPlaceRoom} onOpenDraft={() => handleOpenScreen('draft')} onMoveSite={handleMoveSite} />;
       case 'draft':
         return <CardDraftPanel state={state} onDrawDeck={handleDrawDeck} />;
       case 'bestiary':
@@ -1453,6 +1458,7 @@ export default function App() {
           onPlaceNewRoom={handlePlaceRoom}
           onAutoPlaceNewRoom={handleAutoPlaceRoom}
           onOpenDraft={() => handleOpenScreen('draft')}
+          onMoveSite={handleMoveSite}
           onClose={handleToggleBuildMode}
         />
       )}

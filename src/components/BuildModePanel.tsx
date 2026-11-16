@@ -22,6 +22,7 @@ export interface BuildModePanelProps {
   onPlaceNewRoom: (defId: string, area: 'castle' | 'grounds') => void;
   onAutoPlaceNewRoom: (defId: string) => void;
   onOpenDraft: () => void;
+  onMoveSite?: (roomId: number, direction: -1 | 1) => void;
   onClose: () => void;
 }
 
@@ -32,6 +33,7 @@ export const BuildModePanel: React.FC<BuildModePanelProps> = ({
   onPlaceNewRoom,
   onAutoPlaceNewRoom,
   onOpenDraft,
+  onMoveSite,
   onClose
 }) => {
   const [tab, setTab] = useState<'shelf' | 'new'>('shelf');
@@ -199,6 +201,7 @@ export const BuildModePanel: React.FC<BuildModePanelProps> = ({
             onPlaceRoom={(defId, area) => onPlaceNewRoom(defId, area)}
             onAutoPlace={onAutoPlaceNewRoom}
             onOpenDraft={onOpenDraft}
+            onMoveSite={onMoveSite}
             compact
           />
         )}

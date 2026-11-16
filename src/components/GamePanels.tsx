@@ -90,7 +90,7 @@ import {
   ChevronRight,
   UserCheck
 } from 'lucide-react';
-import { reviewsToGoText } from '../utils/construction';
+import { constructionSites, reviewsToGoText } from '../utils/construction';
 import { blueprintLockHint, isRoomUnlocked, isStructure } from '../utils/engine';
 import { DECK_LIST, deckPrice, magicSchoolOdds } from '../utils/decks';
 import { canAffordMaterials, formatMaterialCost } from '../utils/resourceReport';
@@ -655,8 +655,9 @@ export const BuildMenuPanel: React.FC<{
   onPlaceRoom: (defId: string, area: 'castle' | 'grounds') => void;
   onAutoPlace?: (defId: string) => void;
   onOpenDraft?: () => void;
+  onMoveSite?: (roomId: number, direction: -1 | 1) => void;
   compact?: boolean;
-}> = ({ state, onPlaceRoom, onAutoPlace, onOpenDraft, compact = false }) => {
+}> = ({ state, onPlaceRoom, onAutoPlace, onOpenDraft, onMoveSite, compact = false }) => {
   const [category, setCategory] = useState<string>('all');
   const roomList = Object.values(ROOM_DEFINITIONS);
   const listed = roomList.filter(r => isStructure(r.id) || (state.roomPlans?.[r.id] || 0) > 0);
@@ -674,22 +675,38 @@ export const BuildMenuPanel: React.FC<{
     r => category === 'all' || r.category === category || (category === 'grounds' && r.area === 'grounds')
   );
 
-  const sites = state.rooms.filter(r => r.state === 'site');
-  const buildSpeedPct = sites.length > 0 ? academyFurnitureEffect(state.rooms, 'build_speed_pct') : 0;
+  const sites = constructionSites(state.rooms);
+  const assignments = AnkicasterEngine.constructionAssignments(state);
+  const rateById = new Map(assignments.map(a => [a.roomId, a.rate]));
 
   return (
     <div className="space-y-4">
       {sites.length > 0 && (
         <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-1.5" data-testid="build-sites">
-          <div className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">Under construction</div>
-          {sites.map(site => (
-            <div key={site.id} className="flex items-center justify-between gap-3 text-[13px]" data-site={site.defId}>
-              <span className="text-slate-200">{ROOM_DEFINITIONS[site.defId]?.name || site.defId} <span className="text-slate-500 font-mono">{site.buildProgress}/{site.buildRequired}</span></span>
-              <span className={site.buildPaused ? 'text-slate-400' : 'text-emerald-300'} data-testid="site-to-go">
-                {site.buildPaused ? 'Paused · ' : ''}{reviewsToGoText(site, buildSpeedPct)}
-              </span>
-            </div>
-          ))}
+          <div className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">
+            Under construction · {assignments.length} slot{assignments.length === 1 ? '' : 's'}
+          </div>
+          {sites.map((site, index) => {
+            const rate = rateById.get(site.id);
+            const waiting = !site.buildPaused && rate == null;
+            return (
+              <div key={site.id} className="flex items-center justify-between gap-3 text-[13px]" data-site={site.defId}>
+                <span className="text-slate-200">{ROOM_DEFINITIONS[site.defId]?.name || site.defId} <span className="text-slate-500 font-mono">{site.buildProgress}/{site.buildRequired}</span></span>
+                <span className="flex items-center gap-2">
+                  <span className={site.buildPaused || waiting ? 'text-slate-400' : 'text-emerald-300'} data-testid="site-to-go">
+                    {site.buildPaused ? 'Paused · ' : waiting ? 'Waiting · ' : ''}
+                    {reviewsToGoText(site, 0, rate)}
+                  </span>
+                  {onMoveSite && (
+                    <span className="flex gap-1">
+                      <button type="button" aria-label={`Build ${site.defId} sooner`} disabled={index === 0} onClick={() => onMoveSite(site.id, -1)} className="px-1.5 rounded bg-slate-800 text-slate-300 disabled:opacity-30">↑</button>
+                      <button type="button" aria-label={`Build ${site.defId} later`} disabled={index === sites.length - 1} onClick={() => onMoveSite(site.id, 1)} className="px-1.5 rounded bg-slate-800 text-slate-300 disabled:opacity-30">↓</button>
+                    </span>
+                  )}
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
       {!hasPlans && (

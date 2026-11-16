@@ -65,6 +65,7 @@ import {
   PlacementCheck
 } from './placement';
 import { normalizeAppearance } from './appearance';
+import { constructionSites, planConstruction, BuilderSlotInput } from './construction';
 import {
   allFurnitureIds, Cost, fillRequiredFixtures, isFurnitureCompatibleWithRoom,
   isRoomUnfinished, maxOptionalSlots, maxSameFurnitureInRoom, missingRequiredSlots,
@@ -2065,45 +2066,12 @@ export class AnkicasterEngine {
       }
     }
 
-    // 4. Advance Active Constructions
-    const buildSpeedPct = academyFurnitureEffect(
-      next.rooms.filter(r => r.state === 'built' && !isRoomUnfinished(r)),
-      'build_speed_pct'
-    );
-    const activeBuilders = next.characters.filter(
-      c => c.career === 'builder' && c.careerState === 'active' && c.status !== 'away' && !c.injury
-    );
-    let builderBonus = 0;
-    for (const b of activeBuilders) {
-      const ws = b.workplaceRoomId != null
-        ? next.rooms.find(
-            r =>
-              r.id === b.workplaceRoomId &&
-              r.defId === 'workshop' &&
-              r.state === 'built' &&
-              !isRoomUnfinished(r) &&
-              !AnkicasterEngine.roomIsLocked(next, r)
-          )
-        : undefined;
-      const bStep = ws && (ws.level || 1) >= 3 ? 0.4 : 0.25;
-      builderBonus += bStep * careerAffinityMultiplier(b.masteredSchools, 'builder') * facultyOutputMultiplier(next, b);
-    }
-    const hasQuickHandsBuilder = activeBuilders.some(c => hasTrait(c, 'Quick Hands'));
-    const creatureBuildBonus = creatureCategoryBonus(
-      next,
-      [
-        { defId: 'bellows_toad', perCopy: 0.05 },
-        { defId: 'geode_golem', perCopy: 0.1 }
-      ],
-      0.5
-    );
-    const totalBuildPct = buildSpeedPct + (hasQuickHandsBuilder ? 15 : 0) + creatureBuildBonus * 100;
-    const buildStep = Math.round((1 + builderBonus) * (1 + totalBuildPct / 100) * 100) / 100;
-    for (const room of next.rooms) {
-      if (room.state === 'site' && !room.buildPaused) {
-        room.buildProgress = Math.round((room.buildProgress + buildStep) * 100) / 100;
-        if (room.buildProgress >= room.buildRequired) AnkicasterEngine.completeSite(next, room, notifications);
-      }
+    // 4. Advance the construction queue. The wizard holds slot 1. Each Builder at a Workshop opens another, up to 4.
+    for (const job of AnkicasterEngine.constructionAssignments(next)) {
+      const room = next.rooms.find(r => r.id === job.roomId);
+      if (!room || room.state !== 'site' || room.buildPaused) continue;
+      room.buildProgress = Math.round((room.buildProgress + job.rate) * 100) / 100;
+      if (room.buildProgress >= room.buildRequired) AnkicasterEngine.completeSite(next, room, notifications);
     }
 
     // 5. Advance Active Creature Taming & Hatching, and count down loose-creature captures
@@ -5003,6 +4971,9 @@ export class AnkicasterEngine {
       buildRequired: buildReq,
       buildProgress: 0,
       buildPaused: false,
+      buildOrder: isInstant
+        ? undefined
+        : constructionSites(next.rooms).reduce((max, r) => Math.max(max, r.buildOrder ?? r.id), 0) + 1,
       cleanliness: 100,
       settings: {},
       furniture: [],
@@ -5228,6 +5199,47 @@ export class AnkicasterEngine {
   }
 
   /**
+   * Wizard slot plus one slot per Builder working a finished Workshop, max 4.
+   */
+  static constructionAssignments(state: FullGameState) {
+    const buildSpeedPct = academyFurnitureEffect(
+      state.rooms.filter(r => r.state === 'built' && !isRoomUnfinished(r)),
+      'build_speed_pct'
+    );
+    const creatureBuildBonus = creatureCategoryBonus(
+      state,
+      [
+        { defId: 'bellows_toad', perCopy: 0.05 },
+        { defId: 'geode_golem', perCopy: 0.1 }
+      ],
+      0.5
+    );
+    const builders: BuilderSlotInput[] = [];
+    const builderCandidates = state.characters
+      .filter(c => c.career === 'builder' && c.careerState === 'active' && c.status !== 'away' && !c.injury)
+      .sort((a, b) => a.id - b.id);
+    for (const b of builderCandidates) {
+      const ws = b.workplaceRoomId != null
+        ? state.rooms.find(
+            r =>
+              r.id === b.workplaceRoomId &&
+              r.defId === 'workshop' &&
+              r.state === 'built' &&
+              !isRoomUnfinished(r) &&
+              !AnkicasterEngine.roomIsLocked(state, r)
+          )
+        : undefined;
+      if (!ws) continue;
+      builders.push({ id: b.id, workshopLevel: ws.level || 1, quickHands: hasTrait(b, 'Quick Hands') });
+    }
+    return planConstruction(state.rooms, {
+      alchemyLevel: state.wizard.levels.alchemy || 0,
+      builders,
+      academySpeedPct: buildSpeedPct + creatureBuildBonus * 100
+    });
+  }
+
+  /**
    * Pause or resume a construction site (GDD 15.4: "pause any time"; progress is kept forever).
    * The engine already skips paused sites when it advances construction; this only sets the flag.
    */
@@ -5250,6 +5262,28 @@ export class AnkicasterEngine {
       type: 'build',
       text: paused ? `Paused construction of ${name}. Progress is kept.` : `Resumed construction of ${name}.`,
       data: { roomId: r.id }
+    });
+    return { state: next, success: true };
+  }
+
+  /** Move a construction site earlier or later in the queue. Paused sites keep their place but do not take a slot. */
+  static moveConstruction(
+    state: FullGameState,
+    roomId: number,
+    direction: -1 | 1
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const ordered = constructionSites(state.rooms);
+    const index = ordered.findIndex(r => r.id === roomId);
+    const swap = index + direction;
+    if (index < 0) return { state, success: false, error: 'Only a construction site can be reordered.' };
+    if (swap < 0 || swap >= ordered.length) return { state, success: true };
+    const nextOrder = ordered.slice();
+    const [moved] = nextOrder.splice(index, 1);
+    nextOrder.splice(swap, 0, moved);
+    const next = structuredClone(state);
+    nextOrder.forEach((site, i) => {
+      const room = next.rooms.find(r => r.id === site.id);
+      if (room) room.buildOrder = i + 1;
     });
     return { state: next, success: true };
   }
@@ -6339,7 +6373,9 @@ export class AnkicasterEngine {
       }
 
       case 'quickmortar': {
+        const queued = constructionSites(next.rooms).filter(r => !r.buildPaused);
         const site = (roomTargetId ? next.rooms.find(r => r.id === roomTargetId && r.state === 'site') : undefined)
+          || queued[0]
           || next.rooms.find(r => r.state === 'site');
         if (site) {
           site.buildProgress += 20;
@@ -7051,7 +7087,8 @@ export class AnkicasterEngine {
         break;
       }
       case 'quickening': {
-        const activeSite = next.rooms.find(r => r.state === 'site');
+        const queued = constructionSites(next.rooms).filter(r => !r.buildPaused);
+        const activeSite = queued[0] || next.rooms.find(r => r.state === 'site');
         if (activeSite) {
           spellTargetRoomId = activeSite.id;
           activeSite.buildProgress += 25;
