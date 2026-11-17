@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Visual choreographer for Goblin Servants.
- * Navigates purely via NavGraph (stairs / Wizard's Study vertical links only),
+ * Navigates purely via NavGraph. Level-3 stairs are teleporters: a servant on one
+ * snaps to the other instead of walking the gap.
  * respects reduceMotion, derives animations strictly from elapsed clockMs,
  * never imports engine.ts, and never mutates FullGameState.
  */
@@ -456,8 +457,17 @@ export class ServantChoreographer {
         const dx = targetNode.x - agent.x;
         const dy = targetNode.y - agent.y;
         const dist = Math.hypot(dx, dy);
+        const targetRoom = targetNode.roomId !== undefined ? state.rooms.find(r => r.id === targetNode.roomId) : undefined;
+        const currentRoom = agent.currentRoomId !== undefined ? state.rooms.find(r => r.id === agent.currentRoomId) : undefined;
+        const prevRoom = prevNode?.roomId !== undefined ? state.rooms.find(r => r.id === prevNode.roomId) : currentRoom;
+        const portalJump =
+          prevRoom?.defId === 'spiral_stair' &&
+          (prevRoom.level || 1) >= 3 &&
+          targetRoom?.defId === 'spiral_stair' &&
+          (targetRoom.level || 1) >= 3 &&
+          prevRoom.id !== targetRoom.id;
 
-        if (dist < 2) {
+        if (portalJump || dist < 2) {
           agent.x = targetNode.x;
           agent.y = targetNode.y;
           agent.currentFloor = targetNode.floor;
@@ -469,7 +479,6 @@ export class ServantChoreographer {
             agent.anim = agent.desiredAnim;
           }
         } else {
-          const targetRoom = state.rooms.find(r => r.id === targetNode.roomId);
           const currentRoom = agent.currentRoomId !== undefined ? state.rooms.find(r => r.id === agent.currentRoomId) : undefined;
           const stairLink =
             targetNode.kind === 'stair' &&

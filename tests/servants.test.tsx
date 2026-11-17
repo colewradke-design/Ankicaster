@@ -638,3 +638,32 @@ test('ServantChoreographer navigates strictly via stairs, renders QueuePanel/Roo
   assert.match(wsHtml, /data-testid="room-servants"/);
   assert.equal(summonServantQuote(0, 1).mana, 500);
 });
+
+test('goblin servants snap through level-3 stair teleporters instead of abandoning the path', () => {
+  const s = stockedState();
+  const low = makeRoom(960, 'spiral_stair', 2, 0, 'castle', [], { level: 3 });
+  const high = makeRoom(961, 'spiral_stair', 0, 2, 'castle', [], { level: 3 });
+  s.rooms.push(low, high);
+  const kitchen = addFinishedRoom(s, 'kitchen', 1, 2, 962);
+  s.servants = [makeServant(1, kitchen.id)];
+
+  const groundY = getGroundY(3);
+  const nav = new NavGraph(s.rooms, groundY);
+  const reach = computeReachability(s.rooms);
+  assert.equal(reach.get(kitchen.id)?.reachable, true, 'the upper kitchen is reachable through the two portals');
+
+  const chor = new ServantChoreographer(nav, groundY);
+  chor.reachability = reach;
+  chor.syncState(s, reach);
+  let jumped = false;
+  let agent = chor.agents.get('servant-1')!;
+  for (let i = 0; i < 400 && agent.currentFloor < 2; i++) {
+    const beforeY = agent.y;
+    const beforeFloor = agent.currentFloor;
+    chor.tick(250, s, false, 1000 + i * 250);
+    agent = chor.agents.get('servant-1')!;
+    if (agent.currentFloor - beforeFloor >= 2 && Math.abs(agent.y - beforeY) > 40) jumped = true;
+  }
+  assert.equal(jumped, true, 'crossing the portals moves the goblin a full floor in one step');
+  assert.equal(agent.currentFloor, 2);
+});
