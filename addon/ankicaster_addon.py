@@ -40,7 +40,9 @@ DEFAULT_CONFIG = {
     "install_baseline_ms": 0,
     "min_answer_elapsed_ms": 800,
     "auto_open_on_startup": False,
-    "sync_saves": False
+    "sync_saves": False,
+    "show_banner": True,
+    "banner_hide_in_review": True
 }
 
 _card_shown_timestamp: float = 0.0
@@ -222,6 +224,11 @@ def push_revlog_catchup() -> None:
 
 def on_sync_finished(*_args: Any) -> None:
     push_revlog_catchup()
+    try:
+        from .banner import refresh_banner
+        refresh_banner()
+    except Exception as e:
+        print(f"[Ankicaster] banner refresh after sync failed: {e}")
 
 
 def query_previous_interval(card_id: int) -> int:
@@ -501,6 +508,11 @@ def write_saved_game_state(save_data: str) -> bool:
         except Exception as e:
             print(f"[Ankicaster] Collection save write failed: {e}")
             return False
+    try:
+        from .banner import refresh_banner
+        refresh_banner()
+    except Exception as e:
+        print(f"[Ankicaster] banner refresh after save failed: {e}")
     return True
 
 class AnkicasterDialog(QDialog):
@@ -544,6 +556,14 @@ class AnkicasterDialog(QDialog):
         elif cmd.startswith("ankicaster:save:"):
             save_payload = cmd[len("ankicaster:save:"):]
             write_saved_game_state(save_payload)
+        elif cmd.startswith("ankicaster:banner:"):
+            raw = cmd[len("ankicaster:banner:"):]
+            try:
+                from .banner import set_live_summary
+                parsed = json.loads(raw)
+                set_live_summary(parsed if isinstance(parsed, dict) else None)
+            except Exception as e:
+                print(f"[Ankicaster] banner live update failed: {e}")
         elif cmd == "ankicaster:syncSaves:1" or cmd == "ankicaster:syncSaves:0":
             enabled = cmd.endswith(":1")
             set_sync_saves(enabled)
@@ -601,6 +621,20 @@ class AnkicasterDialog(QDialog):
             js_replay = f"if (window.ankicasterReplayPendingReviews) {{ window.ankicasterReplayPendingReviews({pending_json}); }}"
             self.web_view.page().runJavaScript(js_replay)
 
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._banner_closed = True
+        try:
+            from .banner import clear_live_summary, refresh_banner
+            clear_live_summary()
+            refresh_banner()
+        except Exception as e:
+            print(f"[Ankicaster] banner close failed: {e}")
+        try:
+            super().closeEvent(event)
+        except Exception:
+            if event is not None and hasattr(event, "accept"):
+                event.accept()
+
 def get_addon_local_url() -> str:
     """
     Returns local web export URL served through Anki's media server.
@@ -620,6 +654,7 @@ def open_ankicaster_window() -> None:
     elif getattr(_ankicaster_dialog, "is_ready", False):
         _ankicaster_dialog.on_frontend_ready()
 
+    _ankicaster_dialog._banner_closed = False
     _ankicaster_dialog.show()
     _ankicaster_dialog.raise_()
     _ankicaster_dialog.activateWindow()
@@ -648,3 +683,27 @@ def init_addon() -> None:
     # 4. Menu item under Tools (removed undefined export_collection_snapshot)
     action_open = mw.form.menuTools.addAction("Open Ankicaster Magic Academy")
     action_open.triggered.connect(open_ankicaster_window)
+
+    # 5. Deck-browser banner. Failures here must not stop the rest of the add-on.
+    try:
+        from .banner import configure, install_banner
+
+        def _window_open() -> bool:
+            dlg = _ankicaster_dialog
+            if dlg is None or getattr(dlg, "_banner_closed", False):
+                return False
+            try:
+                return bool(dlg.isVisible())
+            except Exception:
+                return False
+
+        def _pending() -> int:
+            try:
+                return len(get_all_pending_reviews())
+            except Exception:
+                return 0
+
+        configure(_window_open, load_saved_game_state, _pending, open_ankicaster_window)
+        install_banner()
+    except Exception as e:
+        print(f"[Ankicaster] banner install failed: {e}")

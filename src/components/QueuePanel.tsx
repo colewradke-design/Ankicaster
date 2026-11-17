@@ -22,7 +22,8 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import type { FullGameState, SchoolType } from '../types/ankicaster';
-import { ROOM_DEFINITIONS, SPELL_DEFINITIONS } from '../data/content';
+import { ROOM_DEFINITIONS } from '../data/content';
+import { serviceQueueTitle } from '../utils/banner';
 import {
   computeConstructionPlan,
   constructionSites,
@@ -56,19 +57,8 @@ interface UnifiedServiceItem {
   state?: 'active' | 'paused';
 }
 
-function capSchool(school?: string): string {
-  return school ? school[0].toUpperCase() + school.slice(1) : 'Arcane';
-}
-
 function describeServiceTitle(item: UnifiedServiceItem): string {
-  if (item.kind === 'orb') {
-    return `${capSchool(item.school)} Orb · Lv ${item.targetLevel || 1}`;
-  }
-  if (item.kind === 'grimoire') {
-    const spName = item.spellId ? SPELL_DEFINITIONS[item.spellId]?.name || item.spellId : 'Spell';
-    return `Grimoire · ${spName}`;
-  }
-  return item.summonTier ? `Summon Servant (T${item.summonTier})` : 'Summon Servant';
+  return serviceQueueTitle(item);
 }
 
 function workerLabel(kind: 'wizard' | 'servant', id: number, state: FullGameState): string {

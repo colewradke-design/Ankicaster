@@ -23,6 +23,7 @@ import { FoundingDay, GuidedTour, GoalBanner } from './visual/onboarding/Foundin
 import { applyTutorialAction, phaseAfterCreate, STUDY_PARTS, tourUsesFurnishingsTab, tourStepId, tourView } from './visual/onboarding/flow';
 import { AnkicasterEngine } from './utils/engine';
 import { calculateReviewMana, computeAlumniBonuses, computeSpellbookBonuses } from './utils/formulas';
+import { bannerSummary, createBannerThrottle, savedWithBanner } from './utils/banner';
 import type { DraftDeckId } from './utils/decks';
 import { FURNITURE_DEFINITIONS, ROOM_DEFINITIONS, SCHOOL_EVENTS, SPELLBOOK_DEFINITIONS } from './data/content';
 
@@ -203,11 +204,31 @@ export default function App() {
     }
 
     const { allCards, ...rest } = full;
-    return {
-      ...rest,
-      allCards: compactCards
-    };
+    return savedWithBanner(
+      {
+        ...rest,
+        allCards: compactCards
+      },
+      full
+    );
   };
+
+  const bannerPush = useRef<ReturnType<typeof createBannerThrottle> | null>(null);
+  useEffect(() => {
+    if (!isAddonMode || !hydrated) return;
+    if (!bannerPush.current) {
+      bannerPush.current = createBannerThrottle(json => {
+        const bridge = (window as unknown as { pycmd?: (cmd: string) => void }).pycmd;
+        if (typeof bridge !== 'function') return;
+        try {
+          bridge(`ankicaster:banner:${json}`);
+        } catch (e) {
+          console.error('Banner update failed:', e);
+        }
+      });
+    }
+    bannerPush.current.push(bannerSummary(state));
+  }, [state, isAddonMode, hydrated]);
 
   // Auto-save state:
   // - In addon mode: NEVER use localStorage! Only save after hydration, and wait for pycmd
