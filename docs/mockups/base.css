@@ -1,0 +1,8 @@
+body{margin:0;font-family:-apple-system,"Segoe UI",Roboto,sans-serif;background:#2c2c2c;color:#ddd;width:1000px}
+.anki{display:flex;justify-content:center;gap:22px;padding:7px 0;font-size:14px}
+.anki a{color:#ddd;text-decoration:none}
+.decks{padding:18px 60px;font-size:13px;color:#bbb}
+.decks table{width:100%;border-collapse:collapse}.decks td{padding:5px 0;border-bottom:1px solid #383838}.n{color:#5c9;text-align:right;width:50px}.r{color:#e66;text-align:right;width:50px}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px}
+.bar{display:inline-block;width:70px;height:5px;border-radius:3px;background:#3a2f1a;overflow:hidden;vertical-align:middle}.bar i{display:block;height:100%;background:linear-gradient(90deg,#f59e0b,#fcd34d)}
+.btn{font-size:12px;font-weight:600;padding:4px 12px;border-radius:999px;background:linear-gradient(#f59e0b,#d97706);color:#1a1205;border:0}

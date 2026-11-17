@@ -670,7 +670,7 @@ def init_addon() -> None:
     # 2. Register web exports for static files bundled inside addon under web/
     pkg = get_package_name()
     try:
-        mw.addonManager.setWebExports(pkg, r"web/.*")
+        mw.addonManager.setWebExports(pkg, r"(web|toolbar)/.*")
     except Exception as e:
         print(f"[Ankicaster] setWebExports notice: {e}")
 
@@ -684,7 +684,7 @@ def init_addon() -> None:
     action_open = mw.form.menuTools.addAction("Open Ankicaster Magic Academy")
     action_open.triggered.connect(open_ankicaster_window)
 
-    # 5. Deck-browser banner. Failures here must not stop the rest of the add-on.
+    # 5. Themed top toolbar (Style A). Failures here must not stop the rest of the add-on.
     try:
         from .banner import configure, install_banner
 

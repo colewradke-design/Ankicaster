@@ -1,0 +1,185 @@
+/*
+ * Ankicaster Style A: Anki's top toolbar wrapped in a gold-framed bar.
+ * Everything is scoped under body.ankicaster-on so removing that class
+ * (show_banner: false) gives the stock toolbar back.
+ */
+body.ankicaster-on {
+  --ac-bg-top: #fbf3dc;
+  --ac-bg-bottom: #f1e4bf;
+  --ac-border: #c9a35a;
+  --ac-highlight: rgba(255, 255, 255, 0.7);
+  --ac-shadow: rgba(120, 80, 20, 0.18);
+  --ac-crest: #7c4a03;
+  --ac-gold: #8a5a12;
+  --ac-link: #3b2a14;
+  --ac-chip: #4a3518;
+  --ac-muted: #9a8a68;
+  --ac-track: #e3d3a6;
+  --ac-fill-a: #d97706;
+  --ac-fill-b: #f5b82e;
+  --ac-orn: #b7791f;
+  --ac-orn-bg: var(--canvas, var(--window-bg, #f5f5f5));
+}
+:root.night-mode body.ankicaster-on,
+body.ankicaster-on.nightMode,
+body.ankicaster-on.night-mode {
+  --ac-bg-top: #1e1b2e;
+  --ac-bg-bottom: #141222;
+  --ac-border: #b7791f;
+  --ac-highlight: rgba(252, 211, 77, 0.2);
+  --ac-shadow: rgba(0, 0, 0, 0.53);
+  --ac-crest: #fcd34d;
+  --ac-gold: #fcd34d;
+  --ac-link: #f3e9d2;
+  --ac-chip: #e8dcc0;
+  --ac-muted: #8a8070;
+  --ac-track: #3a2f1a;
+  --ac-fill-a: #f59e0b;
+  --ac-fill-b: #fcd34d;
+  --ac-orn: #fcd34d;
+  --ac-orn-bg: var(--canvas, var(--window-bg, #2c2c2c));
+}
+
+/* Our blocks only exist visually while the theme is on. */
+.ac-left, .ac-right, .ac-orn { display: none; }
+body.ankicaster-on .ac-left, body.ankicaster-on .ac-right { display: flex; }
+body.ankicaster-on .ac-orn { display: block; }
+
+/* ---- the frame (Anki 2.1.55+: div.header grid) ---- */
+body.ankicaster-on .ac-frame {
+  position: relative;
+  box-sizing: border-box;
+  margin: 7px 6px 3px;
+  padding: 0 12px;
+  border: 1px solid var(--ac-border) !important;
+  border-radius: 10px;
+  background: linear-gradient(180deg, var(--ac-bg-top), var(--ac-bg-bottom));
+  box-shadow: inset 0 1px 0 var(--ac-highlight), 0 2px 8px var(--ac-shadow);
+  min-height: 34px;
+  white-space: nowrap;
+}
+body.ankicaster-on div.header.ac-frame {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+}
+body.ankicaster-on .ac-frame .left-tray,
+body.ankicaster-on .ac-frame .right-tray {
+  align-self: center;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+body.ankicaster-on .ac-frame .toolbar {
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  border-radius: 0 !important;
+  align-self: center;
+}
+
+/* ---- legacy frame (Anki 2.1.50-2.1.54: table#header) ---- */
+body.ankicaster-on table.ac-frame {
+  width: calc(100% - 12px);
+  border-collapse: separate;
+  border-spacing: 0;
+  padding: 0 6px;
+}
+body.ankicaster-on table.ac-frame td { padding: 0; vertical-align: middle; }
+body.ankicaster-on td.ac-legacy-left { text-align: left; width: 33%; }
+body.ankicaster-on td.ac-legacy-right { text-align: right; width: 33%; }
+body.ankicaster-on td.ac-legacy-right .ac-right { justify-content: flex-end; }
+
+/* ---- Anki's links: same elements, themed colour ---- */
+body.ankicaster-on .ac-frame .hitem {
+  color: var(--ac-link) !important;
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+body.ankicaster-on .ac-frame .hitem:hover { text-decoration: underline; }
+body.ankicaster-on .ac-frame .hitem.normal-sync { color: var(--state-new, var(--new-count, #3b82f6)) !important; }
+body.ankicaster-on .ac-frame .hitem.full-sync { color: var(--state-learn, var(--learn-count, #dc2626)) !important; }
+
+/* ---- corner ornaments ---- */
+body.ankicaster-on .ac-orn {
+  position: absolute;
+  top: -9px;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ac-orn);
+  background: var(--ac-orn-bg);
+  pointer-events: none;
+}
+body.ankicaster-on .ac-orn-l { left: 18px; }
+body.ankicaster-on .ac-orn-r { right: 18px; }
+
+/* ---- left: crest + mana ---- */
+.ac-left {
+  align-items: center;
+  gap: 14px;
+  padding: 0 4px;
+  cursor: pointer;
+  color: var(--ac-gold);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.ac-crest {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.5px;
+  color: var(--ac-crest);
+}
+.ac-left:hover .ac-crest { text-shadow: 0 0 6px rgba(252, 211, 77, 0.45); }
+.ac-mana b { font-weight: 700; }
+.ac-pending { margin-left: 4px; color: var(--ac-muted); font-size: 11px; }
+
+/* ---- right: two chips ---- */
+.ac-right {
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 0 2px;
+  white-space: nowrap;
+}
+body.ac-hide-chips .ac-right { visibility: hidden; }
+.ac-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ac-chip);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ac-chip.ac-muted { color: var(--ac-muted); }
+.ac-label { overflow: hidden; text-overflow: ellipsis; }
+.ac-bar {
+  display: inline-block;
+  width: 44px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--ac-track);
+  overflow: hidden;
+  flex: none;
+}
+.ac-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, var(--ac-fill-a), var(--ac-fill-b));
+  transition: width 0.4s ease;
+}
+.ac-count { min-width: 1ch; text-align: right; font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) { .ac-bar i { transition: none; } }
+
+/* Narrow windows: drop words before Anki's links get squeezed. */
+@media (max-width: 860px) {
+  .ac-crest-name, .ac-mana-word { display: none; }
+}
+@media (max-width: 680px) {
+  .ac-label, .ac-bar { display: none; }
+}

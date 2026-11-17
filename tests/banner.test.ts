@@ -10,11 +10,14 @@ import { AnkicasterEngine } from '../src/utils/engine';
 import {
   bannerSummary,
   createBannerThrottle,
+  buildChip,
   savedWithBanner,
-  serviceQueueTitle
+  serviceChip,
+  serviceQueueTitle,
+  truncateLabel
 } from '../src/utils/banner';
 import { computeConstructionPlan, reviewsToGo } from '../src/utils/construction';
-import { ROOM_DEFINITIONS } from '../src/data/content';
+import { ROOM_DEFINITIONS, SPELL_DEFINITIONS } from '../src/data/content';
 import type { PlacedRoom } from '../src/types/ankicaster';
 
 function addSite(defId: string, id: number, buildProgress = 0): PlacedRoom {
@@ -130,4 +133,117 @@ test('the banner summary is sent on change and throttled to one push a second', 
   later[0].fn();
   assert.equal(sent.length, 2);
   assert.equal(JSON.parse(sent[1]).mana, 40);
+});
+
+type Session = NonNullable<ReturnType<typeof createNewAcademy>['wizard']['activeSession']>;
+
+function withSession(partial: Partial<Session>, queued = 0) {
+  const state = createNewAcademy();
+  state.wizard.activeSession = {
+    id: 1,
+    kind: 'orb',
+    progress: 0,
+    required: 30,
+    costPaid: 0,
+    state: 'active',
+    ...partial
+  } as Session;
+  state.wizard.queuedSessions = Array.from({ length: queued }, (_, i) => ({
+    id: 10 + i,
+    kind: 'orb' as const,
+    school: 'arcane' as const,
+    targetLevel: 1,
+    required: 10,
+    costPaid: 0
+  }));
+  return state;
+}
+
+test('toolbar chip: an orb names the school and target level', () => {
+  const state = withSession({ kind: 'orb', school: 'nature' as Session['school'], targetLevel: 2, progress: 12, required: 30 }, 2);
+  const summary = bannerSummary(state);
+  assert.equal(summary.service?.kind, 'orb');
+  assert.equal(summary.service?.school, 'Nature');
+  assert.equal(summary.service?.targetLevel, 2);
+  assert.equal(summary.service?.progressPct, 40);
+  assert.equal(summary.service?.queuedCount, 2);
+  const chip = serviceChip(summary.service);
+  assert.equal(chip.icon, '🔮');
+  assert.equal(chip.label, 'Nature Lv 2');
+  assert.equal(chip.count, '18');
+  assert.equal(chip.pct, 40);
+  assert.equal(chip.muted, false);
+  assert.equal(chip.title, 'Pondering Nature to level 2 — 18 reviews left · 2 more queued');
+});
+
+test('toolbar chip: the grimoire shows the spell display name', () => {
+  const [spellId, def] = Object.entries(SPELL_DEFINITIONS)[0];
+  const summary = bannerSummary(withSession({ kind: 'grimoire', spellId, progress: 5, required: 20 }));
+  assert.equal(summary.service?.spellName, def.name);
+  const chip = serviceChip(summary.service);
+  assert.equal(chip.icon, '📖');
+  assert.equal(chip.label, truncateLabel(def.name));
+  assert.ok(chip.title.startsWith(`Studying the grimoire: ${def.name} — 15 reviews left`));
+});
+
+test('toolbar chip: summoning tiers 1 to 3', () => {
+  const labels = [1, 2, 3].map(tier =>
+    serviceChip(bannerSummary(withSession({ kind: 'summon', summonTier: tier as 1 | 2 | 3, required: 8, progress: 2 })).service)
+  );
+  assert.deepEqual(labels.map(c => c.label), ['Summoning', 'Summoning II', 'Summoning III']);
+  assert.ok(labels.every(c => c.icon === '🌀' && c.count === '6'));
+});
+
+test('toolbar chip: nothing queued is a muted Idle with no bar', () => {
+  const summary = bannerSummary(createNewAcademy());
+  const svc = serviceChip(summary.service);
+  const build = buildChip(summary.build);
+  assert.deepEqual([svc.icon, svc.label, svc.muted, svc.pct, svc.count], ['🔮', 'Idle', true, null, '']);
+  assert.deepEqual([build.icon, build.label, build.muted, build.pct, build.count], ['🔨', 'Idle', true, null, '']);
+});
+
+test('toolbar chip: long names are cut to 14 characters with an ellipsis', () => {
+  assert.equal(truncateLabel('Library'), 'Library');
+  assert.equal(truncateLabel('Exactly14Chars'), 'Exactly14Chars');
+  const cut = truncateLabel('Grand Observatory of Stars');
+  assert.equal(Array.from(cut).length, 14);
+  assert.ok(cut.endsWith('…'));
+  const chip = buildChip({ name: 'Grand Observatory of Stars', reviewsLeft: 9, progressPct: 50 });
+  assert.equal(chip.label, cut);
+  assert.ok(chip.title.startsWith('Grand Observatory of Stars — 9 reviews left'));
+});
+
+test('toolbar chip: build crew, queued sites, paused and waiting', () => {
+  let state = createNewAcademy();
+  state.rooms = [...state.rooms, addSite('dormitory', 890, 0), addSite('dormitory', 891)];
+  const summary = bannerSummary(state);
+  assert.equal(summary.build?.queuedCount, 1);
+  assert.ok((summary.build?.crew || 0) >= 1);
+  const chip = buildChip(summary.build);
+  assert.equal(chip.icon, '🔨');
+  assert.equal(chip.label, 'Dormitory');
+  assert.match(chip.title, /^Dormitory — \d+ reviews? left \(crew of \d\) · 1 more queued$/);
+
+  const paused = AnkicasterEngine.setConstructionPaused(state, 890, true);
+  assert.equal(paused.success, true, paused.error);
+  state = paused.state;
+  const pausedChip = buildChip(bannerSummary(state).build);
+  assert.equal(pausedChip.icon, '⏸');
+  assert.equal(pausedChip.label, 'Dormitory');
+  assert.match(pausedChip.title, /paused/);
+
+  const waiting = buildChip({ name: 'Library', reviewsLeft: -1, crew: 0 });
+  assert.equal(waiting.count, '…');
+  assert.equal(waiting.title, 'Library — waiting for builders');
+  const done = buildChip({ name: 'Library', reviewsLeft: 0, progressPct: 100 });
+  assert.equal(done.count, '✓');
+});
+
+test('build progressPct follows the site and totalReviews matches a fresh site', () => {
+  const state = createNewAcademy();
+  const def = ROOM_DEFINITIONS.dormitory;
+  state.rooms = [...state.rooms, addSite('dormitory', 892, Math.floor(def.buildReviews / 2))];
+  const build = bannerSummary(state).build!;
+  assert.equal(build.progressPct, Math.floor((Math.floor(def.buildReviews / 2) / def.buildReviews) * 100));
+  assert.ok((build.totalReviews || 0) >= build.reviewsLeft);
 });
