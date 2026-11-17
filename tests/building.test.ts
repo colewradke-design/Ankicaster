@@ -449,8 +449,8 @@ test('construction queue: Workshop crew + Wizard build the front site together, 
   let state = placedC.state;
   const sites = () => state.rooms.filter(r => r.state === 'site').sort((a, b) => (a.buildOrder ?? 0) - (b.buildOrder ?? 0));
   state = AnkicasterEngine.applyHonestReview(state, cardId, 3, 2400).state;
-  assert.equal(sites()[0].buildProgress, 0, 'no Workshop servants or Wizard assigned: sites wait');
-  assert.equal(sites()[1].buildProgress, 0);
+  assert.equal(sites()[0].buildProgress, 1, 'the wizard builds the front site by default, with no Workshop');
+  assert.equal(sites()[1].buildProgress, 0, 'the second site waits');
   assert.equal(sites()[2].buildProgress, 0);
 
   const workshop = AnkicasterEngine.placeRoom(state, 'workshop');

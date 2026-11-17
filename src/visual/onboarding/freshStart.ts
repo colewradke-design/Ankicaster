@@ -161,6 +161,7 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
       knownSpells: [],
       spellCooldowns: {},
       queuedSessions: [],
+      workshopAssigned: true,
       // The chosen look lives on the player's character and is drawn by the forge renderer
       appearance: hasLook ? normalizeAppearance({
         bodyShape: c.bodyShape as 1 | 2 | 3 | 4,

@@ -466,7 +466,7 @@ test('Dead effects wired in engine: tea_service, silent_quill, stewpot, tool_wal
     ];
     const after = AnkicasterEngine.applyHonestReview(s, cardId, 3, 2400).state;
     const updatedSite = after.rooms.find(r => r.id === 98)!;
-    assert.equal(updatedSite.buildProgress, 1, 'tool_wall does not add construction speed bonus');
+    assert.equal(updatedSite.buildProgress, 2, 'tool_wall does not add construction speed; servant and default wizard each add 1');
   }
 
   // 5. remedy_cabinet & healing_basin heal injured residents in built bathhouse / sunlit_sanctum

@@ -65,7 +65,7 @@ import {
   PlacementCheck
 } from './placement';
 import { normalizeAppearance } from './appearance';
-import { constructionSites, planConstruction, WorkshopWorkerInput } from './construction';
+import { constructionSites, planConstruction, wizardIsBuilding, WorkshopWorkerInput } from './construction';
 import {
   pickGoblinName,
   generateServantLook,
@@ -5222,9 +5222,6 @@ export class AnkicasterEngine {
         s.cleaningRoomId = undefined;
       }
     }
-    if (room.defId === 'workshop' && !next.rooms.some(r => r.defId === 'workshop' && isRoomOperationalForServant(next, r))) {
-      next.wizard.workshopAssigned = false;
-    }
     AnkicasterEngine.syncWorkplaces(next);
     return { state: next, success: true };
   }
@@ -5327,13 +5324,15 @@ export class AnkicasterEngine {
         workshopLevel: ws.level || 1
       });
     }
-    if (state.wizard?.workshopAssigned && workshops.length > 0) {
-      const primaryWs = [...workshops].sort((a, b) => (b.level || 1) - (a.level || 1) || a.id - b.id)[0];
+    if (wizardIsBuilding(state.wizard)) {
+      const primaryWs = workshops.length
+        ? [...workshops].sort((a, b) => (b.level || 1) - (a.level || 1) || a.id - b.id)[0]
+        : undefined;
       workers.push({
         kind: 'wizard',
         id: 0,
-        workshopId: primaryWs.id,
-        workshopLevel: primaryWs.level || 1
+        workshopId: primaryWs?.id ?? 0,
+        workshopLevel: primaryWs?.level || 1
       });
     }
     return planConstruction(state.rooms, {
@@ -5342,9 +5341,9 @@ export class AnkicasterEngine {
     });
   }
 
-  /** True when the Wizard is assigned to an operational Workshop AND actually holds one of the 4 construction crew slots on an unpaused site. */
+  /** True when the wizard is on the crew and actually holds a slot on the front site. */
   static isWizardOnConstructionSite(state: FullGameState): boolean {
-    if (!state.wizard?.workshopAssigned) return false;
+    if (!wizardIsBuilding(state.wizard)) return false;
     return AnkicasterEngine.constructionAssignments(state).some(job => job.crew.some(m => m.kind === 'wizard'));
   }
 
@@ -5470,9 +5469,6 @@ export class AnkicasterEngine {
         sv.cleaningRoomId = undefined;
       }
     }
-    if (room.defId === 'workshop' && !next.rooms.some(r => r.defId === 'workshop' && isRoomOperationalForServant(next, r))) {
-      next.wizard.workshopAssigned = false;
-    }
     AnkicasterEngine.syncWorkplaces(next);
     syncCharmRenown(next);
 
@@ -5496,8 +5492,12 @@ export class AnkicasterEngine {
   static normalizeLoadedState<T extends Partial<FullGameState>>(saved: T): T {
     if (!saved || typeof saved !== 'object') return saved;
     const out: any = { ...saved };
-    if (out.wizard && out.wizard.appearance) {
-      out.wizard = { ...out.wizard, appearance: normalizeAppearance(out.wizard.appearance) };
+    if (out.wizard) {
+      out.wizard = {
+        ...out.wizard,
+        appearance: out.wizard.appearance ? normalizeAppearance(out.wizard.appearance) : out.wizard.appearance,
+        workshopAssigned: out.wizard.workshopAssigned !== false
+      };
     }
     if (Array.isArray(out.rooms)) {
       out.rooms = out.rooms.map((r: PlacedRoom) => (r && !r.spent ? { ...r, spent: defaultSpent(r) } : r));

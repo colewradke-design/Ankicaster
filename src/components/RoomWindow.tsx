@@ -1138,7 +1138,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
               {!isSite && room.defId === 'workshop' && (() => {
                 const cores = state.resources.golem_core || 0;
                 const canAwaken = !unfinished && cores >= 3 && !!onAwakenGeodeGolem;
-                const wizAssigned = !!state.wizard?.workshopAssigned;
+                const wizAssigned = state.wizard?.workshopAssigned !== false;
                 const activePlan = computeConstructionPlan(state)[0];
                 const wizActiveOnSite = activePlan?.crew.some(m => m.kind === 'wizard') ?? false;
                 return (

@@ -77,11 +77,15 @@ export function constructionSites<T extends Pick<PlacedRoom, 'id' | 'state' | 'b
 }
 
 /**
- * Servants assigned to the Workshop (and optionally the Wizard if assigned there) work
+ * Servants assigned to the Workshop, and the wizard unless taken off the crew, work
  * the FIRST unpaused site in the build queue together, up to 4 active bodies.
+ * With no Workshop the wizard still builds, at the level-1 rate.
  * Additional Workshop workers wait at the Workshop until a slot opens.
  * Rate per body = Workshop level base (1 / 1.25 / 1.5) * (1 + creatureBuildBonus).
  */
+export function wizardIsBuilding(wizard?: { workshopAssigned?: boolean } | null): boolean {
+  return !!wizard && wizard.workshopAssigned !== false;
+}
 export function planConstruction(
   rooms: Array<Pick<PlacedRoom, 'id' | 'state' | 'buildOrder' | 'buildPaused'>>,
   opts: { workers: WorkshopWorkerInput[]; creatureBuildBonus?: number }
@@ -117,7 +121,6 @@ export function computeConstructionPlan(
   const workshops = (state.rooms || []).filter(
     r => r.defId === 'workshop' && isRoomOperationalForServant(state, r)
   );
-  if (workshops.length === 0) return [];
   const workshopById = new Map(workshops.map(w => [w.id, w]));
   const workers: WorkshopWorkerInput[] = [];
   for (const s of [...(state.servants || [])].sort((a, b) => a.id - b.id)) {
@@ -131,16 +134,16 @@ export function computeConstructionPlan(
       workshopLevel: ws.level || 1
     });
   }
-  if (state.wizard?.workshopAssigned) {
-    const primaryWs = [...workshops].sort((a, b) => (b.level || 1) - (a.level || 1) || a.id - b.id)[0];
-    if (primaryWs) {
-      workers.push({
-        kind: 'wizard',
-        id: 0,
-        workshopId: primaryWs.id,
-        workshopLevel: primaryWs.level || 1
-      });
-    }
+  if (wizardIsBuilding(state.wizard)) {
+    const primaryWs = workshops.length
+      ? [...workshops].sort((a, b) => (b.level || 1) - (a.level || 1) || a.id - b.id)[0]
+      : undefined;
+    workers.push({
+      kind: 'wizard',
+      id: 0,
+      workshopId: primaryWs?.id ?? 0,
+      workshopLevel: primaryWs?.level || 1
+    });
   }
   return planConstruction(state.rooms, {
     workers,
