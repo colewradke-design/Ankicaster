@@ -15,7 +15,6 @@ import { ROOM_DEFINITIONS } from '../data/content';
 import { computeReachability } from './reachability';
 import { unlockedPlotIndices, adjacentPlots } from './groundsLayout';
 import { creatureSpeciesBuffSum } from './creatures';
-import { computeAlumniBonuses } from './formulas';
 
 /** GDD 15.2: the castle starts at 8 columns x 5 floors (expansion plans are not implemented yet). */
 export const CASTLE_START_COLS = 8;
@@ -297,8 +296,7 @@ export function buildTimeDiscountPct(
   if (!state) return 0;
   const alchemySteps = Math.min(5, Math.max(0, (state.wizard?.levels?.alchemy || 0) - 5));
   const folioPct = state.spellbooks?.includes('architects_folio') ? 0.05 : 0;
-  const alumniBuilderPct = computeAlumniBonuses(state.alumniGallery || []).builderBuildTimePct;
-  return Math.min(0.4, 0.03 * alchemySteps + folioPct + alumniBuilderPct);
+  return Math.min(0.4, 0.03 * alchemySteps + folioPct);
 }
 
 export function discountedBuildReviews(

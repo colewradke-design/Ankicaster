@@ -8,7 +8,7 @@
  */
 import type { Painter } from '../rooms/painter';
 import { darken, glyph, mix } from '../rooms/painter';
-import type { Character, InjuryType, PlacedRoom, SchoolType } from '../../types/ankicaster';
+import type { Character, InjuryType, PlacedRoom, ServantLook } from '../../types/ankicaster';
 import {
   EYE_COLOURS, FACE_SHAPES, HAIR_STYLES, HATS, SHOE_KINDS, STAFFS,
   hashStr, hexToNum, normalizeAppearance, resolveFace, resolveShoes, shade
@@ -77,6 +77,8 @@ export interface DollPose {
   facing: 'L' | 'R';
   anim: DollAnim;
   frame: number;
+  clockMs?: number;
+  reduceMotion?: boolean;
 }
 
 const SCHOOL_HEX: Record<string, string> = {
@@ -215,7 +217,6 @@ export function lookFromCharacter(char: Character, anim = 'idle'): DollLook {
 function careerItem(career?: string): HeldItem {
   switch (career) {
     case 'gardener': return 'watering';
-    case 'builder': return 'hammer';
     case 'scholar':
     case 'alchemist': return 'quill';
     case 'healer': return 'tray';
@@ -228,7 +229,7 @@ function careerItem(career?: string): HeldItem {
 }
 
 function itemFor(look: DollLook, anim: DollAnim): HeldItem {
-  if (look.role === 'wizard') return 'staff';
+  if (look.role === 'wizard') return anim === 'work' ? 'hammer' : 'staff';
   if (anim === 'eat') return 'tray';
   if (anim === 'sit_study' || anim === 'teach') return 'book';
   if (anim === 'carry_walk') return 'crate';
@@ -378,7 +379,7 @@ export function drawCharacter(g: Painter, look: DollLook, pose: DollPose): { mar
   drawHat(g, look.hat, x, headY, robe, sign);
 
   // 11. Held item
-  drawItem(g, itemFor(look, anim), look, x, headY, hip, sign, p);
+  drawItem(g, itemFor(look, anim), look, x, headY, hip, sign, p, pose.clockMs, pose.reduceMotion, pose.frame);
 
   // Rift-Touched glow stays while the injury does
   if (look.injury === 'rift_touched') {
@@ -654,7 +655,6 @@ function drawMark(g: Painter, look: DollLook, x: number, hip: number, hem: numbe
 function careerGlyph(career?: string): string {
   switch (career) {
     case 'gardener': return 'leaf';
-    case 'builder': return 'hammer';
     case 'alchemist': return 'flask';
     case 'warder': return 'shield';
     case 'tamer': return 'heart';
@@ -663,7 +663,33 @@ function careerGlyph(career?: string): string {
   }
 }
 
-function drawItem(g: Painter, item: HeldItem, look: DollLook, x: number, headY: number, hip: number, sign: number, p: { armUp: boolean; cast: boolean; work: boolean }) {
+/**
+ * Fixed-rate hammer cadence: swing, pause, swing, pause (1200ms period, independent of review rate).
+ * Returns vertical head offset & horizontal strike nudge.
+ */
+export function hammerSwingPose(clockMs?: number, reduceMotion = false, fallbackFrame = 0): { dy: number; strike: number } {
+  if (reduceMotion) return { dy: -2, strike: 0 };
+  const t = clockMs !== undefined ? Math.max(0, clockMs) : fallbackFrame * 150;
+  const phase = Math.floor((t % 1200) / 150); // 0..7
+  // Phases 0-1: swing 1, Phases 2-3: pause, Phases 4-5: swing 2, Phases 6-7: pause
+  if (phase === 0 || phase === 4) return { dy: -4, strike: -1 };
+  if (phase === 1 || phase === 5) return { dy: 1, strike: 2 };
+  return { dy: -2, strike: 0 };
+}
+
+function drawItem(
+  g: Painter,
+  item: HeldItem,
+  look: DollLook,
+  x: number,
+  headY: number,
+  hip: number,
+  sign: number,
+  p: { armUp: boolean; cast: boolean; work: boolean },
+  clockMs?: number,
+  reduceMotion = false,
+  frame = 0
+) {
   const ix = x + (p.armUp ? 2 : 7) * sign;
   const iy = p.armUp ? headY - 8 : hip - 2;
   if (item === 'none') return;
@@ -699,14 +725,129 @@ function drawItem(g: Painter, item: HeldItem, look: DollLook, x: number, headY: 
     g.rect(ix - 2, iy - 2, 4, 3).fill({ color: 0x3a6a9a });
     g.rect(ix + 2, iy - 1, 2, 1).fill({ color: 0x8a8994 });
   } else if (item === 'hammer') {
-    const lift = p.work ? -3 : 0;
-    g.rect(ix, iy - 6 + lift, 1.2, 8).fill({ color: 0x6e4529 });
-    g.rect(ix - 2, iy - 7 + lift, 5, 2).fill({ color: 0x8a8994 });
+    const sw = p.work ? hammerSwingPose(clockMs, reduceMotion, frame) : { dy: 0, strike: 0 };
+    const hx = ix + sw.strike * sign;
+    const hy = iy + sw.dy;
+    g.rect(hx, hy - 6, 1.2, 8).fill({ color: 0x6e4529 });
+    g.rect(hx - 2, hy - 7, 5, 2.2).fill({ color: 0x9b9ba6 });
   } else if (item === 'quill') {
     g.poly([ix, iy - 6, ix + 1.5, iy + 2, ix - 0.5, iy + 1]).fill({ color: 0xf6f1e8 });
   } else if (item === 'crate') {
     g.rect(ix - 3, iy - 4, 6, 5).fill({ color: 0x96633b });
     g.rect(ix - 3, iy - 2, 6, 0.6).fill({ color: 0x6e4529 });
+  }
+}
+
+export type GoblinTool = 'none' | 'hammer' | 'broom' | 'watering' | 'tray';
+
+export interface GoblinPose {
+  x: number;
+  y: number;
+  facing: 'L' | 'R';
+  anim: 'idle' | 'walk' | 'climb' | 'work';
+  frame: number;
+  tool?: GoblinTool;
+  clockMs?: number;
+  reduceMotion?: boolean;
+}
+
+/**
+ * Draw one summoned goblin servant. Shorter and stockier than human dolls with
+ * expressive ears, leather work apron, optional accessory, and workplace tool.
+ */
+export function drawGoblinServant(g: Painter, look: ServantLook, pose: GoblinPose): void {
+  const { x, y, facing, anim, frame, tool = 'none', clockMs, reduceMotion = false } = pose;
+  const sign = facing === 'L' ? -1 : 1;
+  const rm = reduceMotion;
+  const f = rm ? 0 : Math.max(0, frame);
+  const walkPhase = anim === 'walk' || anim === 'climb' ? f % 4 : 0;
+  const bob = anim === 'walk' ? (walkPhase % 2 === 1 ? -1 : 0) : anim === 'idle' && f % 4 === 1 ? -0.5 : 0;
+  const step = anim === 'walk' ? [0, 2, 0, -2][walkPhase] : anim === 'climb' ? (walkPhase % 2 === 0 ? 1 : -1) : 0;
+
+  const skin = num(look.skin, 0x769656);
+  const skinDark = shade(skin, 0.72);
+  const tunic = num(look.tunicColor, 0x6b4f3a);
+  const apron = num(look.apronColor, 0xb78a52);
+  const back = anim === 'climb';
+
+  // 1. Ground shadow
+  g.ellipse(x, y - 1, 4.5, 1.4).fill({ color: 0x000000, alpha: 0.4 });
+
+  // 2. Boots / legs
+  g.rect(x - 3 + step * sign, y - 3, 2.2, 3).fill({ color: 0x2f2522 });
+  g.rect(x + 0.8 - step * sign, y - 3, 2.2, 3).fill({ color: 0x2f2522 });
+
+  // 3. Stocky torso & apron
+  const hipY = y - 3 + bob;
+  const shoulderY = hipY - 6;
+  g.rect(x - 4, shoulderY, 8, 6.5).fill({ color: tunic });
+  g.rect(x - 3, shoulderY + 1, 6, 5.5).fill({ color: apron });
+
+  // Optional scarf accessory at collar
+  if (look.accessory === 'scarf') {
+    g.rect(x - 4.2, shoulderY - 0.5, 8.4, 2).fill({ color: 0xc85d4b });
+  }
+
+  // 4. Ears (always readable silhouette cue!)
+  const headY = shoulderY - 3.5;
+  const backEarDir = back ? -1 : -sign;
+  const drawEar = (dir: number, offsetX: number) => {
+    if (look.ears === 'long') {
+      g.poly([x + offsetX, headY - 1, x + offsetX + dir * 6, headY - 3.5, x + offsetX, headY + 1.5]).fill({ color: skinDark });
+    } else if (look.ears === 'floppy') {
+      g.poly([x + offsetX, headY - 1, x + offsetX + dir * 5, headY + 2, x + offsetX + dir * 1, headY + 2.5]).fill({ color: skinDark });
+    } else {
+      g.poly([x + offsetX, headY - 1, x + offsetX + dir * 4.5, headY - 2.5, x + offsetX, headY + 1]).fill({ color: skinDark });
+    }
+  };
+  drawEar(backEarDir, back ? -3.5 : -3 * sign);
+  if (back) {
+    drawEar(1, 3.5);
+  }
+
+  // 5. Head
+  g.ellipse(x, headY, 4.4, 4).fill({ color: skin });
+  if (!back) {
+    // Nose & bright amber goblin eyes
+    g.rect(x + 2.4 * sign, headY + 0.2, 2.2, 1.4).fill({ color: skinDark });
+    g.rect(x + 1.2 * sign, headY - 1.3, 1.6, 1.4).fill({ color: 0xf7d06b });
+    g.rect(x + 1.7 * sign, headY - 1, 0.7, 0.8).fill({ color: 0x1b1822 });
+    // Front ear if facing
+    drawEar(sign, 2.5 * sign);
+  }
+
+  // 6. Head accessory
+  if (look.accessory === 'cap') {
+    g.ellipse(x - 0.5 * sign, headY - 3.6, 5, 1.8).fill({ color: shade(tunic, 0.85) });
+    g.rect(x + 1 * sign, headY - 3, 4.5 * sign, 1).fill({ color: 0x2a2533 });
+  } else if (look.accessory === 'goggles' && !back) {
+    g.rect(x - 3.5, headY - 3.6, 7, 1.2).fill({ color: 0x3b3a40 });
+    g.circle(x + 2 * sign, headY - 3.1, 1.5).fill({ color: 0x9cd4ff });
+    g.circle(x + 2 * sign, headY - 3.1, 1.5).stroke({ color: 0xc9a66b, width: 0.7 });
+  }
+
+  // 7. Held workplace tool
+  if (tool !== 'none') {
+    const ix = x + 5 * sign;
+    const iy = shoulderY + 1;
+    if (tool === 'hammer') {
+      const sw = anim === 'work' ? hammerSwingPose(clockMs, rm, f) : { dy: 0, strike: 0 };
+      const hx = ix + sw.strike * sign;
+      const hy = iy + sw.dy;
+      g.rect(hx, hy - 5, 1.2, 7).fill({ color: 0x6e4529 });
+      g.rect(hx - 2, hy - 6, 4.6, 2).fill({ color: 0x9b9ba6 });
+    } else if (tool === 'broom') {
+      const sweep = anim === 'work' && !rm ? ((f % 2 === 0 ? -1 : 1) * 1.5) : 0;
+      g.rect(ix + sweep * 0.4, iy - 5, 1.1, 9).fill({ color: 0x6e4529 });
+      g.rect(ix - 1.5 + sweep, y - 3, 4.2, 2.2).fill({ color: 0xc9b88a });
+    } else if (tool === 'watering') {
+      const tilt = anim === 'work' && !rm && f % 2 === 1 ? 1 : 0;
+      g.rect(ix - 1.5, iy - 1 + tilt, 3.6, 2.8).fill({ color: 0x3a6a9a });
+      g.rect(ix + 1.8 * sign, iy - 0.5 + tilt, 2 * sign, 1).fill({ color: 0x8a8994 });
+    } else if (tool === 'tray') {
+      g.ellipse(ix, iy + 0.5, 3.6, 1.3).fill({ color: 0xc28e5c });
+      g.circle(ix, iy - 1, 1).fill({ color: 0xe0a33a });
+    }
   }
 }
 

@@ -583,9 +583,9 @@ test('Part B1: outdoor grounds rooms never use indoor upgrade trims or float in 
   }
 });
 
-test('Part B2: all 51 ROOM_DEFINITIONS have pairwise distinct L2 and L3 upgrade trim sets', () => {
+test('Part B2: all 53 ROOM_DEFINITIONS have pairwise distinct L2 and L3 upgrade trim sets', () => {
   const allDefs = Object.values(ROOM_DEFINITIONS);
-  assert.equal(allDefs.length, 51, 'ROOM_DEFINITIONS has 51 rooms');
+  assert.equal(allDefs.length, 53, 'ROOM_DEFINITIONS has 53 rooms');
 
   const l2Signatures = new Map<string, string>();
   const l3Signatures = new Map<string, string>();

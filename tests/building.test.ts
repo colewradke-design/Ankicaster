@@ -440,7 +440,7 @@ test('B11 the headmaster walks the school, and only the orb keeps them in the st
   assert.equal(wiz.y, roomToWorldBox(study, ground0).floorLineY);
 });
 
-test('construction queue: the wizard builds one site, a Workshop Builder opens the next', () => {
+test('construction queue: Workshop crew + Wizard build the front site together, while extra sites wait & reorder', () => {
   const s = rich();
   const cardId = Number(Object.keys(s.allCards)[0]);
   const placedA = AnkicasterEngine.placeRoom(s, 'dormitory');
@@ -449,8 +449,8 @@ test('construction queue: the wizard builds one site, a Workshop Builder opens t
   let state = placedC.state;
   const sites = () => state.rooms.filter(r => r.state === 'site').sort((a, b) => (a.buildOrder ?? 0) - (b.buildOrder ?? 0));
   state = AnkicasterEngine.applyHonestReview(state, cardId, 3, 2400).state;
-  assert.equal(sites()[0].buildProgress, 1, 'wizard slot builds the first site');
-  assert.equal(sites()[1].buildProgress, 0, 'the second site waits without a Builder');
+  assert.equal(sites()[0].buildProgress, 0, 'no Workshop servants or Wizard assigned: sites wait');
+  assert.equal(sites()[1].buildProgress, 0);
   assert.equal(sites()[2].buildProgress, 0);
 
   const workshop = AnkicasterEngine.placeRoom(state, 'workshop');
@@ -459,40 +459,33 @@ test('construction queue: the wizard builds one site, a Workshop Builder opens t
   ws.state = 'built';
   ws.buildProgress = ws.buildRequired;
   ws.furniture = [{ id: 9001, defId: 'workbench', slotKind: 'required:workbench', damaged: false, x: 20, floor: 0, plane: 'floor', wallY: 0 }];
-  state.characters.push({
-    id: 77,
-    name: 'Brick',
-    pronouns: 'they/them',
-    personality: 'Bold',
-    traits: [],
-    appearance: { skin: '#fff', hair: 'short', hairColor: '#000', robeColor: '#111', hat: 'none' },
-    needs: { hunger: 80, rest: 80, leisure: 80, composure: 80, health: 100 },
-    morale: 80,
-    status: 'faculty',
-    masteredSchools: ['alchemy'],
-    readyDays: {},
-    enrolledDay: 1,
-    chronicle: [],
-    career: 'builder',
-    careerState: 'active',
-    workplaceRoomId: ws.id
-  });
+  state.servants = [
+    {
+      id: 77,
+      name: 'Brik',
+      look: { seed: 77, skin: '#769656', ears: 'pointed', tunicColor: '#6b4f3a', apronColor: '#b78a52', accessory: 'cap' },
+      workplaceRoomId: ws.id,
+      arrivedDay: 1
+    }
+  ];
+  state.wizard.workshopAssigned = true;
+
   const before = sites().map(r => r.buildProgress);
   state = AnkicasterEngine.applyHonestReview(state, cardId, 3, 2400).state;
   const after = sites();
-  assert.equal(after[0].buildProgress, before[0] + 1, 'the wizard still builds the front of the queue at 1');
-  assert.equal(after[1].buildProgress, before[1] + 1.25, 'the Builder slot builds the next site at 1.25');
-  assert.equal(after[2].buildProgress, before[2], 'a third site still waits');
+  assert.equal(after[0].buildProgress, before[0] + 2, '1 Workshop servant + Wizard work the front site together at 1 + 1 = 2');
+  assert.equal(after[1].buildProgress, before[1], 'second site waits behind the first');
+  assert.equal(after[2].buildProgress, before[2], 'third site waits');
 
   state.wizard.levels.alchemy = 5;
   const liveWs = state.rooms.find(r => r.id === ws.id)!;
   liveWs.level = 3;
   const rates = AnkicasterEngine.constructionAssignments(state);
-  assert.equal(rates[0].rate, 1.1, 'Alchemy 5 speeds the wizard slot');
-  assert.equal(rates[1].rate, 1.4, 'a level-3 Workshop speeds the Builder slot');
+  assert.equal(rates[0].rate, 3, 'Lv 3 Workshop gives 1.5 per body (3.0 total); Alchemy 5 does not change speed');
 
   const moved = AnkicasterEngine.moveConstruction(state, after[2].id, -1);
   assert.equal(moved.success, true);
   const order = moved.state.rooms.filter(r => r.state === 'site').sort((a, b) => (a.buildOrder ?? 0) - (b.buildOrder ?? 0));
   assert.equal(order[1].id, after[2].id, 'the waiting site can move up the queue');
 });
+

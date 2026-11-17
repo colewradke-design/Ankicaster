@@ -205,6 +205,11 @@ test('Glassworks converts stone to glass, and an Unfinished one does nothing', (
     buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {},
     furniture: [item('kiln', 'required:kiln')]
   });
+  finished.servants = [{
+    id: 1, name: 'Grit',
+    look: { seed: 1, skin: '#769656', ears: 'pointed', tunicColor: '#6b4f3a', apronColor: '#b78a52', accessory: 'cap' },
+    workplaceRoomId: 70, arrivedDay: 1
+  }];
   const room = finished.rooms.find(r => r.defId === 'glassworks')!;
   const eff = AnkicasterEngine.roomEfficiency(finished, room);
   AnkicasterEngine.ringBell(finished, []);
@@ -216,6 +221,11 @@ test('Glassworks converts stone to glass, and an Unfinished one does nothing', (
   short.resources.stone = 1;
   short.resources.glass = 0;
   short.rooms.push({ ...room, id: 71 });
+  short.servants = [{
+    id: 1, name: 'Grit',
+    look: { seed: 1, skin: '#769656', ears: 'pointed', tunicColor: '#6b4f3a', apronColor: '#b78a52', accessory: 'cap' },
+    workplaceRoomId: 71, arrivedDay: 1
+  }];
   const eff2 = AnkicasterEngine.roomEfficiency(short, short.rooms.find(r => r.id === 71)!);
   AnkicasterEngine.ringBell(short, []);
   const conv2 = glassworksConversion(1, eff2, 0);
@@ -247,6 +257,11 @@ test('the Weaving Room adds cloth, doubled by a tamed moonsheep', () => {
       buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {},
       furniture: [item('loom', 'required:loom')]
     });
+    s.servants = [{
+      id: 1, name: 'Spool',
+      look: { seed: 2, skin: '#769656', ears: 'pointed', tunicColor: '#6b4f3a', apronColor: '#b78a52', accessory: 'cap' },
+      workplaceRoomId: 73, arrivedDay: 1
+    }];
     if (sheep) {
       s.creatures.push({
         id: 1, defId: 'moonsheep', nickname: 'Wool', status: 'tamed', hungry: false,
@@ -326,6 +341,15 @@ test('a woodlot at 199 timber ends the bell at 200', () => {
     id: 91, defId: 'woodlot', x: 6, y: 0, w: 1, h: 1, area: 'grounds', level: 1, state: 'built',
     buildRequired: 0, buildProgress: 0, cleanliness: 100, settings: {}, furniture: []
   });
+  s.servants = [
+    {
+      id: 1,
+      name: 'Brik',
+      look: { seed: 1, skin: '#769656', ears: 'pointed', tunicColor: '#6b4f3a', apronColor: '#b78a52', accessory: 'none' },
+      workplaceRoomId: 91,
+      arrivedDay: 1
+    }
+  ];
   AnkicasterEngine.ringBell(s, []);
   assert.equal(s.resources.timber, 200);
 });

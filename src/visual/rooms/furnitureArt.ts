@@ -162,7 +162,9 @@ const TABLE: Record<string, Row> = {
   orb_stand: ['orb', 16, 24, 'floor', BRASS, VIOLET, 'orb', 1],
   gate_arch: ['frame', 32, 32, 'floor', ST, VEIL, 'arch', 1],
   anchor_stones: ['statue', 16, 16, 'floor', SD, 0x9bd4ff, 'rune', 1],
-  ward_spire: ['statue', 16, 24, 'floor', ST, 0x5fc2c2, 'rune', 1]
+  ward_spire: ['statue', 16, 24, 'floor', ST, 0x5fc2c2, 'rune', 1],
+  summoning_circle: ['statue', 32, 16, 'floor', 0x6b4fbb, 0x9bd4ff, 'summoningcircle', 1],
+  broom_cupboard: ['box', 16, 24, 'floor', W, 0xc9b88a, 'cupboard']
 };
 
 /** Every id that has forge art (the catalog test asserts this covers all content ids and roles). */
@@ -267,12 +269,18 @@ function drawFamily(g: Painter, art: FurnitureArt, bx: { left: number; top: numb
         const sw = [-2, 0, 2, 0][f];
         line(g, cx, T + 11, cx + sw, B - 5, c2, 1);
         g.circle(cx + sw, B - 5, 1.5).fill({ color: c2 });
-      } else if (v === 'cabinet' || v === 'hood') {
+      } else if (v === 'cabinet' || v === 'hood' || v === 'cupboard') {
         g.rect(L + 1, T, w - 2, h).fill({ color: a });
         if (v === 'hood') {
           g.poly([L, T + 8, R, T + 8, R - 3, T, L + 3, T]).fill({ color: darken(a, 0.8) });
           g.rect(L + 2, T + 9, w - 4, h - 11).fill({ color: c2 });
           g.circle(cx, B - 4 - f, 1.2).fill({ color: 0xb9b8c2, alpha: 0.7 });
+        } else if (v === 'cupboard') {
+          g.rect(L + 2, T + 2, w - 4, h - 3).fill({ color: darken(a, 0.78) });
+          line(g, cx - 2, T + 4, cx - 2, B - 6, c2, 1);
+          g.rect(cx - 3.5, B - 6, 3, 4).fill({ color: c2 });
+          g.rect(cx + 1.5, T + 6, 3, 2).fill({ color: GLASS });
+          g.rect(L + 1, T, w - 2, 2).fill({ color: darken(a, 0.75) });
         } else {
           line(g, cx, T + 2, cx, B - 1, darken(a, 0.6), 1);
           g.rect(cx - 2.5, T + h / 2, 1, 2).fill({ color: c2 });
@@ -855,6 +863,17 @@ function drawFamily(g: Painter, art: FurnitureArt, bx: { left: number; top: numb
             const t = ((i + f * 0.25) * Math.PI) / 2;
             g.rect(cx + Math.cos(t) * (w / 2 - 2) - 0.75, B - 2 + Math.sin(t) * 1.6 - 0.75, 1.5, 1.5).fill({ color: c2 });
           }
+          break;
+        }
+        case 'summoningcircle': {
+          g.ellipse(cx, B - 3, w / 2 - 2, 3).fill({ color: 0x1b1822, alpha: 0.75 });
+          g.ellipse(cx, B - 3, w / 2 - 2, 3).stroke({ color: a, width: 1.2 });
+          g.ellipse(cx, B - 3, w / 2 - 6, 1.8).stroke({ color: c2, width: 0.8 });
+          for (let i = 0; i < 4; i++) {
+            const t = ((i + f * 0.25) * Math.PI) / 2;
+            g.circle(cx + Math.cos(t) * (w / 2 - 3), B - 3 + Math.sin(t) * 2.1, 1.1).fill({ color: c2 });
+          }
+          glyph(g, 'star8', cx, B - 3.5, 2.2, c2);
           break;
         }
         case 'burrow':

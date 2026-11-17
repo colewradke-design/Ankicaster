@@ -19,8 +19,7 @@ import { ZoomIn, ZoomOut, Maximize2, Home, Move, Hammer, X as XIcon, Wand2 } fro
 import { ROOM_DEFINITIONS, roomDisplayName, FURNITURE_DEFINITIONS } from '../data/content';
 import { AnkicasterEngine } from '../utils/engine';
 import { validatePlacement, roomLimitStatus, getGridSize, findAutoPlacement, PlacementCheck } from '../utils/placement';
-import { reviewsToGoText } from '../utils/construction';
-import { academyFurnitureEffect } from '../utils/formulas';
+import { computeConstructionPlan, reviewsToGoText } from '../utils/construction';
 import { formatMaterialCost } from '../utils/resourceReport';
 import { tamingRequirement } from './creatures/creatureArt';
 import { arrivalStage, arrivalStageLabel, originLabel } from '../utils/creatures';
@@ -587,15 +586,27 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
           if (pHit) {
             setHoverTip({ x: px, y: py, text: pHit.name });
           } else {
-            const cHit = worldRef.current.hitTestCreature(px, py);
-            if (cHit) {
-              const text = creatureHoverText(cHit);
-              setHoverTip({ x: px, y: py, text });
+            const sHit = worldRef.current.hitTestServant(px, py);
+            if (sHit) {
+              const act = worldRef.current.getServantActivity(sHit.servantId);
+              setHoverTip({ x: px, y: py, text: act ? `${sHit.name} · ${act}` : sHit.name });
             } else {
-              const hit = worldRef.current.hitTestRoom(px, py);
-              const buildSpeedPct = academyFurnitureEffect(latestRef.current.state.rooms, 'build_speed_pct');
-              const text = hit && hit.state === 'site' ? (hit.buildPaused ? `Paused · ${reviewsToGoText(hit, buildSpeedPct)}` : reviewsToGoText(hit, buildSpeedPct)) : null;
-              setHoverTip(prev => (text ? { x: px, y: py, text } : prev ? null : prev));
+              const cHit = worldRef.current.hitTestCreature(px, py);
+              if (cHit) {
+                const text = creatureHoverText(cHit);
+                setHoverTip({ x: px, y: py, text });
+              } else {
+                const hit = worldRef.current.hitTestRoom(px, py);
+                const plan = computeConstructionPlan(latestRef.current.state);
+                const slotRate = hit ? plan.find(j => j.roomId === hit.id)?.rate : undefined;
+                const text =
+                  hit && hit.state === 'site'
+                    ? hit.buildPaused
+                      ? `Paused · ${reviewsToGoText(hit, 0, slotRate)}`
+                      : reviewsToGoText(hit, 0, slotRate)
+                    : null;
+                setHoverTip(prev => (text ? { x: px, y: py, text } : prev ? null : prev));
+              }
             }
           }
         }
@@ -697,6 +708,21 @@ export const AcademyCanvas: React.FC<AcademyCanvasProps> = ({
       }
       if (clickedPerson.character) {
         onSelectPerson(clickedPerson.character.id);
+        return;
+      }
+    }
+
+    const clickedServant = world.hitTestServant(clickX, clickY);
+    if (clickedServant) {
+      const servant = (latestRef.current.state.servants || []).find(s => s.id === clickedServant.servantId);
+      const targetRoom =
+        (servant?.workplaceRoomId != null
+          ? latestRef.current.state.rooms.find(r => r.id === servant.workplaceRoomId)
+          : undefined) ||
+        latestRef.current.state.rooms.find(r => r.defId === 'summoning_chamber' && r.state === 'built') ||
+        world.hitTestRoom(clickX, clickY);
+      if (targetRoom) {
+        onSelectRoom(targetRoom);
         return;
       }
     }

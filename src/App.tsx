@@ -32,6 +32,7 @@ import { RoomWindow } from './components/RoomWindow';
 import { PersonCard } from './components/PersonCard';
 import { CreatureCard } from './components/CreatureCard';
 import { BuildModePanel } from './components/BuildModePanel';
+import { QueuePanel } from './components/QueuePanel';
 import { ScreenWindow } from './components/ScreenWindow';
 import { PonderOrbPicker, GrimoireBook } from './components/StudyModals';
 import { StoresPanel, JournalPanel, VisitorsPanel } from './components/AcademyPanels';
@@ -78,6 +79,7 @@ export default function App() {
   // A management screen opens in a window over it, from a room window or the Academy menu.
   const [openScreen, setOpenScreen] = useState<ScreenId | null>(null);
   const [buildModeOpen, setBuildModeOpen] = useState<boolean>(false);
+  const [queueOpen, setQueueOpen] = useState<boolean>(false);
 
   // Modals & Active Inspector State
   const [selectedRoom, setSelectedRoom] = useState<PlacedRoom | null>(null);
@@ -593,6 +595,59 @@ export default function App() {
     }
   };
 
+  const handleQueueSummonServant = () => {
+    const res = AnkicasterEngine.queueSummonServant(state);
+    if (!res.success) {
+      addToast(res.error || 'Cannot summon goblin servant', 'warning');
+    } else {
+      setState(res.state);
+      addToast(res.state.notices[res.state.notices.length - 1]?.text || 'Goblin summon queued!', 'success');
+      playChime('review');
+    }
+  };
+
+  const handleMoveWizardService = (index: number, direction: -1 | 1) => {
+    const res = AnkicasterEngine.moveWizardService(state, index, direction);
+    if (!res.success) {
+      addToast(res.error || 'Could not reorder service queue', 'warning');
+    } else {
+      setState(res.state);
+    }
+  };
+
+  const handleCancelWizardService = (index: number) => {
+    const res = AnkicasterEngine.cancelWizardService(state, index);
+    if (!res.success) {
+      addToast(res.error || 'Could not cancel service', 'warning');
+    } else {
+      setState(res.state);
+      const refText = (res.refundedMana || 0) > 0 ? ` Refunded ${res.refundedMana}m.` : '';
+      addToast(`Service cancelled.${refText}`, 'info');
+    }
+  };
+
+  const handleAssignServant = (servantId: number, roomId?: number) => {
+    const res = AnkicasterEngine.assignServant(state, servantId, roomId);
+    if (!res.success) {
+      addToast(res.error || 'Cannot assign servant', 'warning');
+    } else {
+      setState(res.state);
+      addToast(roomId == null ? 'Servant returned to idle.' : 'Servant assigned!', 'success');
+      playChime('review');
+    }
+  };
+
+  const handleSetWizardWorkshopAssigned = (assigned: boolean) => {
+    const res = AnkicasterEngine.setWizardWorkshopAssigned(state, assigned);
+    if (!res.success) {
+      addToast(res.error || 'Cannot update Wizard Workshop assignment', 'warning');
+    } else {
+      setState(res.state);
+      addToast(assigned ? 'Wizard assigned to Workshop construction crew.' : 'Wizard taken off Workshop construction.', 'info');
+      playChime('review');
+    }
+  };
+
   // Handler: Wizard Cast Spell
   const handleCastSpell = (spellId: string) => {
     const res = AnkicasterEngine.castSpell(state, spellId);
@@ -688,12 +743,38 @@ export default function App() {
       setPlacement(prev => (prev && (prev.kind === 'shelved' || prev.kind === 'build') ? null : prev));
       setBuildModeOpen(false);
     } else {
+      setQueueOpen(false);
       setOpenScreen(null);
       setSelectedRoom(null);
       setSelectedPersonId(null);
       setSelectedCreatureId(null);
       setPlacement(prev => (prev && prev.kind !== 'build' && prev.kind !== 'shelved' ? null : prev));
       setBuildModeOpen(true);
+    }
+  };
+
+  // Queue panel toggle (left edge, mutually exclusive with Build Mode shelf)
+  const handleToggleQueue = () => {
+    if (queueOpen) {
+      setQueueOpen(false);
+    } else {
+      if (buildModeOpen) {
+        const res = AnkicasterEngine.closeBuildMode(state);
+        if (res.releasedCount > 0) {
+          setState(res.state);
+          addToast(
+            `${res.releasedCount} creature${res.releasedCount === 1 ? '' : 's'} broke loose from shelved pens!`,
+            'warning'
+          );
+        }
+        setBuildModeOpen(false);
+        setPlacement(prev => (prev && (prev.kind === 'shelved' || prev.kind === 'build') ? null : prev));
+      }
+      setOpenScreen(null);
+      setSelectedRoom(null);
+      setSelectedPersonId(null);
+      setSelectedCreatureId(null);
+      setQueueOpen(true);
     }
   };
 
@@ -738,6 +819,12 @@ export default function App() {
   const handleMoveSite = (roomId: number, direction: -1 | 1) => {
     const res = AnkicasterEngine.moveConstruction(state, roomId, direction);
     if (res.success) setState(res.state);
+  };
+
+  const handleToggleSitePause = (roomId: number, paused: boolean) => {
+    const res = AnkicasterEngine.setConstructionPaused(state, roomId, paused);
+    if (!res.success) addToast(res.error || 'Cannot change this site', 'warning');
+    else setState(res.state);
   };
 
   const handlePlacementConfirm = (x: number, y: number) => {
@@ -1125,6 +1212,7 @@ export default function App() {
     setDemolishRoomId(null);
     setOpenScreen(null);
     setBuildModeOpen(false);
+    setQueueOpen(false);
     setSelectedPersonId(null);
     setSelectedCreatureId(null);
     setActiveEventModal(null);
@@ -1256,7 +1344,8 @@ export default function App() {
     isDaySummaryOpen,
     isDraftModalOpen,
     currentSelectedRoom,
-    placement
+    placement,
+    queueOpen
   });
   escapeStateRef.current = {
     isCreationModalOpen,
@@ -1271,7 +1360,8 @@ export default function App() {
     isDaySummaryOpen,
     isDraftModalOpen,
     currentSelectedRoom,
-    placement
+    placement,
+    queueOpen
   };
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1343,6 +1433,11 @@ export default function App() {
       if (s.placement !== null) {
         e.preventDefault();
         setPlacement(null);
+        return;
+      }
+      if (s.queueOpen) {
+        e.preventDefault();
+        setQueueOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -1399,6 +1494,8 @@ export default function App() {
           onOpenRoom={handleOpenRoomById}
           buildModeOpen={buildModeOpen}
           onToggleBuildMode={handleToggleBuildMode}
+          queueOpen={queueOpen}
+          onToggleQueue={handleToggleQueue}
           forceAcademy={!!view?.forceAcademy}
           onResolveVeil={() => setIsVeilModalOpen(true)}
           devControls={IS_DEV_MODE ? (
@@ -1414,7 +1511,7 @@ export default function App() {
       </div>
 
       {/* Main view: the castle map. Rooms are the navigation. */}
-      <main className={`flex-1 p-3 md:p-5 ${buildModeOpen ? 'md:pl-[332px] ' : ''}max-w-7xl mx-auto w-full transition-[padding]`}>
+      <main className={`flex-1 py-3 px-3 md:py-5 md:pr-5 ${buildModeOpen || queueOpen ? 'md:pl-[332px]' : 'md:pl-5'} max-w-7xl mx-auto w-full transition-[padding]`}>
         <CastleGrid
           state={state}
           buildModeOpen={buildModeOpen}
@@ -1460,6 +1557,19 @@ export default function App() {
           onOpenDraft={() => handleOpenScreen('draft')}
           onMoveSite={handleMoveSite}
           onClose={handleToggleBuildMode}
+        />
+      )}
+
+      {/* Fixed left-edge Queue Panel (Build queue + Services queue) */}
+      {queueOpen && (
+        <QueuePanel
+          state={state}
+          onMoveSite={handleMoveSite}
+          onTogglePause={handleToggleSitePause}
+          onMoveService={handleMoveWizardService}
+          onCancelService={handleCancelWizardService}
+          onOpenRoom={handleOpenRoomById}
+          onClose={handleToggleQueue}
         />
       )}
 
@@ -1530,6 +1640,9 @@ export default function App() {
           onSetGlassworksActive={handleSetGlassworksActive}
           onResearchRecipe={handleResearchRecipe}
           onStartScrollCraft={handleStartScrollCraft}
+          onQueueSummonServant={handleQueueSummonServant}
+          onAssignServant={handleAssignServant}
+          onSetWizardWorkshopAssigned={handleSetWizardWorkshopAssigned}
           onUpgrade={roomId => {
             const res = AnkicasterEngine.upgradeRoom(state, roomId);
             if (!res.success) addToast(res.error || 'Upgrade failed', 'warning');
@@ -1578,11 +1691,7 @@ export default function App() {
             setPlacement({ kind: 'move', roomId });
           }}
           onDemolish={roomId => setDemolishRoomId(roomId)}
-          onTogglePause={(roomId, paused) => {
-            const res = AnkicasterEngine.setConstructionPaused(state, roomId, paused);
-            if (!res.success) addToast(res.error || 'Cannot change this site', 'warning');
-            else setState(res.state);
-          }}
+          onTogglePause={handleToggleSitePause}
           onChangeLook={() => { setSelectedRoom(null); setLookOnly(true); setIsCreationModalOpen(true); }}
           onRemoveFurniture={(roomId, fId) => {
             const res = AnkicasterEngine.removeFurniture(state, roomId, fId);

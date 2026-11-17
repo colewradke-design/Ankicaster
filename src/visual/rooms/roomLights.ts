@@ -120,6 +120,10 @@ export function glassFanlightPane(b: Box): Pane {
 export function alchemyPane(b: Box): Pane {
   return { x: b.left + 58, y: top(b) + 10, w: 5, h: 14, shape: 'rect' };
 }
+/** Summoning Chamber L3: tall violet summoning window centered above the ritual dais. */
+export function summoningPane(b: Box): Pane {
+  return { x: mid(b) - 5, y: top(b) + 4, w: 10, h: 14, shape: 'arch' };
+}
 /** Generic L3 stained lancet kept for the rooms still waiting on the furniture pass. */
 export function lancetPane(b: Box): Pane {
   return { x: b.left + 11, y: top(b) + 5, w: 8, h: 11, shape: 'rect' };
@@ -245,7 +249,8 @@ const FURNITURE_LIGHTS: Record<string, { fx: number; fy: number; r: number; colo
   nightglass: { fx: 0.5, fy: 0.5, r: 7, color: 0x9cb4ff, kind: 'magic' },
   ward_circle: { fx: 0.5, fy: 0.85, r: 8, color: 0x5fc2c2, kind: 'magic' },
   geode_bed: { fx: 0.5, fy: 0.4, r: 7, color: 0x9c86e0, kind: 'magic' },
-  artifact_plinth: { fx: 0.5, fy: 0.1, r: 6, color: 0xf7e39a, kind: 'magic' }
+  artifact_plinth: { fx: 0.5, fy: 0.1, r: 6, color: 0xf7e39a, kind: 'magic' },
+  summoning_circle: { fx: 0.5, fy: 0.78, r: 10, color: 0x9bd4ff, kind: 'magic' }
 };
 
 export function furnitureLightSpec(defId: string) {
@@ -328,6 +333,9 @@ export function roomLights(room: PlacedRoom, box: Box, opts: RoomLightOpts = {})
       break;
     case 'glassworks':
       if (level >= 3) out.push(paneLight('prism_fanlight', glassFanlightPane(box), 0xf7c08a));
+      break;
+    case 'summoning_chamber':
+      if (level >= 3) out.push(paneLight('summoning_astral_pane', summoningPane(box), 0xc9b7ff));
       break;
 
     // --- rooms still waiting on the furniture pass: only their drawn fixtures light ---

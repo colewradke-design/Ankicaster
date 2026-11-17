@@ -90,7 +90,7 @@ import {
   ChevronRight,
   UserCheck
 } from 'lucide-react';
-import { constructionSites, reviewsToGoText } from '../utils/construction';
+import { computeConstructionPlan, constructionSites, reviewsToGoText } from '../utils/construction';
 import { blueprintLockHint, isRoomUnlocked, isStructure } from '../utils/engine';
 import { DECK_LIST, deckPrice, magicSchoolOdds } from '../utils/decks';
 import { canAffordMaterials, formatMaterialCost } from '../utils/resourceReport';
@@ -160,7 +160,6 @@ export const RosterPanel: React.FC<{
       career === 'healer' ? `+${pct}% Injury Healing Speed (cap +25%)` :
       career === 'warder' ? `-${pct}% Daily Veil Cost (cap -15%)` :
       career === 'alchemist' ? `+${pct}% Potion Yield (cap +25%)` :
-      career === 'builder' ? `-${pct}% Build Time (cap -15%)` :
       career === 'adventurer' ? `+${Number((al.bonusValue || 0).toFixed(2))} Rift Fortune (cap +3)` :
       `+${pct}% Student Need Comfort`;
     return extraRenown > 0 ? `${baseText} · +${extraRenown} Term-Persistent Renown` : baseText;
@@ -206,7 +205,6 @@ export const RosterPanel: React.FC<{
                 {alumniSummary.healerHealingPct > 0 && <span className="px-2 py-0.5 rounded bg-slate-800 text-rose-200">Healing +{Math.round(alumniSummary.healerHealingPct * 100)}%</span>}
                 {alumniSummary.warderVeilReductionPct > 0 && <span className="px-2 py-0.5 rounded bg-slate-800 text-indigo-200">Veil -{Math.round(alumniSummary.warderVeilReductionPct * 100)}%</span>}
                 {alumniSummary.alchemistPotionPct > 0 && <span className="px-2 py-0.5 rounded bg-slate-800 text-orange-200">Potions +{Math.round(alumniSummary.alchemistPotionPct * 100)}%</span>}
-                {alumniSummary.builderBuildTimePct > 0 && <span className="px-2 py-0.5 rounded bg-slate-800 text-yellow-200">Build -{Math.round(alumniSummary.builderBuildTimePct * 100)}%</span>}
                 {alumniSummary.adventurerFortune > 0 && <span className="px-2 py-0.5 rounded bg-slate-800 text-purple-200">Fortune +{alumniSummary.adventurerFortune}</span>}
                 {alumniSummary.totalExtraSchoolsRenown > 0 && <span className="px-2 py-0.5 rounded bg-slate-800 text-amber-300">+{alumniSummary.totalExtraSchoolsRenown} Polymath Renown</span>}
               </div>
@@ -457,7 +455,7 @@ export const RosterPanel: React.FC<{
                   return !!sch && selectedChar.masteredSchools.includes(sch);
                 });
                 const canBeTeacher = matchingClassrooms.length > 0;
-                const careerList = (['teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist', 'builder', 'adventurer'] as CareerType[])
+                const careerList = (['teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist', 'adventurer'] as CareerType[])
                   .filter(car => car !== 'teacher' || canBeTeacher || selectedChar.career === 'teacher');
                 return (
                 <div className="bg-slate-900 border border-amber-900/40 p-4 rounded-xl space-y-3" data-testid="career-picker">
@@ -660,7 +658,9 @@ export const BuildMenuPanel: React.FC<{
 }> = ({ state, onPlaceRoom, onAutoPlace, onOpenDraft, onMoveSite, compact = false }) => {
   const [category, setCategory] = useState<string>('all');
   const roomList = Object.values(ROOM_DEFINITIONS);
-  const listed = roomList.filter(r => isStructure(r.id) || (state.roomPlans?.[r.id] || 0) > 0);
+  const listed = roomList.filter(
+    r => isStructure(r.id) || (r.id === 'summoning_chamber' && isRoomUnlocked(state, 'summoning_chamber')) || (state.roomPlans?.[r.id] || 0) > 0
+  );
   const hasPlans = Object.values(state.roomPlans || {}).some(n => (n || 0) > 0);
   const tabs = ['all', 'core', 'living', 'arcane', 'nature', 'light', 'shadow', 'alchemy', 'craft', 'rift', 'grounds'].filter(cat => {
     if (cat === 'all') return listed.length > 0;
@@ -676,7 +676,7 @@ export const BuildMenuPanel: React.FC<{
   );
 
   const sites = constructionSites(state.rooms);
-  const assignments = AnkicasterEngine.constructionAssignments(state);
+  const assignments = computeConstructionPlan(state);
   const rateById = new Map(assignments.map(a => [a.roomId, a.rate]));
 
   return (
@@ -767,8 +767,11 @@ export const BuildMenuPanel: React.FC<{
                   <span className="text-xs text-slate-400 capitalize">{room.area} ({room.size.join('x')})</span>
                 </div>
                 <p className="text-xs text-slate-300 mb-2 line-clamp-2 leading-relaxed">{room.description}</p>
-                {!structure && !founding && (
+                {!structure && !founding && room.id !== 'summoning_chamber' && (
                   <div className="text-xs font-mono text-amber-200/90 mb-1" data-testid="plan-count">{plans} plan{plans === 1 ? '' : 's'}</div>
+                )}
+                {room.id === 'summoning_chamber' && (
+                  <div className="text-xs font-mono text-emerald-300/90 mb-1" data-testid="standard-plan-badge">Standard plan</div>
                 )}
                 <div className="text-xs text-slate-400 font-mono mb-2">
                   Cost: <strong className="text-amber-300">{costLine}</strong>

@@ -20,7 +20,8 @@ import { ROOM_DEFINITIONS, roomDisplayName } from '../../data/content';
 import { Camera } from './Camera';
 import { NavGraph } from '../layout/navGraph';
 import { Choreographer, VisualAgent } from '../agents/Choreographer';
-import { describePersonActivity } from '../agents/personActivity';
+import { ServantChoreographer, ServantVisualAgent } from '../agents/ServantChoreographer';
+import { describePersonActivity, describeServantActivity } from '../agents/personActivity';
 import { ForgeRenderer } from '../sprites/forge/ForgeRenderer';
 import { computeReachability, ReachabilityInfo } from '../../utils/reachability';
 import {
@@ -36,12 +37,11 @@ import { unlockedPlotIndices } from '../../utils/groundsLayout';
 import { drawRoomInterior, drawEmitter, drawAnimatedItem, Emitter, AnimatedItem, roomTier, TIERS, vaultFillStep } from '../rooms/roomArt';
 import { drawSite } from '../rooms/siteArt';
 import { isRoomUnfinished } from '../../utils/requiredFurniture';
-import { academyFurnitureEffect } from '../../utils/formulas';
 import { drawDirt, dirtLevel, drawLockHazard, drawPadlock, drawWrench, drawDirtyBadge, drawRing, drawUnfinishedBadge } from '../rooms/statusArt';
 import { drawEffect, VisualEffect, EFFECT_MS } from '../rooms/effects';
-import { reviewsToGo, siteFraction } from '../../utils/construction';
+import { computeConstructionPlan, reviewsToGo, siteFraction } from '../../utils/construction';
 import { hexToNum } from '../../utils/appearance';
-import { chooseBubble, drawBubble, bubbleLabel, BubbleKind, appearanceToLayers, drawPortraitSource, zoomAbout } from '../agents/doll';
+import { chooseBubble, drawBubble, bubbleLabel, BubbleKind, appearanceToLayers, drawPortraitSource, drawGoblinServant, zoomAbout } from '../agents/doll';
 import { CAPPED_RESOURCES, resourceLabel, storageCap } from '../../utils/resourceReport';
 import { CreatureChoreographer, CreatureVisualAgent } from '../creatures/creatureChoreographer';
 import { describeCreatureActivity } from '../creatures/creatureActivity';
@@ -166,6 +166,7 @@ export class VisualWorld {
   camera: Camera;
   navGraph: NavGraph;
   choreographer: Choreographer;
+  servantChoreographer: ServantChoreographer;
   creatureChoreographer: CreatureChoreographer;
   riftReturningUntilMs = 0;
   private prevExpeditionActive = false;
@@ -189,6 +190,7 @@ export class VisualWorld {
     this.camera = new Camera(2);
     this.navGraph = new NavGraph([], 400);
     this.choreographer = new Choreographer(this.navGraph, 400);
+    this.servantChoreographer = new ServantChoreographer(this.navGraph, 400);
     this.creatureChoreographer = new CreatureChoreographer(this.navGraph, 400, 1600);
 
     // Setup hierarchy
@@ -304,6 +306,8 @@ export class VisualWorld {
     this.navGraph.build(state.rooms, this.groundY);
     this.choreographer.updateNavGraph(this.navGraph, this.groundY);
     this.choreographer.syncState(state, engineReach);
+    this.servantChoreographer.updateNavGraph(this.navGraph, this.groundY);
+    this.servantChoreographer.syncState(state, engineReach);
     this.creatureChoreographer.updateBounds(this.navGraph, this.groundY, this.totalWorldWidth);
     this.creatureChoreographer.syncState(state, buildModeOpen);
 
@@ -441,7 +445,7 @@ export class VisualWorld {
     const activeExp = this.state.expeditions?.find(e => e.state === 'active');
     const riftReturning = !this.state.settings.reduceMotion && this.clockMs < this.riftReturningUntilMs;
     const riftVisualState = getRiftGateVisualState(this.state, riftReturning);
-    const buildSpeedPct = academyFurnitureEffect(rooms, 'build_speed_pct');
+    const siteRateMap = new Map(computeConstructionPlan(this.state).map(job => [job.roomId, job.rate]));
     const reachableIds = new Set<number>();
     for (const [id, info] of this.reachability.entries()) {
       if (info.reachable) reachableIds.add(id);
@@ -506,10 +510,10 @@ export class VisualWorld {
         const site = drawSite(this.castleGraphics, room, box, { robeColor });
         this.ambientGroups.push({ animate: !site.paused, emitters: site.emitters, items: [] });
         ForgeRenderer.drawRoomStatus(this.statusGraphics, box, isReachable, isSelected, room.area);
-        // Progress ring at the top-right + the same countdown the Build panel shows
+        // Progress ring at the top-right + the same countdown the Queue panel shows
         const rx = box.left + box.width - 10, ry = box.top + 11;
         drawRing(this.statusGraphics, rx, ry, 6, siteFraction(room), site.paused ? 0xb9b8c2 : 0x7dd87a);
-        const n = reviewsToGo(room, buildSpeedPct);
+        const n = reviewsToGo(room, 0, siteRateMap.get(room.id));
         this.overlayLabels.push({ key: `site:${room.id}`, text: `${n} to go`, wx: rx, wy: ry + 9, color: 0xffffff, size: 10, align: 'center' });
         if (site.ribbon) this.overlayLabels.push({ key: `paused:${room.id}`, text: 'Paused', wx: site.ribbon.x, wy: site.ribbon.y - 4, color: 0xf6e08c, size: 10, align: 'center' });
       }
@@ -1370,6 +1374,7 @@ export class VisualWorld {
 
     // One clock. A second callback with the same `now` adds nothing (stacked tickers, re-renders).
     this.choreographer.tick(gap, this.state, reduceMotion, nowMs);
+    this.servantChoreographer.tick(gap, this.state, reduceMotion, nowMs);
     this.creatureChoreographer.tick(gap, this.state, reduceMotion, this.choreographer.agents, nowMs);
 
     // Detect meal window transition in Choreographer (debounced in eventDispatcher to 1 per 5 min)
@@ -1406,13 +1411,29 @@ export class VisualWorld {
     this.renderAtmosphereAndLighting();
     this.renderEventVignettes();
 
-    // Draw characters & creatures sorted by baseline y
+    // Draw characters, servants & creatures sorted by baseline y
     this.agentsGraphics.clear();
     const drawQueue: Array<{ y: number; draw: () => void }> = [];
     for (const agent of this.choreographer.agents.values()) {
       drawQueue.push({
         y: agent.y,
-        draw: () => ForgeRenderer.drawPaperDoll(this.agentsGraphics, agent)
+        draw: () => ForgeRenderer.drawPaperDoll(this.agentsGraphics, agent, this.clockMs, reduceMotion)
+      });
+    }
+    for (const sAgent of this.servantChoreographer.agents.values()) {
+      drawQueue.push({
+        y: sAgent.y,
+        draw: () =>
+          drawGoblinServant(this.agentsGraphics, sAgent.look, {
+            x: sAgent.x,
+            y: sAgent.y,
+            facing: sAgent.facing,
+            anim: sAgent.anim,
+            frame: sAgent.frame,
+            tool: sAgent.tool,
+            clockMs: this.clockMs,
+            reduceMotion
+          })
       });
     }
     for (const cAgent of this.creatureChoreographer.agents.values()) {
@@ -1518,6 +1539,31 @@ export class VisualWorld {
     const creature = this.state.creatures.find(c => c.id === creatureId);
     if (!creature) return '';
     return describeCreatureActivity(this.creatureChoreographer.agents.get(creatureId), creature, this.state);
+  }
+
+  hitTestServant(screenX: number, screenY: number): ServantVisualAgent | null {
+    if (!this.state) return null;
+    const worldX = (screenX - this.worldContainer.x) / this.camera.zoom;
+    const worldY = (screenY - this.worldContainer.y) / this.camera.zoom;
+    const list = Array.from(this.servantChoreographer.agents.values()).sort((a, b) => b.y - a.y);
+    for (const sAgent of list) {
+      if (
+        worldX >= sAgent.x - 9 &&
+        worldX <= sAgent.x + 9 &&
+        worldY >= sAgent.y - 22 &&
+        worldY <= sAgent.y + 4
+      ) {
+        return sAgent;
+      }
+    }
+    return null;
+  }
+
+  getServantActivity(servantId: number): string {
+    if (!this.state) return '';
+    const servant = (this.state.servants || []).find(s => s.id === servantId);
+    if (!servant) return '';
+    return describeServantActivity(servant, this.servantChoreographer.agents.get(`servant-${servantId}`), this.state);
   }
 
   hitTestCreature(screenX: number, screenY: number): CreatureVisualAgent | null {

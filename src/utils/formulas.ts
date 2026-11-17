@@ -539,7 +539,6 @@ export const FURNITURE_EFFECTS: Record<string, FurnitureEffectDef> = {
   shadow_ledger: { kind: 'hazard_chance_pct', value: -8, scope: 'academy' },
   nightglass: { kind: 'creature_bond_pct', value: 10, scope: 'room' },
   alembic_array: { kind: 'brew_speed_pct', value: 10, scope: 'room' },
-  tool_wall: { kind: 'build_speed_pct', value: 5, scope: 'academy' },
   supply_chest: { kind: 'rift_supply_slots', value: 1, scope: 'academy' },
   artifact_plinth: { kind: 'renown_bonus', value: 2, scope: 'room' },
   garden_gnome: { kind: 'hazard_chance_pct', value: -10, scope: 'grounds' },
@@ -753,7 +752,6 @@ export const CAREER_AFFINITY: Record<CareerType, CareerAffinityDef> = {
   healer: { homeSchool: 'light', broadPct: 5, focusedPct: 10, broadLabel: 'everyone', focusedNoun: 'characters' },
   warder: { homeSchool: 'shadow', broadPct: 5, focusedPct: 10, broadLabel: 'all hazard/ward effects', focusedNoun: 'hazards' },
   scholar: { homeSchool: 'arcane', broadPct: 5, focusedPct: 10, broadLabel: 'research/study output', focusedNoun: 'research' },
-  builder: { homeSchool: null, broadPct: 0, focusedPct: 0, broadLabel: '', focusedNoun: '' },
   teacher: { homeSchool: null, broadPct: 0, focusedPct: 0, broadLabel: '', focusedNoun: '' },
   adventurer: { homeSchool: null, broadPct: 0, focusedPct: 0, broadLabel: '', focusedNoun: '' }
 };
@@ -792,7 +790,6 @@ function capSchool(s: SchoolType): string {
  */
 export function describeCareerAffinity(masteredSchools: SchoolType[], career: CareerType): string {
   if (career === 'teacher') return 'Teaches mastered school classrooms only (no affinity bonus)';
-  if (career === 'builder') return 'No school bonus';
   if (career === 'adventurer') return 'No school bonus';
   const def = CAREER_AFFINITY[career];
   if (!def || (def.broadPct === 0 && def.focusedPct === 0) || masteredSchools.length === 0) {
@@ -807,7 +804,7 @@ export function describeCareerAffinity(masteredSchools: SchoolType[], career: Ca
 }
 
 export const FACULTY_CAREERS: CareerType[] = [
-  'teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist', 'builder'
+  'teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist'
 ];
 
 export function getFacultySummary(state: FullGameState, excludeCharId?: number) {
@@ -863,7 +860,6 @@ export interface AlumniBonusesSummary {
   healerHealingPct: number;
   warderVeilReductionPct: number;
   alchemistPotionPct: number;
-  builderBuildTimePct: number;
   adventurerFortuneRaw: number;
   adventurerFortune: number;
   residentSchoolEssencePct: Record<SchoolType, number>;
@@ -898,7 +894,6 @@ export function computeAlumniBonuses(alumniGallery: FullGameState['alumniGallery
     healerHealingPct: 0,
     warderVeilReductionPct: 0,
     alchemistPotionPct: 0,
-    builderBuildTimePct: 0,
     adventurerFortuneRaw: 0,
     adventurerFortune: 0,
     residentSchoolEssencePct: { arcane: 0, nature: 0, light: 0, shadow: 0, alchemy: 0 },
@@ -940,10 +935,6 @@ export function computeAlumniBonuses(alumniGallery: FullGameState['alumniGallery
       case 'alchemist':
       case 'alchemist_yield':
         summary.alchemistPotionPct += val > 0 ? val : 0.02 * scale;
-        break;
-      case 'builder':
-      case 'builder_speed':
-        summary.builderBuildTimePct += val > 0 ? val : 0.01 * scale;
         break;
       case 'adventurer':
       case 'adventurer_fortune':
@@ -997,7 +988,6 @@ export function computeAlumniBonuses(alumniGallery: FullGameState['alumniGallery
   summary.healerHealingPct = Math.min(ALUMNI_BONUS_CAPS.healer, summary.healerHealingPct);
   summary.warderVeilReductionPct = Math.min(ALUMNI_BONUS_CAPS.warder, summary.warderVeilReductionPct);
   summary.alchemistPotionPct = Math.min(ALUMNI_BONUS_CAPS.alchemist, summary.alchemistPotionPct);
-  summary.builderBuildTimePct = Math.min(ALUMNI_BONUS_CAPS.builder, summary.builderBuildTimePct);
   summary.adventurerFortune = Math.min(ALUMNI_BONUS_CAPS.adventurer_fortune, Math.floor(summary.adventurerFortuneRaw + 1e-9));
   for (const sch of ALL_SCHOOLS_LIST) {
     summary.residentSchoolEssencePct[sch] = Math.min(ALUMNI_BONUS_CAPS.resident_per_school, summary.residentSchoolEssencePct[sch]);

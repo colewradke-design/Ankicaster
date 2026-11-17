@@ -526,21 +526,32 @@ function isPenDef(defId: string): boolean {
 
 /**
  * Finds a point inside the nearest built reachable room touching `site` (never inside the unbuilt footprint).
+ * `slotIndex` (0..3) spreads multiple construction crew workers apart along the touching edge.
  */
 export function findBuilderSiteEdgeAnchor(
   site: PlacedRoom,
   state: FullGameState,
   reachMap: Map<number, ReachabilityInfo> | undefined,
-  groundY: number
+  groundY: number,
+  slotIndex = 0
 ): RoomAnchor | undefined {
   const isReach = (id: number) => (reachMap ? reachMap.get(id)?.reachable !== false : true);
   const built = (state.rooms || []).filter(r => r.state === 'built' && isReach(r.id));
+  if (built.length === 0) return undefined;
   const touching = built.filter(r => roomsShareEdge(r, site));
-  if (touching.length === 0) return undefined;
-  const preferred = touching.find(r => r.defId !== 'wizard_study') ?? touching[0];
+  let preferred = touching.find(r => r.defId !== 'wizard_study') ?? touching[0];
+  if (!preferred) {
+    if (site.area === 'grounds') {
+      preferred = built.find(r => r.defId === 'entrance_hall') ?? built.find(r => r.y === 0) ?? built[0];
+    } else {
+      return undefined;
+    }
+  }
   const box = roomToWorldBox(preferred, groundY);
   let targetX = box.left + box.width / 2;
   let worldFloor = preferred.area === 'castle' ? preferred.y : 0;
+  const idx = Math.max(0, Math.min(3, Math.floor(slotIndex)));
+  const centerSpread = [-18, -6, 6, 18][idx];
 
   if (preferred.area === 'castle' && site.area === 'castle') {
     const overlapMinY = Math.max(preferred.y, site.y);
@@ -549,24 +560,38 @@ export function findBuilderSiteEdgeAnchor(
       worldFloor = overlapMinY;
     }
     if (preferred.x + preferred.w === site.x) {
-      targetX = box.left + box.width - 12;
+      targetX = box.left + box.width - 12 - idx * 12;
     } else if (site.x + site.w === preferred.x) {
-      targetX = box.left + 12;
+      targetX = box.left + 12 + idx * 12;
+    } else {
+      targetX = box.left + box.width / 2 + centerSpread;
     }
   } else if (preferred.area === 'grounds' && site.area === 'grounds') {
     worldFloor = 0;
     if (preferred.x + preferred.w === site.x) {
-      targetX = box.left + box.width - 14;
+      targetX = box.left + box.width - 14 - idx * 12;
     } else if (site.x + site.w === preferred.x) {
-      targetX = box.left + 14;
+      targetX = box.left + 14 + idx * 12;
+    } else {
+      targetX = box.left + box.width / 2 + centerSpread;
+    }
+  } else {
+    // Grounds site adjacent to ground-floor castle (e.g. Entrance Hall)
+    const siteBox = roomToWorldBox(site, groundY);
+    if (siteBox.left + siteBox.width <= box.left) {
+      targetX = box.left + 12 + idx * 12;
+    } else if (siteBox.left >= box.left + box.width) {
+      targetX = box.left + box.width - 12 - idx * 12;
+    } else {
+      targetX = box.left + box.width / 2 + centerSpread;
     }
   }
 
   return {
-    id: `r-${preferred.id}-site_edge-${site.id}`,
+    id: `r-${preferred.id}-site_edge-${site.id}-s${idx}`,
     roomId: preferred.id,
     kind: 'site_edge',
-    index: 0,
+    index: idx,
     x: clampRoomX(targetX, box.left, box.width, 10),
     y: preferred.area === 'castle' ? getFloorLineY(worldFloor, groundY) : box.floorLineY,
     floor: worldFloor

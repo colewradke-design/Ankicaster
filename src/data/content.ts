@@ -119,7 +119,7 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     requiredFurniture: [{ role: 'shelving', count: 1, name: 'Shelving' }],
     optionalSlots: 2,
     stats: { primary: ['order', 'order'], secondary: 'aura' },
-    level3Perk: 'Auto-sorts vault; builders clean +1 cleanliness per bell.',
+    level3Perk: 'Auto-sorts vault.',
     description: '+100 storage for common materials.'
   },
 
@@ -677,12 +677,11 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     cost: { mana: 500, timber: 40, stone: 20 },
     buildReviews: 60,
     veil: 5,
-    workplace: { career: 'builder', slots: 2 },
     requiredFurniture: [{ role: 'workbench', count: 1, name: 'Workbench' }],
     optionalSlots: 3,
     stats: { primary: ['order', 'focus'], secondary: 'aura' },
-    level3Perk: 'Builder slots advance 1.4 per review.',
-    description: 'Each Builder adds a construction slot. Idle builders keep the school clean.'
+    level3Perk: 'Crew workers advance 1.5 progress per honest review.',
+    description: 'Hub for the construction crew. Assign servants (and optionally the Wizard) to work build sites; Lv 1/2/3 yields 1/1.25/1.5 progress per worker.'
   },
   glassworks: {
     id: 'glassworks',
@@ -926,6 +925,38 @@ export const ROOM_DEFINITIONS: Record<string, RoomDefinition> = {
     optionalSlots: 1,
     stats: { primary: ['aura', 'comfort'], secondary: 'charm' },
     description: 'Infused with starlight: accelerates injury healing by +20% and raises Composure.'
+  },
+  summoning_chamber: {
+    id: 'summoning_chamber',
+    name: 'Summoning Chamber',
+    category: 'core',
+    area: 'castle',
+    size: [2, 1],
+    unlock: { type: 'standard' },
+    cost: { mana: 400, timber: 30, stone: 25, reagents: 10 },
+    buildReviews: 50,
+    veil: 4,
+    requiredFurniture: [{ role: 'summoning_circle', count: 1, name: 'Summoning Circle' }],
+    optionalSlots: 2,
+    stats: { primary: ['aura', 'order'], secondary: 'focus' },
+    level3Perk: 'Lv 2 reduces summoning mana by 20%; Lv 3 drops summoning reviews to 20.',
+    description: 'Unlocks when any school reaches Lv 5. Summons tireless goblin servants to work Academy rooms.'
+  },
+  janitors_closet: {
+    id: 'janitors_closet',
+    name: "Janitor's Closet",
+    category: 'core',
+    area: 'castle',
+    size: [1, 1],
+    unlock: { type: 'draft', rarity: 'common' },
+    cost: { mana: 200, timber: 20 },
+    buildReviews: 30,
+    veil: 2,
+    requiredFurniture: [{ role: 'broom_cupboard', count: 1, name: 'Broom Cupboard' }],
+    optionalSlots: 1,
+    stats: { primary: ['order', 'comfort'], secondary: 'order' },
+    level3Perk: 'Houses up to 3 janitors at Lv 3 (1 at Lv 1, 2 at Lv 2).',
+    description: 'Dispatches assigned servants to clean the dirtiest built rooms one by one.'
   }
 };
 
@@ -1899,14 +1930,35 @@ export const FURNITURE_DEFINITIONS: Record<string, FurnitureDefinition> = {
   },
   tool_wall: {
     id: 'tool_wall',
-    name: 'Master Builder Tool Wall',
+    name: 'Workshop Tool Wall',
     deck: 'foundation',
     role: 'optional',
     slots: 1,
     cost: { mana: 90, timber: 8, stone: 3 },
     stats: { order: 2 },
-    specialEffect: 'Builder career construction speed +5%',
     rooms: ['workshop'],
+    unlock: { type: 'std' }
+  },
+  summoning_circle: {
+    id: 'summoning_circle',
+    name: 'Summoning Circle',
+    deck: 'foundation',
+    role: 'required',
+    slots: 1,
+    cost: { mana: 120, stone: 10, timber: 5 },
+    stats: { aura: 3, order: 2 },
+    rooms: ['summoning_chamber'],
+    unlock: { type: 'std' }
+  },
+  broom_cupboard: {
+    id: 'broom_cupboard',
+    name: 'Broom Cupboard',
+    deck: 'foundation',
+    role: 'required',
+    slots: 1,
+    cost: { mana: 60, timber: 10 },
+    stats: { order: 2 },
+    rooms: ['janitors_closet'],
     unlock: { type: 'std' }
   },
   kiln: {
@@ -3695,7 +3747,7 @@ export const TRAIT_DEFINITIONS: Record<string, TraitDefinition> = {
   'Kind Heart': { id: 'Kind Heart', name: 'Kind Heart', category: 'positive', effect: '+3 Composure per bell to dorm roommates' },
   'Iron Stomach': { id: 'Iron Stomach', name: 'Iron Stomach', category: 'positive', effect: 'Hunger decays 30% slower' },
   'Lucky': { id: 'Lucky', name: 'Lucky', category: 'positive', effect: '+1 loot roll on successful expeditions; -20% chance of hazard hits' },
-  'Quick Hands': { id: 'Quick Hands', name: 'Quick Hands', category: 'positive', effect: 'Builder construction speed & Alchemist brewing speed +15%' },
+  'Quick Hands': { id: 'Quick Hands', name: 'Quick Hands', category: 'positive', effect: 'Alchemist brewing speed +15%' },
   'Steady Hand': { id: 'Steady Hand', name: 'Steady Hand', category: 'positive', effect: 'Alchemy Lab explosion chance -50% when present' },
   'Sunny': { id: 'Sunny', name: 'Sunny', category: 'positive', effect: '+5 morale; +2 Composure per bell to classmates' },
   'Warded': { id: 'Warded', name: 'Warded', category: 'positive', effect: 'Immune to Hexed injuries' },
@@ -4150,7 +4202,6 @@ export const ALUMNI_BONUS_CAPS = {
   healer: 0.20,
   warder: 0.10,
   alchemist: 0.20,
-  builder: 0.10,
   adventurer_fortune: 1,
   resident_per_school: 0.10
 } as const;

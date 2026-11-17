@@ -910,6 +910,26 @@ export function drawDressing(g: Painter, room: PlacedRoom, box: Box, tint: numbe
       g.rect(cx - 10, B - 1, 20, 1.5).fill({ color: 0xb8402a });
       g.rect(L + 6, B - 1, W - 12, 1).fill({ color: 0xb8402a });
       break;
+    case 'summoning_chamber':
+      // Slate ritual dais band & hanging summoning sigil banners; ring itself comes from required Summoning Circle slot
+      g.rect(cx - 26, B - 2, 52, 2).fill({ color: STONE[1] });
+      for (const bx of [L + 14, R - 14]) {
+        g.rect(bx - 4, T + 4, 8, 12).fill({ color: 0x2f254f });
+        glyph(g, 'star8', bx, T + 10, 2, 0x9bd4ff);
+      }
+      em.push({ kind: 'twinkle', x: cx, y: B - 12, color: 0x9bd4ff });
+      break;
+    case 'janitors_closet':
+      // Wall utility hooks, wooden mop bucket, and tidy rag shelf
+      g.rect(L + 6, T + 8, W - 12, 1.5).fill({ color: WOOD[1] });
+      for (const hx of [L + 12, L + 24, R - 14]) {
+        g.rect(hx - 0.6, T + 9.5, 1.2, 4).fill({ color: 0x3b3a40 });
+      }
+      g.rect(R - 18, B - 6, 8, 6).fill({ color: WOOD[2] });
+      g.rect(R - 18, B - 6, 8, 1.5).fill({ color: 0x8a8994 });
+      g.ellipse(R - 14, B - 6, 3.5, 1).fill({ color: 0x9cd4ff, alpha: 0.7 });
+      em.push({ kind: 'twinkle', x: cx, y: B - 10, color: 0xf6f1e8 });
+      break;
     default: {
       // GDD rooms without a bespoke dressing yet (e.g. future school halls): a category banner
       const bx = L + 10;

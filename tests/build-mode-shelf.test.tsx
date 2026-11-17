@@ -384,7 +384,7 @@ test('CreatureCard, adventurer pairing, Rift auto-preselect, releaseCreature, Bu
   assert.match(cardHtml, /data-testid="creature-release-btn"/);
 
   // Switching adventurer career away clears creature pairing
-  const careerSwitch = AnkicasterEngine.assignCareer(s, adv.id, 'builder');
+  const careerSwitch = AnkicasterEngine.assignCareer(s, adv.id, 'scholar');
   assert.equal(careerSwitch.success, true, careerSwitch.error);
   assert.equal(careerSwitch.state.creatures[0].adventurerId, undefined);
 

@@ -16,8 +16,25 @@ export type CareerType =
   | 'healer'
   | 'warder'
   | 'alchemist'
-  | 'builder'
   | 'adventurer';
+
+export interface ServantLook {
+  seed: number;
+  skin: string;
+  ears: 'pointed' | 'long' | 'floppy';
+  tunicColor: string;
+  apronColor: string;
+  accessory: 'cap' | 'goggles' | 'scarf' | 'none';
+}
+
+export interface ServantInstance {
+  id: number;
+  name: string;
+  look: ServantLook;
+  workplaceRoomId?: number;
+  cleaningRoomId?: number;
+  arrivedDay: number;
+}
 
 export type PersonalityType =
   | 'Bookish'
@@ -550,12 +567,14 @@ export interface WizardState {
   academyName: string;
   levels: Record<SchoolType, number>;
   studyLevel: number;
+  workshopAssigned?: boolean;
   activeSession?: {
     id: number;
-    kind: 'orb' | 'grimoire';
-    school: SchoolType;
+    kind: 'orb' | 'grimoire' | 'summon';
+    school?: SchoolType;
     targetLevel?: number;
     spellId?: string;
+    summonTier?: 1 | 2 | 3;
     progress: number;
     required: number;
     costPaid: number;
@@ -563,10 +582,12 @@ export interface WizardState {
   };
   queuedSessions: Array<{
     id: number;
-    kind: 'orb' | 'grimoire';
-    school: SchoolType;
+    kind: 'orb' | 'grimoire' | 'summon';
+    school?: SchoolType;
     targetLevel?: number;
     spellId?: string;
+    summonTier?: 1 | 2 | 3;
+    progress?: number;
     required: number;
     costPaid: number;
   }>;
@@ -710,6 +731,7 @@ export interface FullGameState {
   /** Rooms currently held on the Build mode shelf (pause simulation/support, keep identity & occupants). */
   shelvedRooms?: PlacedRoom[];
   characters: Character[];
+  servants?: ServantInstance[];
   cardSets: CardSet[];
   allCards: Record<number, AnkiCardSnapshot>;
   creatures: CreatureInstance[];

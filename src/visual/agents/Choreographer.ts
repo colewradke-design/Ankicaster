@@ -24,6 +24,8 @@ import {
 import { ReachabilityInfo } from '../../utils/reachability';
 import { normalizeAppearance } from '../../utils/appearance';
 import { MOVE_SPEED, healingPlaceFor, DollAnim, dollFrame } from './doll';
+import { computeConstructionPlan } from '../../utils/construction';
+import { isRoomOperationalForServant } from '../../utils/servants';
 import {
   AcademySchedule,
   MealSittingAssignment,
@@ -1211,9 +1213,52 @@ export class Choreographer {
       }
     }
 
-    // 5. Headmaster orb pondering during Breaks (07, 09, 11) or Afternoon (14-18) / Evening (19-22) / Early morning
+    // 5. Headmaster Workshop build override, active orb/summon service, or free rounds
     if (agent.isWizard) {
+      const plan = computeConstructionPlan(state);
+      const wizJob = plan.find(job => job.crew.some(m => m.kind === 'wizard'));
+      if (wizJob) {
+        const site = state.rooms.find(r => r.id === wizJob.roomId && r.state === 'site');
+        const wizMember = wizJob.crew.find(m => m.kind === 'wizard')!;
+        if (site) {
+          const edgeAnchor = findBuilderSiteEdgeAnchor(site, state, this.reachability, this.groundY, wizMember.slotIndex);
+          if (edgeAnchor) {
+            return {
+              blockKey: `wizard_build:${site.id}:${wizMember.slotIndex}`,
+              mandatory: true,
+              activity: 'work',
+              roomId: edgeAnchor.roomId,
+              anchor: edgeAnchor,
+              anim: 'work',
+              wizardErrand: 'build',
+              canKeepOnTimer: true,
+              allowTalk: false
+            };
+          }
+        }
+      }
+
       const session = state.wizard.activeSession;
+      if (session?.kind === 'summon' && session.state === 'active') {
+        const chamber = builtReachable.find(
+          r => r.defId === 'summoning_chamber' && isRoomOperationalForServant(state, r)
+        );
+        if (chamber) {
+          const set = this.anchorsFor(chamber.id, state);
+          const circle = set?.workSpots[0] ?? set?.all[0];
+          return {
+            blockKey: `summon:${chamber.id}`,
+            mandatory: true,
+            activity: 'work',
+            roomId: chamber.id,
+            anchor: circle,
+            anim: 'cast',
+            wizardErrand: 'summon',
+            canKeepOnTimer: true,
+            allowTalk: false
+          };
+        }
+      }
       if (session?.kind === 'orb' && session.state === 'active') {
         const study = builtReachable.find(r => r.defId === 'wizard_study');
         if (study) {
@@ -1520,22 +1565,6 @@ export class Choreographer {
           if (r.id !== wp?.id) out.push({ room: r, weight: 60, anim: 'work' });
         }
         for (const r of [...byDef('kitchen'), ...lounge]) out.push({ room: r, weight: 20, anim: 'work' });
-        return out;
-      }
-
-      case 'builder': {
-        const sites = (state.rooms || []).filter(r => r.state === 'site');
-        for (const site of sites) {
-          const edgeAnchor = findBuilderSiteEdgeAnchor(site, state, this.reachability, this.groundY);
-          if (edgeAnchor && !takenAnchors.has(edgeAnchor.id)) {
-            const room = builtReachable.find(r => r.id === edgeAnchor.roomId);
-            if (room) {
-              out.push({ room, weight: 90, anim: 'work', anchorOverride: edgeAnchor });
-            }
-          }
-        }
-        for (const r of byDef('workshop')) out.push({ room: r, weight: out.length === 0 ? 75 : 25, anim: 'work' });
-        for (const r of lounge) out.push({ room: r, weight: 15, anim: 'idle' });
         return out;
       }
 

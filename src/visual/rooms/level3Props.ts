@@ -57,7 +57,9 @@ export const LEVEL3_SIGNATURE: Record<string, string> = {
   apiary: 'bee',
   courtyard_garden: 'fountain',
   standing_stones: 'stone',
-  moonwell: 'moon'
+  moonwell: 'moon',
+  summoning_chamber: 'circle',
+  janitors_closet: 'mop'
 };
 
 /** Draw that room's level-3 prop centred on (x, y). Returns false if the id has none. */
@@ -278,6 +280,14 @@ export function drawSignatureProp(g: Painter, defId: string, x: number, y: numbe
     case 'moon':
       g.circle(x, y - 1, 3).fill({ color: 0xd8d8f0 });
       g.circle(x + 1.2, y - 1.4, 2.2).fill({ color: 0x2a2533 });
+      break;
+    case 'circle':
+      g.ellipse(x, y, 4, 2.2).stroke({ color: 0x9bd4ff, width: 1.1 });
+      glyph(g, 'star8', x, y, 1.8, 0xc9b7ff);
+      break;
+    case 'mop':
+      g.rect(x - 0.6, y - 5, 1.2, 7).fill({ color: 0x96633b });
+      g.poly([x - 2.5, y + 4, x + 2.5, y + 4, x + 1.5, y + 1, x - 1.5, y + 1]).fill({ color: 0xf6f1e8 });
       break;
     default:
       g.circle(x, y, 2).fill({ color: tint });

@@ -86,6 +86,7 @@ const FOUNDATION_ROOMS: RoomSpec[] = [
   ['weaving_room', 'common'],
   ['glassworks', 'common'],
   ['training_yard', 'common'],
+  ['janitors_closet', 'common'],
   ['workshop', 'uncommon'],
   ['bathhouse', 'uncommon'],
   ['grand_dormitory', 'uncommon'],
@@ -165,6 +166,7 @@ export function deckOfRoom(defId: string): DraftDeckId | undefined {
 export function planHint(defId: string): string {
   if (isStructure(defId)) return '';
   if (defId === 'rift_gate') return 'Earned when the Academy has 3 masters';
+  if (defId === 'summoning_chamber') return 'Unlocks when any 1 Wizard school reaches Lv 5';
   const deck = deckOfRoom(defId);
   if (deck === 'foundation') return 'Find it in the Foundation deck';
   if (deck === 'grounds') return 'Find it in the Grounds deck';
@@ -176,9 +178,15 @@ export function plansFor(state: { roomPlans?: Record<string, number> }, defId: s
   return state.roomPlans?.[defId] || 0;
 }
 
-/** Structures and the two founding rooms need no card. Every other room needs a plan. */
-export function isRoomUnlocked(state: { roomPlans?: Record<string, number> }, defId: string): boolean {
+/** Structures and the two founding rooms need no card. Summoning Chamber unlocks when any 1 school reaches Lv 5. */
+export function isRoomUnlocked(
+  state: { roomPlans?: Record<string, number>; wizard?: { levels?: Partial<Record<string, number>> } },
+  defId: string
+): boolean {
   if (isStructure(defId) || defId === 'entrance_hall' || defId === 'wizard_study') return true;
+  if (defId === 'summoning_chamber') {
+    return Object.values(state.wizard?.levels || {}).some(v => (v || 0) >= 5) || plansFor(state, defId) > 0;
+  }
   return plansFor(state, defId) > 0;
 }
 

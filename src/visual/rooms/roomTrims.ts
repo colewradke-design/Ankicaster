@@ -28,7 +28,8 @@ import {
   infirmaryPane,
   entranceOculusPane,
   glassFanlightPane,
-  alchemyPane
+  alchemyPane,
+  summoningPane
 } from './roomLights';
 
 export interface TrimBox {
@@ -294,6 +295,18 @@ export const ROOM_TRIM_SPECS: Record<string, RoomTrimSpec> = {
     l2Tags: ['trim:laurel_garland_frieze', 'trim:velvet_rope_stanchions'],
     l3Tags: ['wall_panelling:museum_gilt_pilasters', 'trim:victor_laurel_alcove'],
     accent: 0xe8c547
+  },
+  summoning_chamber: {
+    area: 'castle',
+    l2Tags: ['trim:arcane_floor_chalk_inlay', 'trim:ritual_brass_studs'],
+    l3Tags: ['stained_window:summoning_astral_pane', 'trim:gilded_conduit_pillars'],
+    accent: 0x7d5ba6
+  },
+  janitors_closet: {
+    area: 'castle',
+    l2Tags: ['trim:utility_peg_rail', 'trim:mop_drain_curb'],
+    l3Tags: ['wall_panelling:scrubbed_tile_dado', 'trim:brass_dustpan_hooks'],
+    accent: 0x5fc2c2
   },
 
   // === GROUNDS / OUTDOOR ROOMS (13) — strictly outdoor tags only ===
@@ -697,7 +710,8 @@ function drawIndoorUpgradeTrim(
     }
     case 'class_shadow':
     case 'warding_chamber':
-    case 'detention_hall': {
+    case 'detention_hall':
+    case 'summoning_chamber': {
       // Silver / teal rune-studded border band
       g.rect(L + 2, T, W - 4, 1.5).fill({ color: level >= 3 ? 0x5fc2c2 : 0x4c5ba3 });
       for (let x = L + 8; x < R - 6; x += 12) {
@@ -708,6 +722,9 @@ function drawIndoorUpgradeTrim(
           g.rect(px - 1, B - 16, 2, 16).fill({ color: 0x3b3a40 });
           g.circle(px, B - 17, 2).fill({ color: 0x5fc2c2 });
         }
+      }
+      if (room.defId === 'summoning_chamber') {
+        g.rect(L + 8, B - 2, W - 16, 1.5).fill({ color: 0x7d5ba6, alpha: 0.75 });
       }
       break;
     }
@@ -829,6 +846,13 @@ function drawIndoorUpgradeTrim(
         case 'trophy_hall':
           // Laurel alcove arch across top of the hall (occupied plinths supply the light)
           g.ellipse(cx, T + 4, W * 0.34, 8).stroke({ color: GOLDS[2], width: 1 });
+          break;
+        case 'summoning_chamber':
+          drawFramedPane(g, summoningPane(box), 0xc9b7ff);
+          break;
+        case 'janitors_closet':
+          g.rect(L + 4, B - 10, W - 8, 1.5).fill({ color: 0x5fc2c2 });
+          g.rect(L + 10, T + 6, 14, 1.5).fill({ color: GOLDS[2] });
           break;
       }
     }

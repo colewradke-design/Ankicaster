@@ -57,7 +57,9 @@ export function orbOption(state: FullGameState, sch: SchoolType) {
   const currentLvl = wizard.levels[sch] || 0;
   const studyLevel = computeStudyLevel(wizard.levels);
   const maxSessions = maxStudySessionsForWizard(studyLevel);
-  const totalSessions = (wizard.activeSession ? 1 : 0) + (wizard.queuedSessions ? wizard.queuedSessions.length : 0);
+  const totalSessions =
+    (wizard.activeSession && wizard.activeSession.kind !== 'summon' ? 1 : 0) +
+    (wizard.queuedSessions ? wizard.queuedSessions.filter(q => q.kind !== 'summon').length : 0);
   const canAfford = mana >= req.mana;
   const queueFull = totalSessions >= maxSessions;
   const canQueue = !isMax && canAfford && !queueFull;
@@ -85,7 +87,9 @@ export function grimoireStudyOption(state: FullGameState, spellId: string) {
   const { wizard, mana } = state;
   const studyLevel = computeStudyLevel(wizard.levels);
   const maxSessions = maxStudySessionsForWizard(studyLevel);
-  const totalSessions = (wizard.activeSession ? 1 : 0) + (wizard.queuedSessions ? wizard.queuedSessions.length : 0);
+  const totalSessions =
+    (wizard.activeSession && wizard.activeSession.kind !== 'summon' ? 1 : 0) +
+    (wizard.queuedSessions ? wizard.queuedSessions.filter(q => q.kind !== 'summon').length : 0);
   const hasL3Library = (state.rooms || []).some(
     r => r.defId === 'library' && r.state === 'built' && !isRoomUnfinished(r) && (r.level || 1) >= 3
   );
@@ -146,7 +150,9 @@ export const PonderOrbPicker: React.FC<{
   const founding = state.wizard.foundingSchool;
   const studyLevel = computeStudyLevel(state.wizard.levels);
   const maxSessions = maxStudySessionsForWizard(studyLevel);
-  const totalSessions = (state.wizard.activeSession ? 1 : 0) + (state.wizard.queuedSessions?.length || 0);
+  const totalSessions =
+    (state.wizard.activeSession && state.wizard.activeSession.kind !== 'summon' ? 1 : 0) +
+    (state.wizard.queuedSessions ? state.wizard.queuedSessions.filter(q => q.kind !== 'summon').length : 0);
   return (
     <Backdrop onClose={onClose} label="Ponder Orb">
       <div className="bg-slate-900 border border-purple-500/50 rounded-2xl w-full max-w-md shadow-2xl" data-testid="ponder-picker">

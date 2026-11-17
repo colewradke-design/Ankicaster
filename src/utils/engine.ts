@@ -65,7 +65,25 @@ import {
   PlacementCheck
 } from './placement';
 import { normalizeAppearance } from './appearance';
-import { constructionSites, planConstruction, BuilderSlotInput } from './construction';
+import { constructionSites, planConstruction, WorkshopWorkerInput } from './construction';
+import {
+  pickGoblinName,
+  generateServantLook,
+  roomServantCapacity,
+  isServantWorkplaceDef,
+  isRoomOperationalForServant,
+  isRoomStaffedByServant,
+  schoolsAtLevel5Count,
+  finishedSummoningChambers,
+  hasFinishedSummoningChamber,
+  requiredSchoolsForChamberLevel,
+  summonServantQuote,
+  workshopCreatureBuildBonus,
+  JANITOR_CLEAN_PER_REVIEW,
+  computeJanitorAssignments,
+  SERVANT_PLOT_IDS,
+  uniqueServantId
+} from './servants';
 import {
   allFurnitureIds, Cost, fillRequiredFixtures, isFurnitureCompatibleWithRoom,
   isRoomUnfinished, maxOptionalSlots, maxSameFurnitureInRoom, missingRequiredSlots,
@@ -167,7 +185,7 @@ export function getAnkiDayNumber(timeMs: number): number {
 
 export const HAZARD_DISPEL_MANA_COST = 30;
 
-const STAFF_CAREERS = new Set<string>(['teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist', 'builder']);
+const STAFF_CAREERS = new Set<string>(['teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist']);
 
 let _lastNumericId = 0;
 let _noticeSeq = 0;
@@ -965,7 +983,7 @@ function characterMoraleBonuses(state: FullGameState, char: Character): number {
   if (hasTrait(char, 'Bug Person')) bonus += activeCreatures.some(cr => INSECT_CREATURES.has(cr.defId)) ? 10 : -3;
 
   const hasHeartyMeals = built.some(
-    k => k.defId === 'kitchen' && built.some(ref => ref.defId === 'refectory' && roomsAreAdjacent(k, ref))
+    k => k.defId === 'kitchen' && isRoomStaffedByServant(state, k.id) && built.some(ref => ref.defId === 'refectory' && roomsAreAdjacent(k, ref))
   );
   if (hasHeartyMeals) bonus += 5;
 
@@ -1527,7 +1545,6 @@ function createAlumnusRecord(
     healer: 0.02,
     warder: 0.01,
     alchemist: 0.02,
-    builder: 0.01,
     adventurer: 0.2,
     resident: 0.01
   };
@@ -1637,11 +1654,6 @@ function grantAlumniVisitGift(state: FullGameState, summary: string[]): void {
     case 'alchemist':
       state.resources.reagents = (state.resources.reagents || 0) + 15;
       giftText = '+15 Reagents';
-      break;
-    case 'builder':
-      storeCommon('timber', 15);
-      storeCommon('stone', 15);
-      giftText = '+15 Timber, +15 Stone';
       break;
     case 'scholar':
       state.resources.insight = (state.resources.insight || 0) + 15;
@@ -1891,6 +1903,7 @@ export class AnkicasterEngine {
         ? Object.fromEntries(Object.entries(state.discoveredHints).map(([k, v]) => [k, [...v]]))
         : undefined,
       notices: [...state.notices],
+      servants: (state.servants || []).map(sv => ({ ...sv, look: { ...sv.look } })),
       processedReviewIds: state.processedReviewIds ? [...state.processedReviewIds] : []
     };
 
@@ -2007,71 +2020,141 @@ export class AnkicasterEngine {
       }
     }
 
-    // 3. Advance Wizard Active Training Session (BR-06, BR-07) — paused if Wizard's Study is shelved
-    if (next.wizard.activeSession && next.wizard.activeSession.state === 'active' && studyRoom) {
-      const ponderPct = !isRoomUnfinished(studyRoom)
-        ? academyFurnitureEffect(next.rooms, 'ponder_pct', studyRoom)
-        : 0;
-      const ponderStep = ponderPct > 0 ? Math.round((1 + ponderPct / 100) * 100) / 100 : 1;
-      next.wizard.activeSession.progress = Math.round((next.wizard.activeSession.progress + ponderStep) * 100) / 100;
-      if (next.wizard.activeSession.progress >= next.wizard.activeSession.required) {
-        const sess = next.wizard.activeSession;
-        if (sess.kind === 'orb') {
-          const sch = sess.school;
-          const newLevel = (next.wizard.levels[sch] || 0) + 1;
-          next.wizard.levels[sch] = Math.min(10, newLevel);
-          notifications.push(`🎉 Wizard reached Level ${newLevel} in ${sch.toUpperCase()}!`);
-          next.notices.push({
-            id: uniqueNoticeId('lvl', next),
-            time: Date.now(),
-            type: 'level_up',
-            text: `Wizard attained Level ${newLevel} in ${sch} magic.`,
-            data: {
-              roomId: studyRoom?.id,
-              school: sch,
-              level: newLevel,
-              visualEventType: 'wizard_level_up'
-            }
-          });
-        } else if (sess.kind === 'grimoire' && sess.spellId) {
-          if (!next.wizard.knownSpells.includes(sess.spellId)) {
-            next.wizard.knownSpells.push(sess.spellId);
-            const spDef = SPELL_DEFINITIONS[sess.spellId];
-            notifications.push(`✨ Mastered Grimoire Spell: ${spDef ? spDef.name : sess.spellId}!`);
-            next.notices.push({
-              id: uniqueNoticeId(`spell-learn-${sess.spellId}`, next),
-              time: Date.now(),
-              type: 'wizard_new_spell',
-              text: `Mastered Grimoire Spell: ${spDef ? spDef.name : sess.spellId}!`,
-              data: {
-                roomId: studyRoom?.id,
-                spellId: sess.spellId,
-                school: sess.school,
-                visualEventType: 'wizard_new_spell'
+    // 3. Advance Wizard Services Queue (Orb ponder, Grimoire study, or Servant summon)
+    // Paused while the Wizard is actively assigned to work on a construction site.
+    if (!AnkicasterEngine.isWizardOnConstructionSite(next)) {
+      AnkicasterEngine.tryStartTopSummon(next);
+      const sess = next.wizard.activeSession;
+      if (sess && sess.state === 'active') {
+        if (sess.kind === 'summon') {
+          if (hasFinishedSummoningChamber(next) && sess.costPaid > 0) {
+            sess.progress = Math.round((sess.progress + 1) * 100) / 100;
+            if (sess.progress >= sess.required) {
+              const chambers = finishedSummoningChambers(next);
+              const chamberId = chambers[0]?.id;
+              if (!next.servants) next.servants = [];
+              const newId = uniqueServantId(next.servants);
+              const goblinName = pickGoblinName(next.servants);
+              next.servants.push({
+                id: newId,
+                name: goblinName,
+                look: generateServantLook(newId),
+                arrivedDay: next.day
+              });
+              notifications.push(`🧝 Summoned ${goblinName} the Goblin Servant (idle)!`);
+              next.notices.push({
+                id: uniqueNoticeId('summon-servant', next),
+                time: Date.now(),
+                type: 'wizard',
+                text: `Summoned ${goblinName} (idle goblin servant). Assign from the Summoning Chamber or any workplace.`,
+                data: { roomId: chamberId }
+              });
+              if (next.wizard.queuedSessions.length > 0) {
+                const nextSess = next.wizard.queuedSessions.shift()!;
+                next.wizard.activeSession = {
+                  ...nextSess,
+                  progress: nextSess.progress ?? 0,
+                  state: 'active'
+                };
+                AnkicasterEngine.tryStartTopSummon(next);
+              } else {
+                next.wizard.activeSession = undefined;
               }
-            });
+            }
           }
-        }
+        } else if (studyRoom) {
+          const ponderPct = !isRoomUnfinished(studyRoom)
+            ? academyFurnitureEffect(next.rooms, 'ponder_pct', studyRoom)
+            : 0;
+          const ponderStep = ponderPct > 0 ? Math.round((1 + ponderPct / 100) * 100) / 100 : 1;
+          sess.progress = Math.round((sess.progress + ponderStep) * 100) / 100;
+          if (sess.progress >= sess.required) {
+            if (sess.kind === 'orb' && sess.school) {
+              const sch = sess.school;
+              const newLevel = (next.wizard.levels[sch] || 0) + 1;
+              next.wizard.levels[sch] = Math.min(10, newLevel);
+              notifications.push(`🎉 Wizard reached Level ${newLevel} in ${sch.toUpperCase()}!`);
+              next.notices.push({
+                id: uniqueNoticeId('lvl', next),
+                time: Date.now(),
+                type: 'level_up',
+                text: `Wizard attained Level ${newLevel} in ${sch} magic.`,
+                data: {
+                  roomId: studyRoom?.id,
+                  school: sch,
+                  level: newLevel,
+                  visualEventType: 'wizard_level_up'
+                }
+              });
+            } else if (sess.kind === 'grimoire' && sess.spellId) {
+              if (!next.wizard.knownSpells.includes(sess.spellId)) {
+                next.wizard.knownSpells.push(sess.spellId);
+                const spDef = SPELL_DEFINITIONS[sess.spellId];
+                notifications.push(`✨ Mastered Grimoire Spell: ${spDef ? spDef.name : sess.spellId}!`);
+                next.notices.push({
+                  id: uniqueNoticeId(`spell-learn-${sess.spellId}`, next),
+                  time: Date.now(),
+                  type: 'wizard_new_spell',
+                  text: `Mastered Grimoire Spell: ${spDef ? spDef.name : sess.spellId}!`,
+                  data: {
+                    roomId: studyRoom?.id,
+                    spellId: sess.spellId,
+                    school: sess.school,
+                    visualEventType: 'wizard_new_spell'
+                  }
+                });
+              }
+            }
 
-        if (next.wizard.queuedSessions.length > 0) {
-          const nextSess = next.wizard.queuedSessions.shift()!;
-          next.wizard.activeSession = {
-            ...nextSess,
-            progress: 0,
-            state: 'active'
-          };
-        } else {
-          next.wizard.activeSession = undefined;
+            if (next.wizard.queuedSessions.length > 0) {
+              const nextSess = next.wizard.queuedSessions.shift()!;
+              next.wizard.activeSession = {
+                ...nextSess,
+                progress: nextSess.progress ?? 0,
+                state: 'active'
+              };
+              AnkicasterEngine.tryStartTopSummon(next);
+            } else {
+              next.wizard.activeSession = undefined;
+            }
+          }
         }
       }
     }
 
-    // 4. Advance the construction queue. The wizard holds slot 1. Each Builder at a Workshop opens another, up to 4.
+    // 4. Advance the construction queue (up to 4 bodies from Workshop + optional Wizard work the first unpaused site).
     for (const job of AnkicasterEngine.constructionAssignments(next)) {
       const room = next.rooms.find(r => r.id === job.roomId);
       if (!room || room.state !== 'site' || room.buildPaused) continue;
       room.buildProgress = Math.round((room.buildProgress + job.rate) * 100) / 100;
       if (room.buildProgress >= room.buildRequired) AnkicasterEngine.completeSite(next, room, notifications);
+    }
+
+    // 4b. Janitors (servants assigned to Janitor's Closet) clean the dirtiest unclaimed built room by +5 cleanliness/review.
+    if (next.servants?.length) {
+      const janitorTargets = computeJanitorAssignments(next);
+      for (const s of [...next.servants].sort((a, b) => a.id - b.id)) {
+        const targetId = janitorTargets.get(s.id);
+        s.cleaningRoomId = targetId;
+        if (targetId == null) continue;
+        const targetRoom = next.rooms.find(r => r.id === targetId && r.state === 'built' && !isRoomUnfinished(r));
+        if (!targetRoom) {
+          s.cleaningRoomId = undefined;
+          continue;
+        }
+        targetRoom.cleanliness = Math.min(100, targetRoom.cleanliness + JANITOR_CLEAN_PER_REVIEW);
+        if (targetRoom.cleanliness >= 80 && targetRoom.misbehaviorCharmMalus) {
+          targetRoom.misbehaviorCharmMalus = undefined;
+          for (const ch of next.characters) {
+            if (ch.misbehaviorChains?.length) {
+              ch.misbehaviorChains = ch.misbehaviorChains.filter(m => !(m.roomId === targetRoom.id && (m.incidentId === 'graffiti_glyphs' || m.incidentId === 'portrait_mustache')));
+            }
+          }
+        }
+        if (targetRoom.cleanliness >= 100) {
+          s.cleaningRoomId = undefined;
+        }
+      }
     }
 
     // 5. Advance Active Creature Taming & Hatching, and count down loose-creature captures
@@ -2549,8 +2632,12 @@ export class AnkicasterEngine {
   private static adjacencyFactor(state: FullGameState, room: PlacedRoom): number {
     let factor = 1;
     const others = state.rooms.filter(r => r.id !== room.id && r.state === 'built');
-    const touches = (defId: string) => others.some(r => r.defId === defId && AnkicasterEngine.sharesWall(room, r));
-    if (room.defId === 'greenhouse' && touches('kitchen')) factor += 0.1;
+    if (
+      room.defId === 'greenhouse' &&
+      others.some(r => r.defId === 'kitchen' && !isRoomUnfinished(r) && isRoomStaffedByServant(state, r.id) && AnkicasterEngine.sharesWall(room, r))
+    ) {
+      factor += 0.1;
+    }
     if (room.defId.startsWith('class_')) {
       const libs = others.filter(r => r.defId === 'library' && AnkicasterEngine.sharesWall(room, r)).length;
       factor += Math.min(0.1, libs * 0.05);
@@ -3016,21 +3103,25 @@ export class AnkicasterEngine {
       const outPct = academyFurnitureEffect(state.rooms, 'output_pct', room);
       if (outPct !== 0) harvestMult *= 1 + outPct / 100;
 
+      if (SERVANT_PLOT_IDS.has(room.defId) || room.defId === 'glassworks' || room.defId === 'weaving_room') {
+        if (!isRoomStaffedByServant(state, room.id)) harvestMult *= 0.25;
+      }
+
       if (PLANT_ROOMS.has(room.defId)) {
-        const assignedGardeners = activeGardeners.filter(g => g.workplaceRoomId === room.id);
-        const hasSlot = ROOM_DEFINITIONS[room.defId]?.workplace?.career === 'gardener';
-        const gardeners = hasSlot ? assignedGardeners : (assignedGardeners.length > 0 ? assignedGardeners : activeGardeners);
-        if (gardeners.length > 0) {
-          const roomSchool = ROOM_DEFINITIONS[room.defId]?.school;
-          const gardenerMult = Math.max(
-            ...gardeners.map(
-              g =>
-                careerAffinityMultiplier(g.masteredSchools, 'gardener', roomSchool) *
-                (hasTrait(g, 'Green Thumb') ? 1.2 : 1) *
-                facultyOutputMultiplier(state, g)
-            )
-          );
-          harvestMult *= gardenerMult * (1 + treantGardenerBonus);
+        if (room.defId === 'greenhouse') {
+          const assignedGardeners = activeGardeners.filter(g => g.workplaceRoomId === room.id);
+          if (assignedGardeners.length > 0) {
+            const roomSchool = ROOM_DEFINITIONS[room.defId]?.school;
+            const gardenerMult = Math.max(
+              ...assignedGardeners.map(
+                g =>
+                  careerAffinityMultiplier(g.masteredSchools, 'gardener', roomSchool) *
+                  (hasTrait(g, 'Green Thumb') ? 1.2 : 1) *
+                  facultyOutputMultiplier(state, g)
+              )
+            );
+            harvestMult *= gardenerMult * (1 + treantGardenerBonus);
+          }
         }
         if (finishedApiaries.some(a => a.area === room.area && a.x <= room.x + room.w && room.x <= a.x + a.w && a.y <= room.y + room.h && room.y <= a.y + a.h)) {
           harvestMult *= 1.05;
@@ -3236,11 +3327,13 @@ export class AnkicasterEngine {
 
     // 4. Meals. Characters eat first. Wary and tamed creatures then pay their whole diet or go hungry.
     const kitchenAdjacentToRefectory = state.rooms.some(k =>
-      k.defId === 'kitchen' && k.state === 'built' && !isRoomUnfinished(k) &&
+      k.defId === 'kitchen' && k.state === 'built' && !isRoomUnfinished(k) && isRoomStaffedByServant(state, k.id) &&
       state.rooms.some(ref => ref.defId === 'refectory' && ref.state === 'built' && !isRoomUnfinished(ref) &&
         k.area === ref.area && k.x <= ref.x + ref.w && ref.x <= k.x + k.w && k.y <= ref.y + ref.h && ref.y <= k.y + k.h)
     );
-    const hasBuiltKitchen = state.rooms.some(k => k.defId === 'kitchen' && k.state === 'built' && !isRoomUnfinished(k));
+    const hasBuiltKitchen = state.rooms.some(
+      k => k.defId === 'kitchen' && k.state === 'built' && !isRoomUnfinished(k) && isRoomStaffedByServant(state, k.id)
+    );
     if (state.bellIndex % 5 === 0) {
       if (state.characters.length > 0) {
         const capFactor = state.pendingMealCapFactor ?? 1;
@@ -3248,7 +3341,7 @@ export class AnkicasterEngine {
         state.pendingMealCapFactor = undefined;
         const served = plan.seated + plan.standing;
         const mealCostPct = academyFurnitureEffect(
-          state.rooms.filter(r => r.state === 'built' && !isRoomUnfinished(r)),
+          state.rooms.filter(r => r.state === 'built' && !isRoomUnfinished(r) && (r.defId !== 'kitchen' || isRoomStaffedByServant(state, r.id))),
           'meal_cost_pct'
         );
         const mealMult = Math.max(0.5, 1 - (kitchenAdjacentToRefectory ? 0.1 : 0) + mealCostPct / 100 - sb.mealProvisionsReductionPct);
@@ -3292,6 +3385,9 @@ export class AnkicasterEngine {
       0.5
     );
     const needRecoveryMult = wizBuffs.lightRecoveryMult * (1 + creatureNeedRecoveryBonus);
+    const isRefectoryStaffed = state.rooms.some(
+      r => r.defId === 'refectory' && r.state === 'built' && !isRoomUnfinished(r) && isRoomStaffedByServant(state, r.id)
+    );
     for (const char of state.characters) {
       const dm = characterNeedDecayMults(state, char);
       const rawHungerTarget = char.mealTarget ?? 50;
@@ -3306,7 +3402,12 @@ export class AnkicasterEngine {
         (bedRoomForNeed.level || 1) >= 3
           ? Math.min(100, leisureTarget + 5)
           : leisureTarget;
-      char.needs.hunger = AnkicasterEngine.approachNeed(char.needs.hunger, hungerTarget, 4 * dm.hunger, needRecoveryMult);
+      char.needs.hunger = AnkicasterEngine.approachNeed(
+        char.needs.hunger,
+        hungerTarget,
+        4 * dm.hunger,
+        needRecoveryMult * (isRefectoryStaffed ? 2 : 1)
+      );
       char.needs.rest = AnkicasterEngine.approachNeed(char.needs.rest, AnkicasterEngine.restTarget(state, char, reach), 3 * dm.rest, needRecoveryMult);
       char.needs.leisure = AnkicasterEngine.approachNeed(char.needs.leisure, charLeisureTarget, 3 * dm.leisure, needRecoveryMult);
       char.needs.composure = AnkicasterEngine.approachNeed(char.needs.composure, compTarget, 1 * dm.composure, needRecoveryMult);
@@ -3419,7 +3520,10 @@ export class AnkicasterEngine {
       if (stagScale > 0) {
         char.morale = Math.min(100, char.morale + Math.round(3 * stagScale));
       }
-      const moraleFurn = academyFurnitureEffect(state.rooms, 'morale_bonus');
+      const moraleFurn = academyFurnitureEffect(
+        state.rooms.filter(r => r.defId !== 'kitchen' || isRoomStaffedByServant(state, r.id)),
+        'morale_bonus'
+      );
       if (moraleFurn !== 0) {
         char.morale = Math.min(100, Math.max(0, char.morale + moraleFurn));
       }
@@ -3439,21 +3543,8 @@ export class AnkicasterEngine {
       rollMisbehaviorForStudent(state, char, wizBuffs, bag, note, notifications);
     }
 
-    // 6. Cleanliness & Mopslime & Lv3 Storage Vault Builders
+    // 6. Cleanliness & Mopslime
     const cleanBonus = 3 * creatureSpeciesBuffSum(state, 'mopslime');
-    const hasActiveBuilderForClean = state.characters.some(
-      c => c.career === 'builder' && c.careerState === 'active' && c.status !== 'away' && !c.injury
-    );
-    const lv3VaultClean = hasActiveBuilderForClean
-      ? state.rooms.filter(
-          r =>
-            r.defId === 'storage_vault' &&
-            r.state === 'built' &&
-            !isRoomUnfinished(r) &&
-            !AnkicasterEngine.roomIsLocked(state, r) &&
-            (r.level || 1) >= 3
-        ).length
-      : 0;
     for (const r of state.rooms) {
       const roomClean = academyFurnitureEffect(state.rooms, 'cleanliness_per_bell', r);
       const isCleanImmune = (state.activeBuffs?.cleanImmuneBells || 0) > 0 && (!state.activeBuffs?.cleanImmuneRoomId || state.activeBuffs.cleanImmuneRoomId === r.id);
@@ -3461,7 +3552,7 @@ export class AnkicasterEngine {
         c => c.status !== 'away' && hasTrait(c, 'Tidy') && (c.bedRoomId === r.id || c.seatRoomId === r.id || c.workplaceRoomId === r.id)
       );
       const decay = isCleanImmune ? 0 : (hasTidyUser ? 0.5 * 0.7 : 0.5) * (1 - sb.dirtReductionPct);
-      r.cleanliness = Math.max(0, Math.min(100, r.cleanliness - decay + cleanBonus + roomClean + lv3VaultClean));
+      r.cleanliness = Math.max(0, Math.min(100, r.cleanliness - decay + cleanBonus + roomClean));
       if (r.cleanliness >= 80 && r.misbehaviorCharmMalus) {
         r.misbehaviorCharmMalus = undefined;
         for (const ch of state.characters) {
@@ -3494,8 +3585,11 @@ export class AnkicasterEngine {
       }
     }
 
-    // 8. Headmaster's Presence: set wizard.presenceRoomId each bell when no session is active
-    if (state.wizard.activeSession && state.wizard.activeSession.state === 'active') {
+    // 8. Headmaster's Presence: set wizard.presenceRoomId each bell when no session or build job is active
+    if (
+      (state.wizard.activeSession && state.wizard.activeSession.state === 'active') ||
+      AnkicasterEngine.isWizardOnConstructionSite(state)
+    ) {
       state.wizard.presenceRoomId = undefined;
     } else {
       const candidates = state.rooms.filter(
@@ -4978,7 +5072,11 @@ export class AnkicasterEngine {
       settings: {},
       furniture: [],
       spent: charge,
-      fromPlan: !isStructure(defId) && defId !== 'entrance_hall' && defId !== 'wizard_study'
+      fromPlan:
+        !isStructure(defId) &&
+        defId !== 'entrance_hall' &&
+        defId !== 'wizard_study' &&
+        (defId !== 'summoning_chamber' || (next.roomPlans?.[defId] || 0) > 0)
     };
 
     // Auto-place required starter furniture if built instantly (sites finish with it empty, GDD 15.4)
@@ -5116,6 +5214,17 @@ export class AnkicasterEngine {
 
     next.rooms.splice(idx, 1);
     next.shelvedRooms = [...(next.shelvedRooms || []), room];
+    for (const s of next.servants || []) {
+      if (s.workplaceRoomId === roomId) {
+        s.workplaceRoomId = undefined;
+        s.cleaningRoomId = undefined;
+      } else if (s.cleaningRoomId === roomId) {
+        s.cleaningRoomId = undefined;
+      }
+    }
+    if (room.defId === 'workshop' && !next.rooms.some(r => r.defId === 'workshop' && isRoomOperationalForServant(next, r))) {
+      next.wizard.workshopAssigned = false;
+    }
     AnkicasterEngine.syncWorkplaces(next);
     return { state: next, success: true };
   }
@@ -5199,44 +5308,44 @@ export class AnkicasterEngine {
   }
 
   /**
-   * Wizard slot plus one slot per Builder working a finished Workshop, max 4.
+   * Up to 4 bodies (Workshop servants + optional Wizard assigned to Workshop) work the first unpaused site.
    */
   static constructionAssignments(state: FullGameState) {
-    const buildSpeedPct = academyFurnitureEffect(
-      state.rooms.filter(r => r.state === 'built' && !isRoomUnfinished(r)),
-      'build_speed_pct'
+    const workshops = (state.rooms || []).filter(
+      r => r.defId === 'workshop' && isRoomOperationalForServant(state, r)
     );
-    const creatureBuildBonus = creatureCategoryBonus(
-      state,
-      [
-        { defId: 'bellows_toad', perCopy: 0.05 },
-        { defId: 'geode_golem', perCopy: 0.1 }
-      ],
-      0.5
-    );
-    const builders: BuilderSlotInput[] = [];
-    const builderCandidates = state.characters
-      .filter(c => c.career === 'builder' && c.careerState === 'active' && c.status !== 'away' && !c.injury)
-      .sort((a, b) => a.id - b.id);
-    for (const b of builderCandidates) {
-      const ws = b.workplaceRoomId != null
-        ? state.rooms.find(
-            r =>
-              r.id === b.workplaceRoomId &&
-              r.defId === 'workshop' &&
-              r.state === 'built' &&
-              !isRoomUnfinished(r) &&
-              !AnkicasterEngine.roomIsLocked(state, r)
-          )
-        : undefined;
+    const workshopById = new Map(workshops.map(w => [w.id, w]));
+    const workers: WorkshopWorkerInput[] = [];
+    for (const s of [...(state.servants || [])].sort((a, b) => a.id - b.id)) {
+      if (s.workplaceRoomId == null) continue;
+      const ws = workshopById.get(s.workplaceRoomId);
       if (!ws) continue;
-      builders.push({ id: b.id, workshopLevel: ws.level || 1, quickHands: hasTrait(b, 'Quick Hands') });
+      workers.push({
+        kind: 'servant',
+        id: s.id,
+        workshopId: ws.id,
+        workshopLevel: ws.level || 1
+      });
+    }
+    if (state.wizard?.workshopAssigned && workshops.length > 0) {
+      const primaryWs = [...workshops].sort((a, b) => (b.level || 1) - (a.level || 1) || a.id - b.id)[0];
+      workers.push({
+        kind: 'wizard',
+        id: 0,
+        workshopId: primaryWs.id,
+        workshopLevel: primaryWs.level || 1
+      });
     }
     return planConstruction(state.rooms, {
-      alchemyLevel: state.wizard.levels.alchemy || 0,
-      builders,
-      academySpeedPct: buildSpeedPct + creatureBuildBonus * 100
+      workers,
+      creatureBuildBonus: workshopCreatureBuildBonus(state)
     });
+  }
+
+  /** True when the Wizard is assigned to an operational Workshop AND actually holds one of the 4 construction crew slots on an unpaused site. */
+  static isWizardOnConstructionSite(state: FullGameState): boolean {
+    if (!state.wizard?.workshopAssigned) return false;
+    return AnkicasterEngine.constructionAssignments(state).some(job => job.crew.some(m => m.kind === 'wizard'));
   }
 
   /**
@@ -5351,6 +5460,18 @@ export class AnkicasterEngine {
     }
     for (const cr of next.creatures) {
       if (cr.roomId === roomId) { cr.roomId = sameKind([room.defId])?.id; moved++; }
+    }
+    for (const sv of next.servants || []) {
+      if (sv.workplaceRoomId === roomId) {
+        sv.workplaceRoomId = undefined;
+        sv.cleaningRoomId = undefined;
+        moved++;
+      } else if (sv.cleaningRoomId === roomId) {
+        sv.cleaningRoomId = undefined;
+      }
+    }
+    if (room.defId === 'workshop' && !next.rooms.some(r => r.defId === 'workshop' && isRoomOperationalForServant(next, r))) {
+      next.wizard.workshopAssigned = false;
     }
     AnkicasterEngine.syncWorkplaces(next);
     syncCharmRenown(next);
@@ -5805,6 +5926,17 @@ export class AnkicasterEngine {
     if (!room) return { state, success: false, error: 'Room not found.' };
     if (room.state !== 'built') return { state, success: false, error: 'Finish construction first.' };
     if (room.level >= 3) return { state, success: false, error: 'Room is already at maximum Level 3.' };
+    if (room.defId === 'summoning_chamber') {
+      const needSchools = requiredSchoolsForChamberLevel(room.level + 1);
+      const haveSchools = schoolsAtLevel5Count(next.wizard.levels);
+      if (haveSchools < needSchools) {
+        return {
+          state,
+          success: false,
+          error: `Requires ${needSchools} magic schools at Level 5+ to renovate Summoning Chamber to Level ${room.level + 1} (${haveSchools}/${needSchools}).`
+        };
+      }
+    }
 
     const def = ROOM_DEFINITIONS[room.defId];
     const upgradeCost = Math.round((def?.cost.mana ?? 100) * 0.75) + 50;
@@ -5947,6 +6079,9 @@ export class AnkicasterEngine {
     career: CareerType,
     targetRoomId?: number
   ): { state: FullGameState; success: boolean; error?: string } {
+    if ((career as string) === 'builder') {
+      return { state, success: false, error: 'Builder career has been replaced by summoned servants.' };
+    }
     const next = structuredClone(state);
     const char = next.characters.find(c => c.id === charId);
     if (!char) return { state, success: false, error: 'Character not found.' };
@@ -6652,6 +6787,27 @@ export class AnkicasterEngine {
     return { state: next, success: true };
   }
 
+  private static tryStartTopSummon(state: FullGameState): void {
+    const top = state.wizard.activeSession;
+    if (!top || top.kind !== 'summon' || top.costPaid > 0) return;
+    const chambers = finishedSummoningChambers(state);
+    if (chambers.length === 0) {
+      top.state = 'paused';
+      return;
+    }
+    const maxChamberLv = Math.max(...chambers.map(c => c.level || 1));
+    const quote = summonServantQuote((state.servants || []).length, maxChamberLv);
+    if (state.mana < quote.mana) {
+      top.state = 'paused';
+      return;
+    }
+    state.mana -= quote.mana;
+    top.costPaid = quote.mana;
+    top.required = quote.reviews;
+    top.summonTier = quote.tier;
+    top.state = 'active';
+  }
+
   /**
    * Queue Wizard Arcane Study Session (BR-05, BR-06)
    */
@@ -6663,16 +6819,18 @@ export class AnkicasterEngine {
   ): { state: FullGameState; success: boolean; error?: string } {
     const next = structuredClone(state);
 
-    // Total sessions cap based on studyLevel (1+1=2 at Lv1, 1+2=3 at Lv2, 1+4=5 at Lv3)
+    // Study sessions (orb + grimoire) cap based on studyLevel (1+1=2 at Lv1, 1+2=3 at Lv2, 1+4=5 at Lv3)
     const studyLvl = computeStudyLevel(next.wizard.levels);
     next.wizard.studyLevel = studyLvl;
     const maxSessions = maxStudySessionsForWizard(studyLvl);
-    const totalSessions = (next.wizard.activeSession ? 1 : 0) + next.wizard.queuedSessions.length;
-    if (totalSessions >= maxSessions) {
+    const totalStudySessions =
+      (next.wizard.activeSession && next.wizard.activeSession.kind !== 'summon' ? 1 : 0) +
+      next.wizard.queuedSessions.filter(q => q.kind !== 'summon').length;
+    if (totalStudySessions >= maxSessions) {
       return {
         state,
         success: false,
-        error: `Maximum of ${maxSessions} wizard training sessions at Study Level ${studyLvl} (active + ${maxSessions - 1} queued).`
+        error: `Maximum of ${maxSessions} wizard study sessions at Study Level ${studyLvl} (active + ${maxSessions - 1} queued).`
       };
     }
 
@@ -6750,6 +6908,7 @@ export class AnkicasterEngine {
         school: session.school,
         targetLevel: session.targetLevel,
         spellId: session.spellId,
+        progress: 0,
         required: session.required,
         costPaid: session.costPaid
       });
@@ -6770,6 +6929,206 @@ export class AnkicasterEngine {
       }
     });
 
+    return { state: next, success: true };
+  }
+
+  /** Queue a Goblin Servant summon into the Wizard's Services queue. Mana is paid only when the summon reaches top & starts. */
+  static queueSummonServant(state: FullGameState): { state: FullGameState; success: boolean; error?: string } {
+    const chambers = finishedSummoningChambers(state);
+    if (chambers.length === 0) {
+      return { state, success: false, error: 'Requires a built, finished Summoning Chamber to summon a servant.' };
+    }
+    const maxChamberLv = Math.max(...chambers.map(c => c.level || 1));
+    const quote = summonServantQuote((state.servants || []).length, maxChamberLv);
+    const next = structuredClone(state);
+    const existingIds = [
+      ...(next.wizard.activeSession ? [next.wizard.activeSession.id] : []),
+      ...next.wizard.queuedSessions.map(q => q.id)
+    ];
+    const id = uniqueNumericId(existingIds);
+
+    if (!next.wizard.activeSession) {
+      if (next.mana < quote.mana) {
+        return { state, success: false, error: `Need ${quote.mana} Mana to begin summoning a goblin servant.` };
+      }
+      next.mana -= quote.mana;
+      next.wizard.activeSession = {
+        id,
+        kind: 'summon',
+        summonTier: quote.tier,
+        progress: 0,
+        required: quote.reviews,
+        costPaid: quote.mana,
+        state: 'active'
+      };
+    } else {
+      next.wizard.queuedSessions.push({
+        id,
+        kind: 'summon',
+        summonTier: quote.tier,
+        progress: 0,
+        required: quote.reviews,
+        costPaid: 0
+      });
+    }
+
+    next.notices.push({
+      id: uniqueNoticeId('summon-queue', next),
+      time: Date.now(),
+      type: 'wizard',
+      text: !state.wizard.activeSession
+        ? `Summoning Ritual begun (${quote.reviews} reviews, ${quote.mana}m).`
+        : `Queued Servant Summon (${quote.reviews} reviews; mana charged on start).`,
+      data: { roomId: chambers[0].id }
+    });
+    return { state: next, success: true };
+  }
+
+  /** Reorder any item in the unified Wizard Services queue while keeping its progress and paid status intact. */
+  static moveWizardService(
+    state: FullGameState,
+    index: number,
+    direction: -1 | 1
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const list: Array<{
+      id: number;
+      kind: 'orb' | 'grimoire' | 'summon';
+      school?: SchoolType;
+      targetLevel?: number;
+      spellId?: string;
+      summonTier?: 1 | 2 | 3;
+      progress: number;
+      required: number;
+      costPaid: number;
+    }> = [];
+    if (state.wizard.activeSession) {
+      list.push({
+        ...state.wizard.activeSession,
+        progress: state.wizard.activeSession.progress || 0
+      });
+    }
+    for (const q of state.wizard.queuedSessions || []) {
+      list.push({
+        ...q,
+        progress: q.progress ?? 0
+      });
+    }
+    const targetIdx = index + direction;
+    if (index < 0 || index >= list.length) {
+      return { state, success: false, error: 'Service item not found.' };
+    }
+    if (targetIdx < 0 || targetIdx >= list.length) {
+      return { state, success: true };
+    }
+    const next = structuredClone(state);
+    const reordered = list.slice();
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(targetIdx, 0, moved);
+    const [top, ...rest] = reordered;
+    next.wizard.activeSession = top
+      ? {
+          ...top,
+          state: top.kind === 'summon' && top.costPaid === 0 ? 'paused' : 'active'
+        }
+      : undefined;
+    next.wizard.queuedSessions = rest.map(item => ({ ...item }));
+    AnkicasterEngine.tryStartTopSummon(next);
+    return { state: next, success: true };
+  }
+
+  /** Cancel an item in the Services queue. Refunds costPaid if already paid; unpaid summons refund 0. */
+  static cancelWizardService(
+    state: FullGameState,
+    index: number
+  ): { state: FullGameState; success: boolean; error?: string; refundedMana?: number } {
+    const list: Array<{
+      id: number;
+      kind: 'orb' | 'grimoire' | 'summon';
+      school?: SchoolType;
+      targetLevel?: number;
+      spellId?: string;
+      summonTier?: 1 | 2 | 3;
+      progress: number;
+      required: number;
+      costPaid: number;
+    }> = [];
+    if (state.wizard.activeSession) {
+      list.push({ ...state.wizard.activeSession, progress: state.wizard.activeSession.progress || 0 });
+    }
+    for (const q of state.wizard.queuedSessions || []) {
+      list.push({ ...q, progress: q.progress ?? 0 });
+    }
+    if (index < 0 || index >= list.length) {
+      return { state, success: false, error: 'Service item not found.' };
+    }
+    const next = structuredClone(state);
+    const [removed] = list.splice(index, 1);
+    const refund = Math.max(0, removed.costPaid || 0);
+    if (refund > 0) next.mana += refund;
+    const [top, ...rest] = list;
+    next.wizard.activeSession = top
+      ? {
+          ...top,
+          state: top.kind === 'summon' && top.costPaid === 0 ? 'paused' : 'active'
+        }
+      : undefined;
+    next.wizard.queuedSessions = rest.map(item => ({ ...item }));
+    AnkicasterEngine.tryStartTopSummon(next);
+    return { state: next, success: true, refundedMana: refund };
+  }
+
+  /** Assign a servant to a valid operational workplace, or clear (`roomId === undefined`) to leave them idle. */
+  static assignServant(
+    state: FullGameState,
+    servantId: number,
+    roomId?: number
+  ): { state: FullGameState; success: boolean; error?: string } {
+    const servants = state.servants || [];
+    const existing = servants.find(s => s.id === servantId);
+    if (!existing) return { state, success: false, error: 'Servant not found.' };
+
+    if (roomId == null) {
+      const next = structuredClone(state);
+      const sv = next.servants!.find(s => s.id === servantId)!;
+      sv.workplaceRoomId = undefined;
+      sv.cleaningRoomId = undefined;
+      return { state: next, success: true };
+    }
+
+    const room = state.rooms.find(r => r.id === roomId);
+    if (!room) return { state, success: false, error: 'Workplace room not found.' };
+    if (!isServantWorkplaceDef(room.defId)) {
+      return { state, success: false, error: `${ROOM_DEFINITIONS[room.defId]?.name || room.defId} cannot employ servants.` };
+    }
+    if (!isRoomOperationalForServant(state, room)) {
+      return { state, success: false, error: `${roomDisplayName(room)} must be built and finished first.` };
+    }
+    const cap = roomServantCapacity(room);
+    const currentAssigned = servants.filter(s => s.id !== servantId && s.workplaceRoomId === roomId).length;
+    if (Number.isFinite(cap) && currentAssigned >= cap) {
+      return { state, success: false, error: `${roomDisplayName(room)} already has all servant slots filled (${currentAssigned}/${cap}).` };
+    }
+
+    const next = structuredClone(state);
+    const sv = next.servants!.find(s => s.id === servantId)!;
+    sv.workplaceRoomId = roomId;
+    sv.cleaningRoomId = undefined;
+    return { state: next, success: true };
+  }
+
+  /** Assign or unassign the Wizard to help build sites via the Workshop. */
+  static setWizardWorkshopAssigned(
+    state: FullGameState,
+    assigned: boolean
+  ): { state: FullGameState; success: boolean; error?: string } {
+    if (assigned) {
+      const hasWs = state.rooms.some(r => r.defId === 'workshop' && isRoomOperationalForServant(state, r));
+      if (!hasWs) {
+        return { state, success: false, error: 'Build and finish a Workshop before assigning the Wizard there.' };
+      }
+    }
+    const next = structuredClone(state);
+    next.wizard.workshopAssigned = assigned;
     return { state: next, success: true };
   }
 

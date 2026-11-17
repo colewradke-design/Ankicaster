@@ -10,7 +10,18 @@ import React, { useEffect, useState } from 'react';
 import {
   X, AlertTriangle, Sparkles, Droplets, Shield, Gauge, Hammer, Users, Briefcase, Award, Move, Trash2, Pause, Play, Lock, Bed, Armchair, PawPrint
 } from 'lucide-react';
-import { reviewsToGo, reviewsToGoText } from '../utils/construction';
+import { reviewsToGo, reviewsToGoText, computeConstructionPlan } from '../utils/construction';
+import {
+  SERVANT_PLOT_IDS,
+  isRoomOperationalForServant,
+  isServantWorkplaceDef,
+  requiredSchoolsForChamberLevel,
+  roomServantCapacity,
+  schoolsAtLevel5Count,
+  servantsAssignedToRoom,
+  summonServantQuote,
+  workshopBaseRate
+} from '../utils/servants';
 import {
   requiredSlotStatus,
   requiredInstallOption,
@@ -230,6 +241,8 @@ const RoomSummary: React.FC<{
               {s
                 ? s.kind === 'orb'
                   ? `${s.school} orb · Lv ${s.targetLevel}`
+                  : s.kind === 'summon'
+                  ? 'Summoning Servant'
                   : `Grimoire: ${SPELL_DEFINITIONS[s.spellId || '']?.name || 'Spell'}`
                 : 'Orb idle'}
             </span>
@@ -314,6 +327,12 @@ export interface RoomWindowProps {
   onResearchRecipe?: (roomId: number, recipeId?: string) => void;
   /** Scriptorium: Start crafting a scroll. */
   onStartScrollCraft?: (roomId: number, scrollId: ScrollId) => void;
+  /** Summoning Chamber: Queue a goblin servant summon. */
+  onQueueSummonServant?: () => void;
+  /** Assign or clear a goblin servant's workplace (`roomId === undefined` clears). */
+  onAssignServant?: (servantId: number, roomId?: number) => void;
+  /** Assign or unassign the Headmaster Wizard to help at the Workshop. */
+  onSetWizardWorkshopAssigned?: (assigned: boolean) => void;
   /** Initial tab for tests or pre-selected navigation. */
   initialTab?: 'room' | 'furnishings';
   /** Guided tour override to open a specific tab when spotlighting its controls. */
@@ -354,6 +373,9 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
   onSetGlassworksActive,
   onResearchRecipe,
   onStartScrollCraft,
+  onQueueSummonServant,
+  onAssignServant,
+  onSetWizardWorkshopAssigned,
   initialTab = 'room',
   forcedTab,
   initialAssignOpen = false
@@ -361,6 +383,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
   const [activeTab, setActiveTab] = useState<'room' | 'furnishings'>(forcedTab ?? initialTab);
   const [assignOpen, setAssignOpen] = useState(initialAssignOpen);
   const [pendingCandidateId, setPendingCandidateId] = useState<number | null>(null);
+  const [servantPickId, setServantPickId] = useState<string>('');
 
   useEffect(() => {
     if (forcedTab) setActiveTab(forcedTab);
@@ -369,6 +392,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
   useEffect(() => {
     setAssignOpen(false);
     setPendingCandidateId(null);
+    setServantPickId('');
   }, [room.id]);
 
   const moveBlock = AnkicasterEngine.roomActionBlock(state, room.id, 'move');
@@ -386,7 +410,8 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
   const primary = screens.slice(0, 3);
   const extra = screens.slice(3);
   const isSite = room.state === 'site';
-  const buildSpeedPct = isSite ? academyFurnitureEffect(state.rooms, 'build_speed_pct') : 0;
+  const sitePlan = isSite ? computeConstructionPlan(state).find(p => p.roomId === room.id) : undefined;
+  const siteSlotRate = sitePlan?.rate;
   const reqStatus = requiredSlotStatus(room);
   const reqMissing = reqStatus.filter(s => !s.filled).length;
   const unfinished = !isSite && reqMissing > 0;
@@ -576,7 +601,12 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
               {/* 1. Stats */}
               <div className="flex flex-wrap gap-2" data-testid="room-stats" data-tour="room-stats">
                 {isSite ? (
-                  <Chip icon={<Hammer className="w-3.5 h-3.5 text-amber-400" />} label="Building" value={`${room.buildProgress}/${room.buildRequired}`} title={reviewsToGoText(room, buildSpeedPct)} />
+                  <Chip
+                    icon={<Hammer className="w-3.5 h-3.5 text-amber-400" />}
+                    label="Building"
+                    value={`${room.buildProgress}/${room.buildRequired}`}
+                    title={siteSlotRate ? reviewsToGoText(room, 0, siteSlotRate) : room.buildPaused ? 'Paused' : 'Queued (waiting for Workshop worker)'}
+                  />
                 ) : (
                   <Chip
                     icon={<Gauge className={`w-3.5 h-3.5 ${unfinished ? 'text-amber-400' : 'text-emerald-400'}`} />}
@@ -755,8 +785,12 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
               {/* 4. Site countdown OR "What this room is" */}
               {isSite ? (
                 <div className="flex items-center justify-between gap-2 bg-slate-950/60 border border-slate-800 rounded-xl px-3 py-2 text-[13px]" data-testid="site-countdown">
-                  <span className={room.buildPaused ? 'text-slate-400' : 'text-emerald-300'}>
-                    {room.buildPaused ? `Paused · ${reviewsToGo(room, buildSpeedPct)} honest reviews left (progress is kept)` : reviewsToGoText(room, buildSpeedPct)}
+                  <span className={room.buildPaused || !siteSlotRate ? 'text-slate-400' : 'text-emerald-300'}>
+                    {room.buildPaused
+                      ? `Paused · ${reviewsToGo(room, 0, siteSlotRate)} honest reviews left (progress is kept)`
+                      : siteSlotRate
+                      ? `${reviewsToGoText(room, 0, siteSlotRate)} (${siteSlotRate} pts/rev)`
+                      : `Queued · ${reviewsToGoText(room)} (assign Workshop workers)`}
                   </span>
                   {onTogglePause && (
                     <button
@@ -999,26 +1033,158 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                 );
               })()}
 
+              {!isSite && room.defId === 'summoning_chamber' && (() => {
+                const lvl = room.level || 1;
+                const schoolsLv5 = schoolsAtLevel5Count(state.wizard?.levels);
+                const quote = summonServantQuote((state.servants || []).length, lvl);
+                const startsImmediately = !state.wizard?.activeSession;
+                const canQueueSummon = !unfinished && !!onQueueSummonServant && (!startsImmediately || state.mana >= quote.mana);
+                const servants = state.servants || [];
+                const workplaces = (state.rooms || []).filter(r => isServantWorkplaceDef(r.defId) && isRoomOperationalForServant(state, r));
+                return (
+                  <div className="bg-purple-950/25 border border-purple-500/40 rounded-xl p-3 space-y-3" data-testid="summoning-chamber-controls">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div>
+                        <div className="text-[12px] font-bold text-purple-200">Summoning Ritual (Chamber Lv {lvl})</div>
+                        <div className="text-[11px] text-slate-300">
+                          {quote.mana} Mana · {quote.reviews} reviews · Schools Lv 5+: {schoolsLv5}/3. Mana is charged when ritual reaches top of Services queue.
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        data-testid="summon-servant-btn"
+                        disabled={!canQueueSummon}
+                        onClick={() => onQueueSummonServant?.()}
+                        className="shrink-0 px-3 py-1.5 rounded-lg bg-purple-600/85 hover:bg-purple-500 disabled:opacity-40 text-white font-bold text-[12px]"
+                      >
+                        {startsImmediately ? `Summon Servant (${quote.mana}m)` : `Queue Summon (${quote.mana}m on start)`}
+                      </button>
+                    </div>
+
+                    <div className="border-t border-purple-500/25 pt-2.5 space-y-2" data-testid="servant-roster">
+                      <div className="flex items-center justify-between text-[12px]">
+                        <span className="font-bold text-slate-200">Servant Roster ({servants.length})</span>
+                        <span className="text-[11px] text-slate-400">Assign to any operational workplace</span>
+                      </div>
+                      {servants.length === 0 ? (
+                        <div className="text-[11px] text-slate-400">No goblin servants summoned yet.</div>
+                      ) : (
+                        <div className="space-y-1.5 max-h-52 overflow-y-auto pr-0.5">
+                          {servants.map(sv => {
+                            const wpRoom = sv.workplaceRoomId != null ? state.rooms.find(r => r.id === sv.workplaceRoomId) : undefined;
+                            return (
+                              <div
+                                key={sv.id}
+                                data-testid={`roster-servant-${sv.id}`}
+                                className="flex items-center justify-between gap-2 bg-slate-900/90 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[12px]"
+                              >
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span
+                                    className="w-3 h-3 rounded-sm border border-slate-700 shrink-0"
+                                    style={{ backgroundColor: sv.look.skin }}
+                                    aria-hidden="true"
+                                  />
+                                  <div className="min-w-0">
+                                    <div className="font-semibold text-slate-100 truncate">{sv.name}</div>
+                                    <div className="text-[10px] text-slate-400 truncate">
+                                      {wpRoom ? `Assigned: ${roomDisplayName(wpRoom)}` : 'Idle'}
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {onAssignServant && (
+                                    <select
+                                      aria-label={`Workplace for ${sv.name}`}
+                                      value={sv.workplaceRoomId != null ? String(sv.workplaceRoomId) : ''}
+                                      onChange={e => {
+                                        const val = e.target.value;
+                                        onAssignServant(sv.id, val === '' ? undefined : Number(val));
+                                      }}
+                                      className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1 text-[11px] text-slate-100 max-w-[140px]"
+                                    >
+                                      <option value="">Idle</option>
+                                      {workplaces.map(w => {
+                                        const wCap = roomServantCapacity(w);
+                                        const taken = servantsAssignedToRoom(servants, w.id, sv.id).length;
+                                        const full = Number.isFinite(wCap) && taken >= wCap;
+                                        return (
+                                          <option key={w.id} value={String(w.id)} disabled={full}>
+                                            {roomDisplayName(w)}{full ? ' (full)' : ''}
+                                          </option>
+                                        );
+                                      })}
+                                    </select>
+                                  )}
+                                  {sv.workplaceRoomId != null && onAssignServant && (
+                                    <button
+                                      type="button"
+                                      onClick={() => onAssignServant(sv.id, undefined)}
+                                      className="px-2 py-1 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 text-[11px]"
+                                    >
+                                      Clear
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {!isSite && room.defId === 'workshop' && (() => {
                 const cores = state.resources.golem_core || 0;
                 const canAwaken = !unfinished && cores >= 3 && !!onAwakenGeodeGolem;
+                const wizAssigned = !!state.wizard?.workshopAssigned;
+                const activePlan = computeConstructionPlan(state)[0];
+                const wizActiveOnSite = activePlan?.crew.some(m => m.kind === 'wizard') ?? false;
                 return (
-                  <div className="bg-sky-950/25 border border-sky-500/40 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap" data-testid="workshop-golem">
-                    <div className="space-y-0.5 min-w-0">
-                      <div className="text-[12px] font-bold text-sky-200">Awaken Geode Golem</div>
-                      <div className="text-[11px] text-slate-300">
-                        Forge a wary Geode Golem (+10% construction speed &amp; storage cap when tamed) from 3 Golem Cores ({cores} owned). Requires an open Crystal habitat.
+                  <div className="space-y-2">
+                    <div className="bg-amber-950/25 border border-amber-500/40 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap" data-testid="workshop-wizard-toggle-box">
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="text-[12px] font-bold text-amber-200">Headmaster Construction Duty</div>
+                        <div className="text-[11px] text-slate-300">
+                          {wizAssigned
+                            ? wizActiveOnSite
+                              ? 'Wizard is hammering on the active site (Services queue paused with progress saved).'
+                              : 'Wizard assigned to Workshop (steps in when an unpaused site is ready; 4 bodies max total).'
+                            : 'Assign the Wizard to build at Workshop rate. Services pause only while actually on a site.'}
+                        </div>
                       </div>
+                      <button
+                        type="button"
+                        data-testid="wizard-workshop-toggle"
+                        disabled={!onSetWizardWorkshopAssigned || (unfinished && !wizAssigned)}
+                        onClick={() => onSetWizardWorkshopAssigned?.(!wizAssigned)}
+                        className={`shrink-0 px-3 py-1.5 rounded-lg font-bold text-[12px] disabled:opacity-40 ${
+                          wizAssigned
+                            ? 'bg-amber-600 hover:bg-amber-500 text-slate-950'
+                            : 'bg-slate-800 hover:bg-slate-700 text-amber-200 border border-amber-500/40'
+                        }`}
+                      >
+                        {wizAssigned ? 'Take Wizard Off Workshop' : 'Assign Wizard to Workshop'}
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      data-action="awaken-geode-golem"
-                      disabled={!canAwaken}
-                      onClick={() => onAwakenGeodeGolem?.()}
-                      className="shrink-0 px-3 py-1.5 rounded-lg bg-sky-600/85 hover:bg-sky-500 disabled:opacity-40 text-white font-bold text-[12px]"
-                    >
-                      Awaken (3 Cores)
-                    </button>
+                    <div className="bg-sky-950/25 border border-sky-500/40 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap" data-testid="workshop-golem">
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="text-[12px] font-bold text-sky-200">Awaken Geode Golem</div>
+                        <div className="text-[11px] text-slate-300">
+                          Forge a wary Geode Golem (+10% construction speed &amp; storage cap when tamed) from 3 Golem Cores ({cores} owned). Requires an open Crystal habitat.
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        data-action="awaken-geode-golem"
+                        disabled={!canAwaken}
+                        onClick={() => onAwakenGeodeGolem?.()}
+                        className="shrink-0 px-3 py-1.5 rounded-lg bg-sky-600/85 hover:bg-sky-500 disabled:opacity-40 text-white font-bold text-[12px]"
+                      >
+                        Awaken (3 Cores)
+                      </button>
+                    </div>
                   </div>
                 );
               })()}
@@ -1295,7 +1461,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                         {staff.length > 0 && (
                           <div className="space-y-1.5">
                             {staff.map(c => {
-                              const mult = c.career !== 'teacher' && c.career !== 'builder'
+                              const mult = c.career !== 'teacher'
                                 ? careerAffinityMultiplier(c.masteredSchools, c.career, def?.school)
                                 : 1;
                               const bonusPct = Math.round((mult - 1) * 100);
@@ -1363,7 +1529,7 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                               <div className="space-y-1.5 pt-1 border-t border-slate-800" data-testid="staff-assign-list">
                                 {eligibleStaff.map(cand => {
                                   const prevRoom = cand.workplaceRoomId != null ? state.rooms.find(r => r.id === cand.workplaceRoomId) : undefined;
-                                  const mult = cand.career !== 'teacher' && cand.career !== 'builder'
+                                  const mult = cand.career !== 'teacher'
                                     ? careerAffinityMultiplier(cand.masteredSchools, cand.career, def?.school)
                                     : 1;
                                   const bonusPct = Math.round((mult - 1) * 100);
@@ -1449,6 +1615,128 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                           </div>
                         )}
                       </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* 5b. Goblin Servants Workplace Panel */}
+              {!isSite && isServantWorkplaceDef(room.defId) && (() => {
+                const allServants = state.servants || [];
+                const assigned = servantsAssignedToRoom(allServants, room.id);
+                const cap = roomServantCapacity(room);
+                const candidates = allServants.filter(s => s.workplaceRoomId !== room.id);
+                const canAddMore = !Number.isFinite(cap) || assigned.length < cap;
+                const chosenId = servantPickId !== '' && candidates.some(c => String(c.id) === servantPickId)
+                  ? servantPickId
+                  : candidates[0] ? String(candidates[0].id) : '';
+                const statusHint =
+                  room.defId === 'workshop'
+                    ? `Construction crew (${workshopBaseRate(room.level || 1)} pts/rev base per worker, max 4 bodies active on sites).`
+                    : SERVANT_PLOT_IDS.has(room.defId) || room.defId === 'glassworks' || room.defId === 'weaving_room'
+                    ? assigned.length > 0
+                      ? 'Staffed: producing at 100% bell output.'
+                      : 'Unstaffed: producing at 25% bell output. Assign 1 servant for full yield.'
+                    : room.defId === 'kitchen'
+                    ? assigned.length > 0
+                      ? 'Staffed: Kitchen bonuses (Hearty Meal, meal discount, stewpot/spice perks) active.'
+                      : 'Unstaffed: Kitchen grants NO bonuses until a servant is assigned.'
+                    : room.defId === 'refectory'
+                    ? assigned.length > 0
+                      ? 'Staffed: eating hunger recovery is 2× faster (same food cost).'
+                      : 'Unstaffed: standard eating recovery speed.'
+                    : assigned.length > 0
+                    ? `Staffed (${assigned.length}/${cap} janitors): cleans dirtiest unclaimed built room (+5%/review).`
+                    : `Unstaffed (0/${cap} janitors): assign servants to walk & clean dirty rooms.`;
+
+                return (
+                  <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-2.5" data-testid="room-servants">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[12px] uppercase tracking-wider font-bold text-emerald-300">
+                        Goblin Servants
+                      </span>
+                      <span className="text-[12px] font-mono text-slate-300" data-testid="room-servant-count">
+                        {Number.isFinite(cap) ? `${assigned.length} / ${cap}` : `${assigned.length} assigned`}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-300">{statusHint}</div>
+
+                    {assigned.length > 0 && (
+                      <div className="space-y-1.5">
+                        {assigned.map(sv => {
+                          const targetRoom = sv.cleaningRoomId != null ? state.rooms.find(r => r.id === sv.cleaningRoomId) : undefined;
+                          return (
+                            <div
+                              key={sv.id}
+                              data-testid={`room-servant-row-${sv.id}`}
+                              className="flex items-center justify-between gap-2 bg-slate-900/90 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[12px]"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span
+                                  className="w-3 h-3 rounded-sm border border-slate-700 shrink-0"
+                                  style={{ backgroundColor: sv.look.skin }}
+                                  aria-hidden="true"
+                                />
+                                <div className="min-w-0">
+                                  <div className="font-semibold text-slate-100 truncate">{sv.name}</div>
+                                  {room.defId === 'janitors_closet' && (
+                                    <div className="text-[10px] text-slate-400 truncate">
+                                      {targetRoom ? `Cleaning ${roomDisplayName(targetRoom)} (${Math.round(targetRoom.cleanliness)}%)` : 'Waiting in closet (all rooms clean)'}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                              {onAssignServant && (
+                                <button
+                                  type="button"
+                                  data-action="clear-servant"
+                                  onClick={() => onAssignServant(sv.id, undefined)}
+                                  className="shrink-0 px-2.5 py-1 min-h-[28px] rounded-md border border-slate-700 text-slate-300 hover:text-amber-200 hover:bg-slate-800 text-[11px] font-semibold"
+                                >
+                                  Clear
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {onAssignServant && canAddMore && (
+                      allServants.length === 0 ? (
+                        <div className="text-[11px] text-slate-400">
+                          No goblin servants summoned yet (build &amp; finish a Summoning Chamber).
+                        </div>
+                      ) : candidates.length > 0 ? (
+                        <div className="flex items-center gap-2 pt-1 border-t border-slate-800">
+                          <select
+                            aria-label={`Assign servant to ${roomDisplayName(room)}`}
+                            data-testid="room-servant-select"
+                            value={chosenId}
+                            disabled={unfinished}
+                            onChange={e => setServantPickId(e.target.value)}
+                            className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-[12px] text-slate-100 disabled:opacity-40"
+                          >
+                            {candidates.map(c => {
+                              const prev = c.workplaceRoomId != null ? state.rooms.find(r => r.id === c.workplaceRoomId) : undefined;
+                              return (
+                                <option key={c.id} value={String(c.id)}>
+                                  {c.name} ({prev ? `in ${roomDisplayName(prev)}` : 'Idle'})
+                                </option>
+                              );
+                            })}
+                          </select>
+                          <button
+                            type="button"
+                            data-testid="room-servant-assign-btn"
+                            disabled={unfinished || !chosenId}
+                            onClick={() => chosenId && onAssignServant(Number(chosenId), room.id)}
+                            className="shrink-0 px-3 py-1.5 min-h-[30px] rounded-lg bg-emerald-600/85 hover:bg-emerald-500 disabled:opacity-40 text-white text-[12px] font-bold"
+                          >
+                            Assign
+                          </button>
+                        </div>
+                      ) : null
                     )}
                   </div>
                 );
@@ -1627,32 +1915,43 @@ export const RoomWindow: React.FC<RoomWindowProps> = ({
                   <span className="font-bold text-slate-100">{tierName}</span>
                   <span className="text-[12px] text-slate-400">Level {room.level}</span>
                 </div>
-                {!isSite && room.level < 3 && (
-                  <div className="flex items-center gap-2" data-tour="room-renovate">
-                    <span
-                      className="text-[12px] text-slate-300"
-                      title={
-                        room.defId === 'spiral_stair'
+                {!isSite && room.level < 3 && (() => {
+                  const needSchools = room.defId === 'summoning_chamber' ? requiredSchoolsForChamberLevel(room.level + 1) : 0;
+                  const haveSchools = room.defId === 'summoning_chamber' ? schoolsAtLevel5Count(state.wizard?.levels) : 0;
+                  const chamberLocked = room.defId === 'summoning_chamber' && haveSchools < needSchools;
+                  return (
+                    <div className="flex items-center gap-2" data-tour="room-renovate">
+                      <span
+                        className="text-[12px] text-slate-300"
+                        title={
+                          room.defId === 'spiral_stair'
+                            ? room.level === 1
+                              ? 'Upgrades Spiral Stairs to a fast Magical Elevator'
+                              : 'Upgrades to a Teleportation Portal (instant travel, no stacking needed)'
+                            : room.defId === 'summoning_chamber'
+                            ? `Requires ${needSchools} magic schools at Level 5+ (${haveSchools}/${needSchools})`
+                            : '+2 optional furniture slots, better efficiency; Level 3 unlocks the room perk'
+                        }
+                      >
+                        {room.defId === 'spiral_stair'
                           ? room.level === 1
-                            ? 'Upgrades Spiral Stairs to a fast Magical Elevator'
-                            : 'Upgrades to a Teleportation Portal (instant travel, no stacking needed)'
-                          : '+2 optional furniture slots, better efficiency; Level 3 unlocks the room perk'
-                      }
-                    >
-                      {room.defId === 'spiral_stair'
-                        ? room.level === 1
-                          ? 'Upgrade → Magical Elevator (Lv 2)'
-                          : 'Upgrade → Teleportation Portal (Lv 3)'
-                        : `Renovate → Lv ${room.level + 1}`}
-                    </span>
-                    <button
-                      onClick={() => onUpgrade(room.id)}
-                      className="px-3 py-1.5 min-h-[32px] bg-amber-600/90 hover:bg-amber-500 text-slate-950 font-bold rounded-lg"
-                    >
-                      {upgradeCost(room)} Mana
-                    </button>
-                  </div>
-                )}
+                            ? 'Upgrade → Magical Elevator (Lv 2)'
+                            : 'Upgrade → Teleportation Portal (Lv 3)'
+                          : chamberLocked
+                          ? `Locked · Needs ${needSchools} schools Lv 5+ (${haveSchools}/${needSchools})`
+                          : `Renovate → Lv ${room.level + 1}`}
+                      </span>
+                      <button
+                        onClick={() => onUpgrade(room.id)}
+                        disabled={chamberLocked}
+                        data-testid="room-renovate-btn"
+                        className="px-3 py-1.5 min-h-[32px] bg-amber-600/90 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-bold rounded-lg"
+                      >
+                        {upgradeCost(room)} Mana
+                      </button>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* 2. Now and next */}

@@ -6,8 +6,9 @@
  * is doing right now. Never mutates FullGameState and never imports engine.ts (VR-01).
  */
 
-import type { Character, FullGameState, PlacedRoom } from '../../types/ankicaster';
+import type { Character, FullGameState, PlacedRoom, ServantInstance } from '../../types/ankicaster';
 import { RIFT_DESTINATIONS, roomDisplayName } from '../../data/content';
+import { computeConstructionPlan } from '../../utils/construction';
 import { classroomSchool } from '../../utils/formulas';
 import {
   buildAcademySchedule,
@@ -126,6 +127,12 @@ export function describePersonActivity(
       if (shelvedStudy && room?.defId === 'entrance_hall' && (state.wizard.activeSession?.state === 'active' || agent.wizardErrand === 'ponder')) {
         return `Waiting in the Entrance Hall for the ${roomDisplayName(shelvedStudy)}.`;
       }
+      if (agent.wizardErrand === 'build') {
+        const job = computeConstructionPlan(state).find(j => j.crew.some(m => m.kind === 'wizard'));
+        const site = job ? findRoom(job.roomId) : undefined;
+        return site ? `Helping build the ${roomDisplayName(site)}.` : 'Working on construction.';
+      }
+      if (agent.wizardErrand === 'summon') return 'Summoning a goblin servant.';
       if (agent.wizardErrand === 'ponder') return 'Pondering the orb.';
       if (agent.activity === 'class' || agent.wizardErrand === 'teach') {
         const period = periodFromBlockKey(agent.lastBlockKey) ?? (block.kind === 'period' ? block.period : undefined);
@@ -168,6 +175,14 @@ export function describePersonActivity(
       const fq = state.rooms.find(r => r.state === 'built' && r.defId === 'faculty_quarters')
         ?? state.rooms.find(r => r.state === 'built' && r.defId === 'wizard_study');
       return fq ? `Sleeping in the ${roomDisplayName(fq)}.` : 'Sleeping for the night.';
+    }
+    const wizBuild = computeConstructionPlan(state).find(j => j.crew.some(m => m.kind === 'wizard'));
+    if (wizBuild) {
+      const site = findRoom(wizBuild.roomId);
+      return site ? `Helping build the ${roomDisplayName(site)}.` : 'Working on construction.';
+    }
+    if (state.wizard.activeSession?.kind === 'summon' && state.wizard.activeSession.state === 'active') {
+      return 'Summoning a goblin servant.';
     }
     if (state.wizard.activeSession?.kind === 'orb' && state.wizard.activeSession.state === 'active') {
       if (shelvedStudy) {
@@ -317,4 +332,31 @@ export function describePersonActivity(
     state.rooms.find(r => r.state === 'built' && r.defId === 'entrance_hall');
   if (!idleRoom && !hasBuiltEH) return 'Waiting on the front path while rooms are arranged.';
   return describeFreeTime(idleRoom, 'idle');
+}
+
+export function describeServantActivity(
+  servant: ServantInstance,
+  agent: { cleaningRoomId?: number; buildingSiteId?: number; anim?: string; currentRoomId?: number } | undefined,
+  state: FullGameState
+): string {
+  const findRoom = (id: number | undefined): PlacedRoom | undefined =>
+    id != null ? state.rooms.find(r => r.id === id) : undefined;
+  const wp = findRoom(servant.workplaceRoomId);
+  if (!wp) return 'Idle (awaiting assignment).';
+  if (wp.defId === 'workshop') {
+    const siteId = agent?.buildingSiteId;
+    const site = siteId != null ? findRoom(siteId) : undefined;
+    if (site) return `Building the ${roomDisplayName(site)}.`;
+    return `Waiting in the ${roomDisplayName(wp)}.`;
+  }
+  if (wp.defId === 'janitors_closet') {
+    const cleanId = agent?.cleaningRoomId ?? servant.cleaningRoomId;
+    const cleanRoom = cleanId != null ? findRoom(cleanId) : undefined;
+    if (cleanRoom) return `Cleaning the ${roomDisplayName(cleanRoom)}.`;
+    return `Waiting in the ${roomDisplayName(wp)} (everything clean).`;
+  }
+  if (wp.area === 'grounds') {
+    return `Tending the ${roomDisplayName(wp)}.`;
+  }
+  return `Working in the ${roomDisplayName(wp)}.`;
 }

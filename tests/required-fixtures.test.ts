@@ -75,6 +75,10 @@ test('RF-1 migration fills every old built room, keeps sites empty, is idempoten
 
 test('RF-2 a site that finishes from honest reviews starts Unfinished: fixtures empty, 0% and no outputs', () => {
   let s = rich(createNewAcademy());
+  const ws = room('workshop', 29, 2, 0);
+  fillRequiredFixtures(ws, allFurnitureIds(s.rooms));
+  s.rooms.push(ws);
+  s.wizard.workshopAssigned = true;
   s.rooms.push(room('greenhouse', 30, 0, 0, { area: 'grounds', state: 'site', buildRequired: 5, buildProgress: 4 }));
   const cardId = Number(Object.keys(s.allCards)[0]);
   const res = AnkicasterEngine.applyHonestReview(s, cardId, 3, 2000);

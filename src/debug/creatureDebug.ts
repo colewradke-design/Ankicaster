@@ -71,7 +71,7 @@ export const HABITAT_SAMPLES: Array<{ habitat: HabitatType; defId: string; roomD
 ];
 
 export const ALL_SCHOOLS: SchoolType[] = ['arcane', 'nature', 'light', 'shadow', 'alchemy'];
-export const ALL_CAREERS: CareerType[] = ['teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist', 'builder', 'adventurer'];
+export const ALL_CAREERS: CareerType[] = ['teacher', 'scholar', 'gardener', 'tamer', 'healer', 'warder', 'alchemist', 'adventurer'];
 export const ALL_INJURIES: InjuryType[] = ['bruised', 'sprained', 'hexed', 'broken_bone', 'rift_touched'];
 export const ALL_HAZARD_TYPES: Array<NonNullable<PlacedRoom['hazard']>['type']> = [
   'mana_static',

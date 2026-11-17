@@ -439,15 +439,15 @@ test('Section 6 & 7: personal timers stagger & hold during talk, reduceMotion de
   s.rooms.push(lib, common, quarry, workshop, infirmary, site);
 
   const stu = makeChar(701, { status: 'student', currentSchool: 'arcane', personality: 'Bookish' });
-  const builder = makeChar(702, { status: 'faculty', career: 'builder', careerState: 'active', masteredSchools: ['arcane'] });
+  const faculty = makeChar(702, { status: 'faculty', career: 'scholar', careerState: 'active', masteredSchools: ['arcane'] });
   const injured = makeChar(703, {
     status: 'student',
     currentSchool: 'light',
     injury: { type: 'bruised', points: 0, required: 10 }
   });
-  s.characters.push(stu, builder, injured);
+  s.characters.push(stu, faculty, injured);
 
-  // Period 1 hour: builder picks site edge (inside touching grounds plot vegetable_patch at x=8? Or workshop), NEVER inside site footprint; stu never visits banned rooms
+  // Period 1 hour: faculty never enters unbuilt site footprint; stu never visits banned rooms
   s.debugTimeHours = 6.2;
   const groundY = getGroundY(3);
   const chorNormal = new Choreographer(new NavGraph(s.rooms, groundY), groundY);
@@ -455,7 +455,7 @@ test('Section 6 & 7: personal timers stagger & hold during talk, reduceMotion de
   chorNormal.syncState(s, chorNormal.reachability);
 
   const agStu = chorNormal.agents.get('char-701')!;
-  const agBld = chorNormal.agents.get('char-702')!;
+  const agFac = chorNormal.agents.get('char-702')!;
   const agInj = chorNormal.agents.get('char-703')!;
 
   assert.ok(
@@ -481,14 +481,14 @@ test('Section 6 & 7: personal timers stagger & hold during talk, reduceMotion de
   assert.notEqual(agStu.targetRoomId, workshop.id);
   assert.notEqual(agStu.targetRoomId, site.id);
 
-  // Builder never stands inside unbuilt site footprint
-  assert.notEqual(agBld.targetRoomId, site.id);
+  // Faculty never stands inside unbuilt site footprint
+  assert.notEqual(agFac.targetRoomId, site.id);
 
   // findBuilderSiteEdgeAnchor resolves a touching built room if adjacent to site (1x1 courtyard_garden at x=2..3 -> greenhouse at x=3)
   const touchingBuilt = makeRoom(56, 'greenhouse', 3, 0, 'grounds');
   s.rooms.push(touchingBuilt);
   const edge = findBuilderSiteEdgeAnchor(site, s, computeReachability(s.rooms), groundY);
-  assert.ok(edge && edge.roomId === touchingBuilt.id, 'Builder visits touching built room edge, never site itself');
+  assert.ok(edge && edge.roomId === touchingBuilt.id, 'Site workers visit touching built room edge, never site itself');
 });
 
 test('Section 8: Meals use two sittings by chair count with packed fallback; Night uses own beds & Early Riser/Night Owl', () => {

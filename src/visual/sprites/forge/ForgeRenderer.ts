@@ -174,7 +174,7 @@ export class ForgeRenderer {
   /**
    * Layered paper doll (Addendum Section 6). Map, creation preview and portraits share this.
    */
-  static drawPaperDoll(g: PaperDollPainter, agent: PaperDollAgent) {
+  static drawPaperDoll(g: PaperDollPainter, agent: PaperDollAgent, clockMs?: number, reduceMotion = false) {
     const char = agent.character;
     const anim = (DOLL_ANIMS[agent.anim as DollAnim] ? agent.anim : 'idle') as DollAnim;
     const look = appearanceToLayers({
@@ -201,7 +201,7 @@ export class ForgeRenderer {
       face: agent.face,
       shoes: agent.shoes
     });
-    drawCharacter(g, look, { x: agent.x, y: agent.y, facing: agent.facing, anim, frame: agent.animFrame });
+    drawCharacter(g, look, { x: agent.x, y: agent.y, facing: agent.facing, anim, frame: agent.animFrame, clockMs, reduceMotion });
   }
 
   /** Placement ghost: footprint tinted green (valid) or red (invalid), with a dashed outline. */

@@ -235,6 +235,7 @@ export function createNewAcademy(choices: Partial<HeadmasterChoices> = {}): Full
     rooms: initialRooms,
     shelvedRooms: [],
     characters: [],
+    servants: [],
     cardSets: [],
     allCards: mockCards,
     creatures: [], // No creatures at fresh start

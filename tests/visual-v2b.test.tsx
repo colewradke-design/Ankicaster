@@ -85,6 +85,29 @@ test('V2B-3 Build panel countdown matches the map ring helper', () => {
 
 test('V2B-4 pause keeps progress; the engine does not advance a paused site; resume continues', () => {
   let s = createNewAcademy();
+  const ws = ROOM_DEFINITIONS.workshop;
+  s.rooms.push({
+    id: 89,
+    defId: 'workshop',
+    x: 0,
+    y: 0,
+    w: ws.size[0],
+    h: ws.size[1],
+    area: 'castle',
+    level: 1,
+    state: 'built',
+    buildRequired: ws.buildReviews,
+    buildProgress: ws.buildReviews,
+    cleanliness: 100,
+    settings: {},
+    furniture: ws.requiredFurniture.map((req, idx) => ({
+      id: 8900 + idx,
+      defId: req.role,
+      slotKind: `required:${req.role}`,
+      damaged: false
+    }))
+  });
+  s.wizard.workshopAssigned = true;
   s.rooms.push({ ...site('dormitory', 3, 40), id: 90, x: 3, y: 1 });
   const cardId = Number(Object.keys(s.allCards)[0]);
   let r = AnkicasterEngine.setConstructionPaused(s, 90, true);

@@ -418,6 +418,15 @@ test('Dead effects wired in engine: tea_service, silent_quill, stewpot, tool_wal
       ]);
       s.rooms = [...s.rooms.filter(r => r.defId !== 'vegetable_patch'), kitchen, refectory];
       s.characters = Array.from({ length: 10 }, (_, i) => makeChar(100 + i));
+      s.servants = [
+        {
+          id: 501,
+          name: 'Brik',
+          look: { seed: 1, skin: '#769656', ears: 'pointed', tunicColor: '#6b4f3a', apronColor: '#b78a52', accessory: 'cap' },
+          workplaceRoomId: kitchen.id,
+          arrivedDay: 1
+        }
+      ];
       return s;
     };
 
@@ -432,7 +441,7 @@ test('Dead effects wired in engine: tea_service, silent_quill, stewpot, tool_wal
     assert.equal(costAdjPlusStew, 8, 'Stewpot reduces meal provisions cost by an extra 10%');
   }
 
-  // 4. tool_wall in built finished workshop accelerates construction buildProgress by +5%
+  // 4. tool_wall no longer accelerates construction (Workshop base + servants decide rate)
   {
     const s = richState();
     const cardId = firstCardId(s);
@@ -446,9 +455,18 @@ test('Dead effects wired in engine: tea_service, silent_quill, stewpot, tool_wal
       buildProgress: 0
     });
     s.rooms.push(workshop, site);
+    s.servants = [
+      {
+        id: 502,
+        name: 'Snag',
+        look: { seed: 2, skin: '#67894d', ears: 'long', tunicColor: '#4a5d6e', apronColor: '#9b7444', accessory: 'none' },
+        workplaceRoomId: workshop.id,
+        arrivedDay: 1
+      }
+    ];
     const after = AnkicasterEngine.applyHonestReview(s, cardId, 3, 2400).state;
     const updatedSite = after.rooms.find(r => r.id === 98)!;
-    assert.equal(updatedSite.buildProgress, 1.05, 'tool_wall advances construction by 1.05 per review');
+    assert.equal(updatedSite.buildProgress, 1, 'tool_wall does not add construction speed bonus');
   }
 
   // 5. remedy_cabinet & healing_basin heal injured residents in built bathhouse / sunlit_sanctum

@@ -7,10 +7,11 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Sparkles, Shield, Sun, Hammer, Settings as SettingsIcon, ChevronDown, AlertTriangle, Castle
+  Sparkles, Shield, Sun, Hammer, Settings as SettingsIcon, ChevronDown, AlertTriangle, Castle, ListOrdered
 } from 'lucide-react';
 import { FullGameState } from '../types/ankicaster';
 import { roomDisplayName } from '../data/content';
+import { constructionSites } from '../utils/construction';
 import {
   ScreenId, SCREEN_DEFS, getAcademyMenuScreens, hazardRooms
 } from '../ui/screens';
@@ -23,6 +24,8 @@ interface TopBarProps {
   onOpenRoom: (roomId: number) => void;
   buildModeOpen?: boolean;
   onToggleBuildMode?: () => void;
+  queueOpen?: boolean;
+  onToggleQueue?: () => void;
   /** Optional dev-only controls (never shown in Anki). */
   devControls?: React.ReactNode;
   forceAcademy?: boolean;
@@ -157,6 +160,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenRoom,
   buildModeOpen = false,
   onToggleBuildMode,
+  queueOpen = false,
+  onToggleQueue,
   devControls,
   forceAcademy,
   onResolveVeil
@@ -175,6 +180,10 @@ export const TopBar: React.FC<TopBarProps> = ({
   const hazards = hazardRooms(state);
   const term = termLabel(state);
   const shelvedCount = state.shelvedRooms?.length || 0;
+  const queueCount =
+    constructionSites(state.rooms || []).length +
+    (state.wizard?.activeSession ? 1 : 0) +
+    (state.wizard?.queuedSessions?.length || 0);
   const isCustomEconomy = (state.settings.manaPerReview ?? 10) !== 10;
 
   return (
@@ -262,6 +271,31 @@ export const TopBar: React.FC<TopBarProps> = ({
 
       <div className="flex items-center gap-2 shrink-0">
         {devControls}
+        {onToggleQueue && (
+          <button
+            type="button"
+            onClick={onToggleQueue}
+            data-testid="top-queue-btn"
+            aria-pressed={queueOpen}
+            className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[32px] rounded-lg text-[13px] font-bold border transition ${
+              queueOpen
+                ? 'bg-purple-500/25 border-purple-400 text-purple-100 ring-1 ring-purple-400/50'
+                : 'border-slate-700 text-slate-200 hover:bg-slate-800'
+            }`}
+            title={queueOpen ? 'Close Build & Services Queue' : 'Open Build & Services Queue'}
+          >
+            <ListOrdered className="w-4 h-4 text-purple-300" />
+            <span>Queue</span>
+            {queueCount > 0 && (
+              <span
+                data-testid="queue-count-badge"
+                className="px-1.5 py-0.2 rounded bg-slate-950/85 text-purple-200 text-[11px] font-bold"
+              >
+                {queueCount}
+              </span>
+            )}
+          </button>
+        )}
         <button
           onClick={() => (onToggleBuildMode ? onToggleBuildMode() : onOpenScreen('build'))}
           data-testid="top-build-btn"
