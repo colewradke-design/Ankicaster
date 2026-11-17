@@ -3,6 +3,5 @@
   "min_answer_elapsed_ms": 800,
   "auto_open_on_startup": false,
   "sync_saves": false,
-  "show_banner": true,
-  "banner_hide_in_review": true
+  "show_banner": true
 }

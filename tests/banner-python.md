@@ -19,5 +19,5 @@ Checked by hand in Anki:
 - [ ] An orb reads "🔮 Nature Lv 2", a grimoire the spell name, a summon "🌀 Summoning" (II / III for higher tiers). Nothing queued is a muted "Idle". A paused site shows "⏸ name". Long names end in "…". Hover shows the full text, e.g. "Library — 42 reviews left (crew of 3) · 1 more queued".
 - [ ] Clicking the crest, mana or either chip opens the academy. Shift+A and Tools → Open Ankicaster Magic Academy still work; Shift+A does nothing while a text field has focus.
 - [ ] With the game window open, chips follow the school within about a second. With it closed, ten honest reviews then back to Decks: both counts drop by ten and the bars move; nothing finishes until the game opens ("✓"). Mana gains a "+N" tag only when the payout per review is fixed.
-- [ ] During review with `banner_hide_in_review: true` the chips hide; Anki's own toolbar auto-hide still works.
 - [ ] `show_banner: false` (after restart) gives the stock toolbar. A missing save shows "Your Academy awaits". Any failure logs a line starting with `[Ankicaster]` and leaves the toolbar stock.
+- [ ] With the game closed, answering a card ticks the queue chips down right away (also during review).

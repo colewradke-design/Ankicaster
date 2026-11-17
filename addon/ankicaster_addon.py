@@ -42,7 +42,6 @@ DEFAULT_CONFIG = {
     "auto_open_on_startup": False,
     "sync_saves": False,
     "show_banner": True,
-    "banner_hide_in_review": True
 }
 
 _card_shown_timestamp: float = 0.0
@@ -346,6 +345,13 @@ def on_card_answered(reviewer: Any, card: Any, ease: int) -> None:
 
     # 2. Always persist to pending log for replay & ack tracking
     save_review_record(payload)
+
+    # 3. With the game closed, tick the toolbar queue down from the pending log.
+    try:
+        from .banner import refresh_banner
+        refresh_banner()
+    except Exception as e:
+        print(f"[Ankicaster] banner refresh after review failed: {e}")
 
 def save_review_record(payload: Dict[str, Any]) -> None:
     """Append review event to local log in user profile."""

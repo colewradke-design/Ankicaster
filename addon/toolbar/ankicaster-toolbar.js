@@ -157,7 +157,6 @@
         return;
       }
       body.classList.add("ankicaster-on");
-      body.classList.toggle("ac-hide-chips", !!d.hideChips);
       paint(d);
     } catch (e) {
       try { console.log("[Ankicaster] toolbar update failed", e); } catch (e2) {}

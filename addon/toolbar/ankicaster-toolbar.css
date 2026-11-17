@@ -144,7 +144,6 @@ body.ankicaster-on .ac-orn-r { right: 18px; }
   padding: 0 2px;
   white-space: nowrap;
 }
-body.ac-hide-chips .ac-right { visibility: hidden; }
 .ac-chip {
   display: inline-flex;
   align-items: center;

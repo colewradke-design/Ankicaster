@@ -300,7 +300,6 @@ def toolbar_payload() -> Dict[str, Any]:
     summary, live = _display_source()
     payload = format_chip(summary, live)
     payload["enabled"] = _config_flag("show_banner", True)
-    payload["hideChips"] = _state == "review" and _config_flag("banner_hide_in_review", True)
     payload["live"] = bool(live)
     return payload
 
